@@ -1,0 +1,7 @@
+Django>=5.0,<6.0
+inertia-django>=1.0
+django-vite>=3.0
+pyodbc>=5.1
+bcrypt>=4.1
+cryptography>=42.0
+python-dotenv>=1.0

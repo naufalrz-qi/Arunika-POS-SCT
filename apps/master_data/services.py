@@ -1,0 +1,339 @@
+"""Read services for legacy master data (m_*), via raw pyodbc.
+
+PRD §5.3: table-level access only; joins & calculations done here in Python
+(batch-fetch each table once, then merge with dict lookups — avoids N+1, §8.3).
+"""
+from __future__ import annotations
+
+from decimal import Decimal
+
+from core import mssql
+
+MAX_ROWS = 500
+
+
+def _f(value) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, Decimal):
+        return float(value)
+    return float(value)
+
+
+def _active(status) -> bool:
+    # JR_STATUS_JENIS is a 1-char flag; '1'/'A'/'Y' are treated as active.
+    return str(status).strip().upper() in ("1", "A", "Y")
+
+
+def _st(value) -> str:
+    return str(value).strip() if value is not None else ""
+
+
+def _is_retail(profile) -> bool:
+    return profile.db_type == "retail"
+
+
+def _margin(harga_jual: float, modal: float) -> float:
+    """Markup atas modal, dalam persen. 0 bila modal tak valid."""
+    return round((harga_jual - modal) / modal * 100, 4) if modal and modal > 0 else 0.0
+
+
+def list_products(profile, search: str = "", kd_kategori: str = "") -> list[dict]:
+    """Return products shaped exactly like the Products.vue props."""
+    where, params = ["1=1"], []
+    if search:
+        where.append("(nama LIKE ? OR kd_barang LIKE ?)")
+        params += [f"%{search}%", f"%{search}%"]
+    if kd_kategori:
+        where.append("kd_kategori = ?")
+        params.append(kd_kategori)
+    where_sql = " AND ".join(where)
+
+    with mssql.cursor(profile) as cur:
+        cur.execute(
+            f"SELECT TOP {MAX_ROWS} kd_barang, kd_kategori, nama, status "
+            f"FROM m_barang WHERE {where_sql} ORDER BY nama",
+            params,
+        )
+        barang = _dictify(cur)
+
+        categories = _key_map(cur, "SELECT kd_kategori, nama FROM m_kategori", "kd_kategori", "nama")
+        satuan_names = _key_map(cur, "SELECT kd_satuan, nama FROM m_satuan", "kd_satuan", "nama")
+
+        # First selling unit + price per product.
+        cur.execute("SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan")
+        price_by_barang: dict[str, dict] = {}
+        for r in _dictify(cur):
+            price_by_barang.setdefault(r["kd_barang"], r)
+
+        # Stock summed across divisions (in Python, not SQL).
+        cur.execute("SELECT kd_barang, stok_akhir FROM m_barang_stok_akhir")
+        stok_by_barang: dict[str, float] = {}
+        for r in _dictify(cur):
+            stok_by_barang[r["kd_barang"]] = stok_by_barang.get(r["kd_barang"], 0.0) + _f(r["stok_akhir"])
+
+    products = []
+    for b in barang:
+        kd = b["kd_barang"]
+        price = price_by_barang.get(kd, {})
+        products.append(
+            {
+                "kd_barang": kd.strip() if isinstance(kd, str) else kd,
+                "nama": (b["nama"] or "").strip(),
+                "kd_kategori": (b["kd_kategori"] or "").strip(),
+                "kategori": (categories.get(b["kd_kategori"], "") or "").strip(),
+                "satuan": (satuan_names.get(price.get("kd_satuan"), "") or "").strip(),
+                "harga_jual": _f(price.get("harga_jual")),
+                "stok": _f(stok_by_barang.get(kd, 0)),
+                "status": _active(b["status"]),
+            }
+        )
+    return products
+
+
+def list_categories(profile) -> list[dict]:
+    with mssql.cursor(profile) as cur:
+        cur.execute("SELECT kd_kategori, nama FROM m_kategori ORDER BY nama")
+        return [
+            {"kd_kategori": (r["kd_kategori"] or "").strip(), "nama": (r["nama"] or "").strip()}
+            for r in _dictify(cur)
+        ]
+
+
+def list_customers(profile, search: str = "") -> list[dict]:
+    where, params = ["1=1"], []
+    if search:
+        where.append("(nama LIKE ? OR kd_customer LIKE ? OR hp LIKE ?)")
+        params += [f"%{search}%", f"%{search}%", f"%{search}%"]
+    where_sql = " AND ".join(where)
+
+    with mssql.cursor(profile) as cur:
+        cur.execute(
+            f"SELECT TOP {MAX_ROWS} kd_customer, nama, alamat, hp, email, point, "
+            f"limit_kredit, status FROM m_customer WHERE {where_sql} ORDER BY nama",
+            params,
+        )
+        rows = _dictify(cur)
+
+    return [
+        {
+            "kd_customer": (r["kd_customer"] or "").strip(),
+            "nama": (r["nama"] or "").strip(),
+            "alamat": (r["alamat"] or "").strip(),
+            "hp": (r["hp"] or "").strip(),
+            "email": (r["email"] or "").strip(),
+            "point": _f(r["point"]),
+            "limit_kredit": _f(r["limit_kredit"]),
+            "status": _active(r["status"]),
+        }
+        for r in rows
+    ]
+
+
+# --- Update Barang (WRITE) -------------------------------------------------
+
+_STATUS_TABLES = {"m_barang", "m_barang_divisi", "m_barang_satuan"}
+
+
+def list_barang_edit(profile, search: str = "") -> list[dict]:
+    """Barang + satuan (harga_jual/margin/status) + status divisi, untuk edit.
+
+    Retail: sisipkan `modal` (harga_jual server sumber-modal) per satuan dan margin
+    terhitung terkini. Grosir/gudang: margin apa adanya dari DB.
+    """
+    where, params = ["1=1"], []
+    if search:
+        where.append("(nama LIKE ? OR kd_barang LIKE ?)")
+        params += [f"%{search}%", f"%{search}%"]
+    where_sql = " AND ".join(where)
+
+    with mssql.cursor(profile) as cur:
+        cur.execute(
+            f"SELECT TOP {MAX_ROWS} kd_barang, nama, keterangan, status FROM m_barang "
+            f"WHERE {where_sql} ORDER BY nama",
+            params,
+        )
+        barang = _dictify(cur)
+        satuan_names = _key_map(cur, "SELECT kd_satuan, nama FROM m_satuan", "kd_satuan", "nama")
+
+        cur.execute("SELECT kd_barang, kd_satuan, jumlah, harga_jual, margin, status FROM m_barang_satuan")
+        satuan_by: dict[str, list] = {}
+        for r in _dictify(cur):
+            satuan_by.setdefault(_st(r["kd_barang"]), []).append(r)
+
+        cur.execute("SELECT kd_barang, kd_divisi, status FROM m_barang_divisi")
+        divisi_by: dict[str, list] = {}
+        for r in _dictify(cur):
+            divisi_by.setdefault(_st(r["kd_barang"]), []).append(r)
+
+    is_retail = _is_retail(profile)
+    modal_all: dict[str, dict] = {}
+    if is_retail:
+        cost = mssql.get_cost_source(profile)
+        if cost:
+            # ponytail: full read of grosir m_barang_satuan (sama pola dgn read lain di sini)
+            with mssql.cursor(cost) as cur:
+                cur.execute("SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan")
+                for r in _dictify(cur):
+                    modal_all.setdefault(_st(r["kd_barang"]), {})[_st(r["kd_satuan"])] = _f(r["harga_jual"])
+
+    out = []
+    for b in barang:
+        kd = _st(b["kd_barang"])
+        modal_map = modal_all.get(kd, {})
+        units = []
+        for s in satuan_by.get(kd, []):
+            ks = _st(s["kd_satuan"])
+            harga = _f(s["harga_jual"])
+            unit = {
+                "kd_satuan": ks,
+                "satuan": _st(satuan_names.get(s["kd_satuan"], "")),
+                "jumlah": _f(s["jumlah"]),
+                "harga_jual": harga,
+                "margin": _f(s["margin"]),
+                "status": _st(s["status"]),
+            }
+            if is_retail:
+                m = modal_map.get(ks, 0.0)
+                unit["modal"] = m
+                unit["margin"] = _margin(harga, m)
+            units.append(unit)
+        divisi = [
+            {"kd_divisi": _st(d["kd_divisi"]), "status": _st(d["status"])}
+            for d in divisi_by.get(kd, [])
+        ]
+        out.append({
+            "kd_barang": kd,
+            "nama": _st(b["nama"]),
+            "keterangan": _st(b.get("keterangan", "")),
+            "status": _st(b["status"]),
+            "satuan": units,
+            "divisi": divisi,
+            "is_retail": is_retail,
+        })
+    return out
+
+
+def update_harga(profile, kd_barang: str, prices: dict) -> int:
+    """Update harga_jual (dan margin) per satuan. `prices`: {kd_satuan: harga_jual}.
+
+    Retail: margin = markup atas modal (harga_jual server sumber-modal). Lain: margin=0.
+    Return jumlah baris ter-update.
+    """
+    modal: dict = {}
+    is_retail = _is_retail(profile)
+    if is_retail:
+        cost = mssql.get_cost_source(profile)
+        if cost:
+            with mssql.cursor(cost) as cur:
+                cur.execute("SELECT kd_satuan, harga_jual FROM m_barang_satuan WHERE kd_barang = ?", [kd_barang])
+                modal = {_st(r["kd_satuan"]): _f(r["harga_jual"]) for r in _dictify(cur)}
+
+    n = 0
+    with mssql.cursor(profile, autocommit=False) as cur:
+        for kd_satuan, harga in prices.items():
+            harga = _f(harga)
+            margin = _margin(harga, modal.get(_st(kd_satuan), 0.0)) if is_retail else 0.0
+            cur.execute(
+                "UPDATE m_barang_satuan SET harga_jual = ?, margin = ? WHERE kd_barang = ? AND kd_satuan = ?",
+                [harga, margin, kd_barang, kd_satuan],
+            )
+            n += cur.rowcount
+        cur.connection.commit()
+    return n
+
+
+def update_status(profile, kd_barang: str, table: str, status, kd_divisi: str | None = None) -> int:
+    """Update kolom status di salah satu dari m_barang / m_barang_divisi / m_barang_satuan."""
+    if table not in _STATUS_TABLES:
+        raise ValueError(f"Tabel status tidak valid: {table}")
+    status = _st(status)
+    if status not in ("0", "1", "2"):
+        raise ValueError(f"Status tidak valid: {status}")
+
+    sql = f"UPDATE {table} SET status = ? WHERE kd_barang = ?"  # nosec: table di-whitelist di atas
+    params: list = [status, kd_barang]
+    if table == "m_barang_divisi" and kd_divisi:
+        sql += " AND kd_divisi = ?"
+        params.append(kd_divisi)
+
+    with mssql.cursor(profile, autocommit=False) as cur:
+        cur.execute(sql, params)
+        n = cur.rowcount
+        cur.connection.commit()
+    return n
+
+
+# --- Sinkronisasi harga antar-server (WRITE) -------------------------------
+
+def _harga_map(profile) -> dict:
+    """(kd_barang, kd_satuan) -> {harga_jual, margin} untuk satu server."""
+    with mssql.cursor(profile) as cur:
+        cur.execute("SELECT kd_barang, kd_satuan, harga_jual, margin FROM m_barang_satuan")
+        return {
+            (_st(r["kd_barang"]), _st(r["kd_satuan"])): {"harga_jual": _f(r["harga_jual"]), "margin": _f(r["margin"])}
+            for r in _dictify(cur)
+        }
+
+
+def compare_harga_jual(src_profile, dst_profile) -> list[dict]:
+    """Baris m_barang_satuan yang harga_jual-nya beda (atau belum ada di dst)."""
+    src = _harga_map(src_profile)
+    dst = _harga_map(dst_profile)
+    with mssql.cursor(src_profile) as cur:
+        names = _key_map(cur, "SELECT kd_barang, nama FROM m_barang", "kd_barang", "nama")
+    names = {_st(k): _st(v) for k, v in names.items()}
+
+    out = []
+    for (kb, ks), s in src.items():
+        d = dst.get((kb, ks))
+        harga_dst = d["harga_jual"] if d else None
+        if d is not None and harga_dst == s["harga_jual"]:
+            continue  # sama, lewati
+        out.append({
+            "kd_barang": kb,
+            "kd_satuan": ks,
+            "nama": names.get(kb, ""),
+            "harga_src": s["harga_jual"],
+            "harga_dst": harga_dst,
+            "ada_di_dst": d is not None,
+        })
+    out.sort(key=lambda r: (r["nama"], r["kd_satuan"]))
+    return out
+
+
+def sync_harga_jual(src_profile, dst_profile, keys: list, with_margin: bool = False) -> int:
+    """Salin harga_jual (dan margin bila with_margin) dari src ke dst untuk (kd_barang,kd_satuan) terpilih."""
+    src = _harga_map(src_profile)
+    n = 0
+    with mssql.cursor(dst_profile, autocommit=False) as cur:
+        for k in keys:
+            kb, ks = _st(k.get("kd_barang")), _st(k.get("kd_satuan"))
+            s = src.get((kb, ks))
+            if not s:
+                continue
+            if with_margin:
+                cur.execute(
+                    "UPDATE m_barang_satuan SET harga_jual = ?, margin = ? WHERE kd_barang = ? AND kd_satuan = ?",
+                    [s["harga_jual"], s["margin"], kb, ks],
+                )
+            else:
+                cur.execute(
+                    "UPDATE m_barang_satuan SET harga_jual = ? WHERE kd_barang = ? AND kd_satuan = ?",
+                    [s["harga_jual"], kb, ks],
+                )
+            n += cur.rowcount
+        cur.connection.commit()
+    return n
+
+
+# --- helpers ---------------------------------------------------------------
+
+def _dictify(cursor) -> list[dict]:
+    cols = [c[0] for c in cursor.description]
+    return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+
+def _key_map(cursor, sql, key, val) -> dict:
+    cursor.execute(sql)
+    return {r[key]: r[val] for r in _dictify(cursor)}

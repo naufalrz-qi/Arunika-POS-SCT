@@ -1,0 +1,182 @@
+<script setup>
+import { computed, ref } from "vue";
+import { useForm, router } from "@inertiajs/vue3";
+import axios from "axios";
+import AdminLayout from "@/layouts/AdminLayout.vue";
+import Card from "@/components/ui/Card.vue";
+import Button from "@/components/ui/Button.vue";
+import Input from "@/components/ui/Input.vue";
+import Select from "@/components/ui/Select.vue";
+import Badge from "@/components/ui/Badge.vue";
+import DataTable from "@/components/ui/DataTable.vue";
+import Modal from "@/components/ui/Modal.vue";
+import Icon from "@/components/nav/Icon.vue";
+
+const props = defineProps({
+  connections: { type: Array, default: () => [] },
+  db_types: { type: Array, default: () => ["gudang", "grosir", "retail"] },
+});
+
+const typeOptions = computed(() =>
+  props.db_types.map((t) => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) })),
+);
+
+const typeVariant = { gudang: "warning", grosir: "brand", retail: "success" };
+
+// Sumber modal untuk retail: profil grosir/gudang (tak boleh dirinya sendiri).
+const costSourceOptions = computed(() =>
+  props.connections
+    .filter((c) => (c.db_type === "grosir" || c.db_type === "gudang") && c.id !== form.id)
+    .map((c) => ({ value: c.id, label: `${c.name} — ${c.db_type === "gudang" ? "Gudang" : "Grosir"}` })),
+);
+
+const columns = [
+  { key: "name", label: "Nama", sortable: true },
+  { key: "db_type", label: "Tipe", sortable: true, align: "center" },
+  { key: "host", label: "Host : Port" },
+  { key: "db_name", label: "Database", sortable: true },
+  { key: "username", label: "User" },
+  { key: "is_default", label: "Default", align: "center" },
+  { key: "test", label: "Test", align: "center" },
+  { key: "actions", label: "", align: "right" },
+];
+
+// Test results per connection id: { loading, ok, message }
+const testState = ref({});
+async function testConnection(conn) {
+  testState.value = { ...testState.value, [conn.id]: { loading: true } };
+  try {
+    const { data } = await axios.post(`/admin-panel/connections/${conn.id}/test`);
+    testState.value = { ...testState.value, [conn.id]: { loading: false, ok: data.ok, message: data.message } };
+  } catch {
+    testState.value = { ...testState.value, [conn.id]: { loading: false, ok: false, message: "Gagal menghubungi server." } };
+  }
+}
+
+function setDefault(conn) {
+  router.post(`/admin-panel/connections/${conn.id}/set-default`, {}, { preserveScroll: true });
+}
+
+// --- Create / edit ---
+const showForm = ref(false);
+const form = useForm({ id: null, name: "", db_type: "grosir", host: "", port: 1433, db_name: "", username: "", password: "", cost_source: null });
+
+function openCreate() {
+  form.reset();
+  form.clearErrors();
+  showForm.value = true;
+}
+function openEdit(c) {
+  form.id = c.id;
+  form.name = c.name;
+  form.db_type = c.db_type;
+  form.host = c.host;
+  form.port = c.port;
+  form.db_name = c.db_name;
+  form.username = c.username;
+  form.password = "";
+  form.cost_source = c.cost_source ?? null;
+  showForm.value = true;
+}
+function save() {
+  form.post("/admin-panel/connections/save", { onSuccess: () => (showForm.value = false) });
+}
+
+const deleteTarget = ref(null);
+function confirmDelete() {
+  router.delete(`/admin-panel/connections/${deleteTarget.value.id}/delete`, {
+    onFinish: () => (deleteTarget.value = null),
+  });
+}
+</script>
+
+<template>
+  <AdminLayout title="Koneksi Server">
+    <Card>
+      <template #header>
+        <Button size="sm" @click="openCreate"><Icon name="plus" size="h-4 w-4" /> Tambah Koneksi</Button>
+      </template>
+
+      <DataTable :columns="columns" :rows="connections" empty-message="Belum ada profil koneksi.">
+        <template #cell-host="{ row }">{{ row.host }}:{{ row.port }}</template>
+
+        <template #cell-db_type="{ value }">
+          <Badge :variant="typeVariant[value] || 'neutral'" class="capitalize">{{ value }}</Badge>
+        </template>
+
+        <template #cell-is_default="{ row }">
+          <Badge v-if="row.is_default" variant="brand">Default</Badge>
+          <button v-else class="text-xs text-brand-600 hover:underline" @click="setDefault(row)">
+            Jadikan default
+          </button>
+        </template>
+
+        <template #cell-test="{ row }">
+          <div class="flex items-center justify-center gap-2">
+            <Button variant="secondary" size="sm" :loading="testState[row.id]?.loading" @click="testConnection(row)">
+              Test
+            </Button>
+            <Badge
+              v-if="testState[row.id] && !testState[row.id].loading"
+              :variant="testState[row.id].ok ? 'success' : 'danger'"
+            >
+              {{ testState[row.id].ok ? "OK" : "Gagal" }}
+            </Badge>
+          </div>
+        </template>
+
+        <template #cell-actions="{ row }">
+          <div class="flex justify-end gap-1">
+            <Button variant="ghost" size="sm" @click="openEdit(row)"><Icon name="pencil" size="h-4 w-4" /></Button>
+            <Button variant="ghost" size="sm" @click="deleteTarget = row"><Icon name="power" size="h-4 w-4" /></Button>
+          </div>
+        </template>
+      </DataTable>
+    </Card>
+
+    <!-- Create / edit -->
+    <Modal :show="showForm" :title="form.id ? 'Edit Koneksi' : 'Tambah Koneksi'" @close="showForm = false">
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Input v-model="form.name" label="Nama Profil" :error="form.errors.name" required />
+        <Select v-model="form.db_type" label="Tipe Database" :options="typeOptions" />
+        <Input v-model="form.db_name" label="Database" :error="form.errors.db_name" required />
+        <Input v-model="form.host" label="Host / IP" :error="form.errors.host" required />
+        <Input v-model="form.port" label="Port" type="number" :error="form.errors.port" />
+        <Input v-model="form.username" label="Username" :error="form.errors.username" required />
+        <Input
+          v-model="form.password"
+          label="Password"
+          type="password"
+          :placeholder="form.id ? 'Kosongkan jika tidak diubah' : ''"
+          :error="form.errors.password"
+        />
+        <Select
+          v-if="form.db_type === 'retail'"
+          v-model="form.cost_source"
+          label="Sumber Modal (Grosir/Gudang)"
+          :options="costSourceOptions"
+          placeholder="Pilih server acuan modal…"
+          :error="form.errors.cost_source"
+        />
+      </div>
+      <p v-if="form.db_type === 'retail'" class="mt-3 text-xs text-ink-subtle">
+        Server retail wajib punya acuan modal. Margin dihitung dari harga jual server sumber modal.
+      </p>
+      <p class="mt-3 text-xs text-ink-subtle">Password dienkripsi (Fernet) di sisi server sebelum disimpan.</p>
+      <template #footer>
+        <Button variant="secondary" @click="showForm = false">Batal</Button>
+        <Button :loading="form.processing" @click="save">Simpan</Button>
+      </template>
+    </Modal>
+
+    <!-- Delete confirm -->
+    <Modal :show="!!deleteTarget" title="Hapus Koneksi" size="sm" @close="deleteTarget = null">
+      <p class="text-sm text-ink-muted">Hapus profil koneksi <strong>{{ deleteTarget?.name }}</strong>?</p>
+      <template #footer>
+        <Button variant="secondary" @click="deleteTarget = null">Batal</Button>
+        <Button variant="danger" @click="confirmDelete">Hapus</Button>
+      </template>
+    </Modal>
+  </AdminLayout>
+</template>
+
