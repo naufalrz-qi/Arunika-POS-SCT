@@ -138,6 +138,12 @@ h1, h2, h3, h4, h5, h6 {
   );
 }
 
+/* V-fin tick: yellow antenna marker under the active section tab. */
+.vfin {
+  background: var(--color-rx-yellow);
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+
 /* Fluid page entrance (layout remounts per navigation). */
 @keyframes page-in {
   from { opacity: 0; transform: translateY(6px); }

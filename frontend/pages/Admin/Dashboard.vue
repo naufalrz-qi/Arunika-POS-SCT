@@ -1,29 +1,29 @@
 <script setup>
 import { computed } from "vue";
+import { Deferred } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import Card from "@/components/ui/Card.vue";
 import Badge from "@/components/ui/Badge.vue";
 import Banner from "@/components/ui/Banner.vue";
 import BarChart from "@/components/charts/BarChart.vue";
 import Icon from "@/components/nav/Icon.vue";
+import LoadingCard from "@/components/ui/LoadingCard.vue";
 
 const props = defineProps({
-  servers: { type: Array, default: () => [] },
-  stats: { type: Object, default: () => ({}) },
-  hourly_transactions: { type: Array, default: () => [] },
-  recent_activity: { type: Array, default: () => [] },
-  conn_error: { type: String, default: null },
+  dashboard: { type: Object, default: null },
 });
+
+const data = computed(() => props.dashboard || {});
 
 const rupiah = (n) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n || 0);
 
 // RX-78-2 tricolor: blue (primary), yellow (V-fin), red (chest), navy.
 const kpis = computed(() => [
-  { label: "Transaksi Hari Ini", value: props.stats.total_transactions ?? 0, icon: "cart", tone: "blue" },
-  { label: "Item Terjual", value: props.stats.total_items ?? 0, icon: "box", tone: "yellow" },
-  { label: "Omzet", value: rupiah(props.stats.revenue), icon: "cash", tone: "red" },
-  { label: "Server Online", value: `${props.stats.servers_online ?? 0} / ${props.stats.servers_total ?? 0}`, icon: "server", tone: "navy" },
+  { label: "Transaksi Hari Ini", value: data.value.stats?.total_transactions ?? 0, icon: "cart", tone: "blue" },
+  { label: "Item Terjual", value: data.value.stats?.total_items ?? 0, icon: "box", tone: "yellow" },
+  { label: "Omzet", value: rupiah(data.value.stats?.revenue), icon: "cash", tone: "red" },
+  { label: "Server Online", value: `${data.value.stats?.servers_online ?? 0} / ${data.value.stats?.servers_total ?? 0}`, icon: "server", tone: "navy" },
 ]);
 
 // Tricolor top panel-line (flush bar) + mode-aware icon chip (kept semantic for contrast).
@@ -35,13 +35,18 @@ const tones = {
 };
 
 const chartData = computed(() =>
-  props.hourly_transactions.map((h) => ({ label: h.hour, value: h.count })),
+  (data.value.hourly_transactions || []).map((h) => ({ label: h.hour, value: h.count })),
 );
 </script>
 
 <template>
   <AdminLayout title="Dashboard">
-    <Banner v-if="conn_error" variant="warning" :message="conn_error" />
+    <Deferred data="dashboard">
+      <template #fallback>
+        <LoadingCard message="Mengambil data dashboard…" />
+      </template>
+
+    <Banner v-if="data.conn_error" variant="warning" :message="data.conn_error" />
 
     <!-- KPI cards -->
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -74,7 +79,7 @@ const chartData = computed(() =>
       <!-- Server status -->
       <Card title="Status Server">
         <ul class="space-y-3">
-          <li v-for="s in servers" :key="s.id" class="flex items-center justify-between">
+          <li v-for="s in data.servers || []" :key="s.id" class="flex items-center justify-between">
             <div>
               <p class="text-sm font-medium text-ink">{{ s.name }}</p>
               <p class="text-xs text-ink-muted">{{ s.host }}</p>
@@ -92,7 +97,7 @@ const chartData = computed(() =>
     <div class="mt-6">
       <Card title="Aktivitas Terbaru">
         <ul class="divide-y divide-border-default">
-          <li v-for="a in recent_activity" :key="a.id" class="flex items-center justify-between py-3">
+          <li v-for="a in data.recent_activity || []" :key="a.id" class="flex items-center justify-between py-3">
             <div class="flex items-center gap-3">
               <div class="flex h-8 w-8 items-center justify-center rounded-full bg-surface-3 text-xs font-semibold text-ink-muted">
                 {{ a.user.charAt(0).toUpperCase() }}
@@ -107,5 +112,6 @@ const chartData = computed(() =>
         </ul>
       </Card>
     </div>
+    </Deferred>
   </AdminLayout>
 </template>

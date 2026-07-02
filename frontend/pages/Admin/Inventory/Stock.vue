@@ -1,6 +1,6 @@
 <script setup>
 import { computed, reactive, ref } from "vue";
-import { router } from "@inertiajs/vue3";
+import { Deferred, router } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
@@ -8,14 +8,17 @@ import Input from "@/components/ui/Input.vue";
 import Select from "@/components/ui/Select.vue";
 import Banner from "@/components/ui/Banner.vue";
 import DataTable from "@/components/ui/DataTable.vue";
+import Spinner from "@/components/ui/Spinner.vue";
 import { downloadXlsx, stamp } from "@/utils/xlsx";
 
 const props = defineProps({
-  levels: { type: Array, default: () => [] },
-  divisi_list: { type: Array, default: () => [] },
+  // Deferred bundle {levels, divisi_list, conn_error} — arrives after mount.
+  stok: { type: Object, default: null },
   filters: { type: Object, default: () => ({}) },
-  conn_error: { type: String, default: null },
 });
+
+const levels = computed(() => props.stok?.levels ?? []);
+const connError = computed(() => props.stok?.conn_error ?? null);
 
 const pull = reactive({
   kd_divisi: props.filters.kd_divisi || "",
@@ -24,7 +27,7 @@ const pull = reactive({
 const pulling = ref(false);
 
 const divisiOptions = computed(() =>
-  props.divisi_list.map((d) => ({ value: d.kd_divisi, label: d.nama })),
+  (props.stok?.divisi_list ?? []).map((d) => ({ value: d.kd_divisi, label: d.nama })),
 );
 
 function tarikData() {
@@ -40,13 +43,13 @@ const q = ref("");
 const catFilter = ref("");
 
 const catOptions = computed(() => {
-  const names = [...new Set(props.levels.map((r) => r.kategori).filter(Boolean))].sort();
+  const names = [...new Set(levels.value.map((r) => r.kategori).filter(Boolean))].sort();
   return names.map((c) => ({ value: c, label: c }));
 });
 
 const displayed = computed(() => {
   const term = q.value.toLowerCase().trim();
-  return props.levels.filter((r) => {
+  return levels.value.filter((r) => {
     const okQ = !term || r.barang.toLowerCase().includes(term) || r.kd_barang.toLowerCase().includes(term);
     const okCat = !catFilter.value || r.kategori === catFilter.value;
     return okQ && okCat;
@@ -81,7 +84,7 @@ const columns = [
 
 <template>
   <AdminLayout title="Monitoring Stok">
-    <Banner v-if="conn_error" variant="warning" :message="conn_error" />
+    <Banner v-if="connError" variant="warning" :message="connError" />
 
     <Card title="Tarik Data" subtitle="Pilih divisi & tanggal, lalu tarik dari server" class="mb-4">
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -92,6 +95,14 @@ const columns = [
         </div>
       </div>
     </Card>
+
+    <Deferred data="stok">
+      <template #fallback>
+        <Card class="flex items-center justify-center gap-3 py-16">
+          <Spinner />
+          <span class="text-sm text-ink-muted">Mengambil data stok dari server…</span>
+        </Card>
+      </template>
 
     <div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end">
       <div class="sm:max-w-xs sm:flex-1">
@@ -117,6 +128,7 @@ const columns = [
       <template #cell-nominal="{ value }"><span class="font-medium">{{ rupiah(value) }}</span></template>
       <template #cell-harga_beli_akhir="{ value }">{{ rupiah(value) }}</template>
     </DataTable>
+    </Deferred>
   </AdminLayout>
 </template>
 

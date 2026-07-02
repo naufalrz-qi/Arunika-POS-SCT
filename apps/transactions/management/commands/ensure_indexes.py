@@ -1,30 +1,17 @@
-"""Create the indexes the dashboard/report queries need on the legacy t_* tables.
+"""Create the report/stock indexes on the legacy t_* tables (manual run).
 
-Idempotent — safe to re-run. Run once per server profile that backs reports:
+Indexes are also built automatically in the background the first time a
+connection becomes active (see apps/transactions/indexes.py); this command is
+for off-hours runs or when the SQL login needs a DBA.
 
     python manage.py ensure_indexes              # active connection
     python manage.py ensure_indexes --profile 3  # specific ServerProfile id
-
-Offline index build (~1 min on the 3.18M-row detail heap, brief table lock) —
-run off-hours. If the SQL login lacks CREATE INDEX rights, the raw SQL is
-printed so a DBA can run it in SSMS.
 """
-import pyodbc
 from django.core.management.base import BaseCommand, CommandError
 
 from apps.connections.models import ServerProfile
+from apps.transactions.indexes import ensure_indexes
 from core import mssql
-
-# name -> DDL. The date index on the 504k-row header is the whole fix: it turns
-# the dashboard's day-filter from a 45s table scan into a 0.7s seek. The detail
-# table (3.18M-row heap) is fine hash-joined once per query — no index needed,
-# and it can't take one anyway (its computed `total` column references UDF
-# GetHargaBersih, created with ANSI_NULLS/QUOTED_IDENTIFIER OFF → error 1935).
-INDEXES = {
-    "IX_tpenjualan_tanggal": (
-        "CREATE NONCLUSTERED INDEX IX_tpenjualan_tanggal ON t_penjualan (tanggal)"
-    ),
-}
 
 
 class Command(BaseCommand):
@@ -44,25 +31,7 @@ class Command(BaseCommand):
                 raise CommandError("Tidak ada koneksi aktif.")
 
         self.stdout.write(f"Server: {profile.name}")
-        failed = []
-        with mssql.cursor(profile) as cur:
-            # These SET options must be ON to index a table with computed columns.
-            cur.execute("SET ANSI_NULLS ON")
-            cur.execute("SET QUOTED_IDENTIFIER ON")
-            for name, ddl in INDEXES.items():
-                cur.execute("SELECT 1 FROM sys.indexes WHERE name = ?", [name])
-                if cur.fetchone():
-                    self.stdout.write(f"  {name}: sudah ada, lewati.")
-                    continue
-                self.stdout.write(f"  {name}: membuat (bisa ~1 mnt)…")
-                try:
-                    cur.execute(ddl)
-                    self.stdout.write(self.style.SUCCESS(f"  {name}: OK."))
-                except pyodbc.Error as exc:
-                    msg = exc.args[-1] if exc.args else exc
-                    self.stderr.write(self.style.ERROR(f"  {name}: GAGAL — {msg}"))
-                    failed.append((name, ddl))
-
+        failed = ensure_indexes(profile, out=self.stdout.write)
         if failed:
             self.stderr.write("\nIndex berikut belum dibuat. Jalankan lewat DBA di SSMS:")
             for _, ddl in failed:

@@ -21,15 +21,15 @@ function choose(c) {
 <template>
   <div class="relative">
     <button
-      class="flex items-center gap-2 rounded-lg border border-border-default bg-surface px-3 py-1.5 text-sm hover:bg-surface-3"
+      class="flex items-center gap-2 rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-sm text-white transition hover:bg-white/10"
       @click="open = !open"
       @blur="open = false"
     >
-      <span v-if="switching" class="h-2 w-2 animate-pulse rounded-full bg-brand-500" />
+      <span v-if="switching" class="h-2 w-2 animate-pulse rounded-full bg-brand-400" />
       <span v-else :class="['h-2 w-2 rounded-full', dot(active?.status)]" />
-      <span class="hidden text-ink-muted sm:inline">Koneksi:</span>
-      <span class="font-medium text-ink">{{ active?.name || "Belum ada" }}</span>
-      <Icon name="chevron" size="h-4 w-4" class="text-ink-muted" />
+      <span class="hidden text-white/60 sm:inline">Koneksi:</span>
+      <span class="font-medium">{{ active?.name || "Belum ada" }}</span>
+      <Icon name="chevron" size="h-4 w-4" class="text-white/60" />
     </button>
 
     <Transition

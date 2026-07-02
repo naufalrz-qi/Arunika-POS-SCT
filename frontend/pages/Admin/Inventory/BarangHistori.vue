@@ -1,6 +1,6 @@
 <script setup>
 import { computed, reactive, ref } from "vue";
-import { router } from "@inertiajs/vue3";
+import { Deferred, router } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
@@ -9,14 +9,15 @@ import Select from "@/components/ui/Select.vue";
 import Badge from "@/components/ui/Badge.vue";
 import Banner from "@/components/ui/Banner.vue";
 import DataTable from "@/components/ui/DataTable.vue";
+import LoadingCard from "@/components/ui/LoadingCard.vue";
 import { downloadXlsx, stamp } from "@/utils/xlsx";
 
 const props = defineProps({
-  rows: { type: Array, default: () => [] },
-  divisi_list: { type: Array, default: () => [] },
+  histori: { type: Object, default: null },
   filters: { type: Object, default: () => ({}) },
-  conn_error: { type: String, default: null },
 });
+
+const data = computed(() => props.histori || {});
 
 const form = reactive({
   kd_barang: props.filters.kd_barang || "",
@@ -27,7 +28,7 @@ const form = reactive({
 const loading = ref(false);
 
 const divisiOptions = computed(() =>
-  props.divisi_list.map((d) => ({ value: d.kd_divisi, label: d.nama })),
+  (data.value.divisi_list || []).map((d) => ({ value: d.kd_divisi, label: d.nama })),
 );
 
 function tampilkan() {

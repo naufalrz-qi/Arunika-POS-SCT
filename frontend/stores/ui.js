@@ -1,17 +1,16 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref } from "vue";
 
 let toastSeq = 0;
 
-const SECTION_STORAGE_KEY = "sct.sidebarSections";
+const SIDEBAR_STORAGE_KEY = "sct.sidebarCollapsed";
 const THEME_STORAGE_KEY = "sct.theme";
 
-function loadCollapsedSections() {
+function loadSidebarCollapsed() {
   try {
-    const raw = localStorage.getItem(SECTION_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
+    return localStorage.getItem(SIDEBAR_STORAGE_KEY) === "1";
   } catch {
-    return {};
+    return false;
   }
 }
 
@@ -28,29 +27,14 @@ function loadTheme() {
 }
 
 export const useUiStore = defineStore("ui", () => {
-  const sidebarCollapsed = ref(false);
+  const sidebarCollapsed = ref(loadSidebarCollapsed());
   const toasts = ref([]);
   const theme = ref(loadTheme());
 
-  // Map of section key -> true when the section is COLLAPSED. Persisted so the
-  // user's open/closed layout survives reloads. Sections default to expanded.
-  const collapsedSections = ref(loadCollapsedSections());
-
   function toggleSidebar() {
     sidebarCollapsed.value = !sidebarCollapsed.value;
-  }
-
-  function isSectionOpen(key) {
-    return !collapsedSections.value[key];
-  }
-
-  function toggleSection(key) {
-    collapsedSections.value = {
-      ...collapsedSections.value,
-      [key]: !collapsedSections.value[key],
-    };
     try {
-      localStorage.setItem(SECTION_STORAGE_KEY, JSON.stringify(collapsedSections.value));
+      localStorage.setItem(SIDEBAR_STORAGE_KEY, sidebarCollapsed.value ? "1" : "0");
     } catch {
       /* ignore storage failures (private mode, etc.) */
     }
@@ -86,11 +70,8 @@ export const useUiStore = defineStore("ui", () => {
   return {
     sidebarCollapsed,
     toasts,
-    collapsedSections,
     theme,
     toggleSidebar,
-    isSectionOpen,
-    toggleSection,
     pushToast,
     dismissToast,
     toggleTheme,

@@ -10,9 +10,36 @@ debet, kredit, kd_satuan, harga, jenis.
 from __future__ import annotations
 
 import datetime as dt
+import time
 from decimal import Decimal
 
 from core import mssql
+
+# --- Master-data cache -------------------------------------------------------
+# m_* tables change rarely but streaming them costs seconds per page load on
+# slow links (54k products ≈ 9s over WAN). Cached per profile with a TTL;
+# master-data writes must call invalidate_master_cache().
+_MASTER_TTL = 600  # seconds
+_master_cache: dict = {}
+
+
+def _cached(profile, name, build):
+    key = (profile.pk, name)
+    hit = _master_cache.get(key)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    val = build()
+    _master_cache[key] = (time.monotonic() + _MASTER_TTL, val)
+    return val
+
+
+def invalidate_master_cache(profile_id=None):
+    """Call after writing to m_* tables so pages see fresh master data."""
+    if profile_id is None:
+        _master_cache.clear()
+    else:
+        for k in [k for k in _master_cache if k[0] == profile_id]:
+            del _master_cache[k]
 
 
 def _f(v) -> float:
@@ -35,6 +62,13 @@ def _dictify(cursor) -> list[dict]:
     return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
 
+def _k(v):
+    """Normalize kd_* join keys the way SQL Server CI collation compares them:
+    trailing-space and case insensitive. Python dict lookups on raw values miss
+    rows the DB itself considers equal ('LYG005' vs 'lyg005') → empty columns."""
+    return v.strip().upper() if isinstance(v, str) else v
+
+
 def _closing_date(cur) -> dt.datetime:
     cur.execute("SELECT MAX(tanggal) FROM g_tutup_buku")
     row = cur.fetchone()
@@ -44,7 +78,7 @@ def _closing_date(cur) -> dt.datetime:
 def _unit_factors(cur) -> dict:
     """(kd_barang, kd_satuan) -> jumlah (qty in smallest unit per 1 of this unit)."""
     cur.execute("SELECT kd_barang, kd_satuan, jumlah FROM m_barang_satuan")
-    return {(r["kd_barang"], r["kd_satuan"]): _f(r["jumlah"]) for r in _dictify(cur)}
+    return {(_k(r["kd_barang"]), _k(r["kd_satuan"])): _f(r["jumlah"]) for r in _dictify(cur)}
 
 
 # --- Movement set (the 9 UNION ALL sources, table-level) --------------------
@@ -171,6 +205,40 @@ def _fetch_movements(cur, *, kd_barang=None, kd_divisi=None, date_to=None) -> li
     return _dictify(cur)
 
 
+def _movement_sums(cur, *, kd_divisi=None, date_from=None, date_to=None) -> list[dict]:
+    """Movement UNION aggregated IN SQL per (kd_divisi, kd_barang), in base units.
+
+    Row transfer scales with catalog size instead of transaction count — on real
+    stores (millions of detail rows) streaming movements to Python dominates page
+    time. Plain SELECT + GROUP BY only (no views/functions/SPs per PRD §5.3).
+    Returns: stok_awal (movement before date_from), masuk, keluar (>= date_from);
+    with date_from=None everything lands in masuk/keluar.
+    """
+    closing = _closing_date(cur)
+    inner, params = _movement_sql(closing, kd_divisi=kd_divisi, date_to=date_to)
+    boundary = date_from or dt.datetime(1900, 1, 1)
+    # MAX(jumlah) dedupes (kd_barang, kd_satuan); missing factor falls back to 1
+    # like factors.get(..., 1.0) in the Python path.
+    sql = (
+        "SELECT mv.kd_divisi, mv.kd_barang, "
+        "SUM(CASE WHEN mv.tanggal < ? THEN CAST((COALESCE(mv.debet, 0) - COALESCE(mv.kredit, 0)) * COALESCE(bs.jumlah, 1) AS FLOAT) ELSE 0 END) AS stok_awal, "
+        "SUM(CASE WHEN mv.tanggal >= ? THEN CAST(COALESCE(mv.debet, 0) * COALESCE(bs.jumlah, 1) AS FLOAT) ELSE 0 END) AS masuk, "
+        "SUM(CASE WHEN mv.tanggal >= ? THEN CAST(COALESCE(mv.kredit, 0) * COALESCE(bs.jumlah, 1) AS FLOAT) ELSE 0 END) AS keluar "
+        f"FROM (\n{inner}\n) mv "
+        "LEFT JOIN (SELECT kd_barang, kd_satuan, MAX(jumlah) AS jumlah "
+        "FROM m_barang_satuan GROUP BY kd_barang, kd_satuan) bs "
+        "ON mv.kd_barang = bs.kd_barang AND mv.kd_satuan = bs.kd_satuan "
+        "GROUP BY mv.kd_divisi, mv.kd_barang "
+        # Skip all-zero groups (opening stock 0, no movement) — both consumers
+        # drop them anyway, and they are ~75% of the catalog on real stores.
+        "HAVING SUM(CASE WHEN mv.tanggal < ? THEN CAST((COALESCE(mv.debet, 0) - COALESCE(mv.kredit, 0)) * COALESCE(bs.jumlah, 1) AS FLOAT) ELSE 0 END) <> 0 "
+        "OR SUM(CASE WHEN mv.tanggal >= ? THEN CAST(COALESCE(mv.debet, 0) * COALESCE(bs.jumlah, 1) AS FLOAT) ELSE 0 END) <> 0 "
+        "OR SUM(CASE WHEN mv.tanggal >= ? THEN CAST(COALESCE(mv.kredit, 0) * COALESCE(bs.jumlah, 1) AS FLOAT) ELSE 0 END) <> 0"
+    )
+    cur.execute(sql, [boundary, boundary, boundary] + params + [boundary, boundary, boundary])
+    return _dictify(cur)
+
+
 # --- Public services -------------------------------------------------------
 
 def list_divisi(profile) -> list[dict]:
@@ -201,10 +269,10 @@ def search_barang(profile, search="", limit=50) -> list[dict]:
 def stock_card(profile, kd_barang, kd_divisi=None, date_from=None, date_to=None) -> dict:
     """Kartu stok for one product: movements + running base-unit saldo."""
     with mssql.cursor(profile) as cur:
-        factors = _unit_factors(cur)
+        factors = _cached(profile, "factors", lambda: _unit_factors(cur))
         moves = _fetch_movements(cur, kd_barang=kd_barang, kd_divisi=kd_divisi or None, date_to=date_to)
-        divisi = {r["kd_divisi"]: r["nama"] for r in _div_rows(cur)}
-        satuan = {r["kd_satuan"]: r["nama"] for r in _satuan_rows(cur)}
+        divisi = {_k(r["kd_divisi"]): r["nama"] for r in _div_rows(cur)}
+        satuan = {_k(r["kd_satuan"]): r["nama"] for r in _satuan_rows(cur)}
         bname = _barang_name(cur, kd_barang)
 
     moves.sort(key=lambda m: (m["tanggal"], m["jenis"]))
@@ -213,7 +281,7 @@ def stock_card(profile, kd_barang, kd_divisi=None, date_from=None, date_to=None)
     saldo = 0.0
     opening = 0.0
     for m in moves:
-        factor = factors.get((m["kd_barang"], m["kd_satuan"]), 1.0)
+        factor = factors.get((_k(m["kd_barang"]), _k(m["kd_satuan"])), 1.0)
         delta = factor * (_f(m["debet"]) - _f(m["kredit"]))
         saldo += delta
         if date_from and m["tanggal"] < date_from:
@@ -224,10 +292,10 @@ def stock_card(profile, kd_barang, kd_divisi=None, date_from=None, date_to=None)
                 "tanggal": m["tanggal"].strftime("%Y-%m-%d %H:%M") if hasattr(m["tanggal"], "strftime") else str(m["tanggal"]),
                 "transaksi": m["transaksi"],
                 "no_transaksi": (m["no_transaksi"] or "").strip(),
-                "divisi": divisi.get(m["kd_divisi"], (m["kd_divisi"] or "").strip()),
+                "divisi": divisi.get(_k(m["kd_divisi"]), (m["kd_divisi"] or "").strip()),
                 "debet": _f(m["debet"]),
                 "kredit": _f(m["kredit"]),
-                "satuan": satuan.get(m["kd_satuan"], (m["kd_satuan"] or "").strip()),
+                "satuan": satuan.get(_k(m["kd_satuan"]), (m["kd_satuan"] or "").strip()),
                 "harga": _f(m["harga"]),
                 "saldo": round(saldo, 3),
             }
@@ -251,26 +319,20 @@ def stock_levels(profile, kd_divisi=None, date_from=None, date_to=None, search="
     """
     date_to = date_to or dt.datetime.now()
     with mssql.cursor(profile) as cur:
-        factors = _unit_factors(cur)
-        moves = _fetch_movements(cur, kd_divisi=kd_divisi or None, date_to=date_to)
-        divisi = {r["kd_divisi"]: r["nama"] for r in _div_rows(cur)}
-        meta = _barang_meta(cur)  # kd_barang -> {nama, kategori, kd_kategori, jenis, supplier, status}
+        sums = _movement_sums(cur, kd_divisi=kd_divisi or None, date_from=date_from, date_to=date_to)
+        divisi = {_k(r["kd_divisi"]): r["nama"] for r in _div_rows(cur)}
+        # kd_barang -> {nama, kategori, kd_kategori, jenis, supplier, status}
+        meta = _cached(profile, "meta", lambda: _barang_meta(cur))
 
     # group key: per barang, or per (divisi, barang) when a specific divisi is chosen
     per_divisi = bool(kd_divisi)
     agg: dict = {}
-    for m in moves:
-        kb = m["kd_barang"]
-        factor = factors.get((kb, m["kd_satuan"]), 1.0)
-        debet = factor * _f(m["debet"])
-        kredit = factor * _f(m["kredit"])
-        key = (m["kd_divisi"], kb) if per_divisi else (None, kb)
+    for m in sums:
+        key = (_k(m["kd_divisi"]), _k(m["kd_barang"])) if per_divisi else (None, _k(m["kd_barang"]))
         a = agg.setdefault(key, {"stok_awal": 0.0, "masuk": 0.0, "keluar": 0.0})
-        if date_from and m["tanggal"] < date_from:
-            a["stok_awal"] += debet - kredit
-        else:
-            a["masuk"] += debet
-            a["keluar"] += kredit
+        a["stok_awal"] += _f(m["stok_awal"])
+        a["masuk"] += _f(m["masuk"])
+        a["keluar"] += _f(m["keluar"])
 
     out = []
     for (kdiv, kb), a in agg.items():
@@ -325,28 +387,28 @@ def _barang_name(cur, kd_barang) -> str:
 
 def _barang_meta(cur) -> dict:
     """kd_barang -> names for kategori/jenis/supplier/merk/model/warna/ukuran (joined in Python)."""
-    kat = {r["kd_kategori"]: r["nama"] for r in _q(cur, "SELECT kd_kategori, nama FROM m_kategori")}
-    jenis = {r["kd_jenis_bahan"]: r["nama"] for r in _q(cur, "SELECT kd_jenis_bahan, nama FROM m_jenis_bahan")}
-    merk = {r["kd_merk"]: r["nama"] for r in _q(cur, "SELECT kd_merk, nama FROM m_merk")}
-    model = {r["kd_model"]: r["nama"] for r in _q(cur, "SELECT kd_model, nama FROM m_model")}
-    warna = {r["kd_warna"]: r["nama"] for r in _q(cur, "SELECT kd_warna, nama FROM m_warna")}
+    kat = {_k(r["kd_kategori"]): r["nama"] for r in _q(cur, "SELECT kd_kategori, nama FROM m_kategori")}
+    jenis = {_k(r["kd_jenis_bahan"]): r["nama"] for r in _q(cur, "SELECT kd_jenis_bahan, nama FROM m_jenis_bahan")}
+    merk = {_k(r["kd_merk"]): r["nama"] for r in _q(cur, "SELECT kd_merk, nama FROM m_merk")}
+    model = {_k(r["kd_model"]): r["nama"] for r in _q(cur, "SELECT kd_model, nama FROM m_model")}
+    warna = {_k(r["kd_warna"]): r["nama"] for r in _q(cur, "SELECT kd_warna, nama FROM m_warna")}
     # first supplier per barang
-    supp_name = {r["kd_supplier"]: r["nama"] for r in _q(cur, "SELECT kd_supplier, nama FROM m_supplier")}
+    supp_name = {_k(r["kd_supplier"]): r["nama"] for r in _q(cur, "SELECT kd_supplier, nama FROM m_supplier")}
     barang_supp: dict = {}
     for r in _q(cur, "SELECT kd_barang, kd_supplier FROM m_barang_supplier"):
-        barang_supp.setdefault(r["kd_barang"], supp_name.get(r["kd_supplier"], ""))
+        barang_supp.setdefault(_k(r["kd_barang"]), supp_name.get(_k(r["kd_supplier"]), ""))
 
     meta = {}
     for r in _q(cur, "SELECT kd_barang, nama, kd_kategori, kd_jenis_bahan, kd_merk, kd_model, kd_warna, ukuran, status FROM m_barang"):
-        kb = r["kd_barang"]
+        kb = _k(r["kd_barang"])
         meta[kb] = {
             "nama": (r["nama"] or "").strip(),
             "kd_kategori": (r["kd_kategori"] or "").strip(),
-            "kategori": (kat.get(r["kd_kategori"], "") or "").strip(),
-            "jenis": (jenis.get(r["kd_jenis_bahan"], "") or "").strip(),
-            "merk": (merk.get(r["kd_merk"], "") or "").strip(),
-            "model": (model.get(r["kd_model"], "") or "").strip(),
-            "warna": (warna.get(r["kd_warna"], "") or "").strip(),
+            "kategori": (kat.get(_k(r["kd_kategori"]), "") or "").strip(),
+            "jenis": (jenis.get(_k(r["kd_jenis_bahan"]), "") or "").strip(),
+            "merk": (merk.get(_k(r["kd_merk"]), "") or "").strip(),
+            "model": (model.get(_k(r["kd_model"]), "") or "").strip(),
+            "warna": (warna.get(_k(r["kd_warna"]), "") or "").strip(),
             "ukuran": _s(r["ukuran"]),
             "supplier": barang_supp.get(kb, ""),
             "status": str(r["status"]).strip(),
@@ -363,7 +425,7 @@ def _div_rows_full(cur):
 def _harga_jual_map(cur) -> dict:
     """kd_barang -> harga_jual (satuan terkecil, jumlah=1)."""
     cur.execute("SELECT kd_barang, harga_jual FROM m_barang_satuan WHERE jumlah = 1")
-    return {r["kd_barang"]: _f(r["harga_jual"]) for r in _dictify(cur)}
+    return {_k(r["kd_barang"]): _f(r["harga_jual"]) for r in _dictify(cur)}
 
 
 def _purchase_prices(cur, tanggal) -> tuple[dict, dict, dict]:
@@ -381,29 +443,30 @@ def _purchase_prices(cur, tanggal) -> tuple[dict, dict, dict]:
         """,
         [tanggal],
     )
-    avg_map = {r["kd_barang"]: _f(r["harga_avg"]) for r in _dictify(cur)}
+    avg_map = {_k(r["kd_barang"]): _f(r["harga_avg"]) for r in _dictify(cur)}
 
-    # Last purchase price per base unit: sort ascending so last row per barang = latest price
+    # Last purchase price per base unit — picked in SQL (ROW_NUMBER, still a plain
+    # SELECT) instead of streaming every purchase row to Python.
     cur.execute(
         """
-        SELECT pd.kd_barang, p.tanggal,
-            pd.harga_beli / NULLIF(bs.jumlah, 0) AS harga_per_unit
-        FROM t_pembelian_detail pd
-        INNER JOIN t_pembelian p ON pd.no_transaksi = p.no_transaksi
-        INNER JOIN m_barang_satuan bs ON pd.kd_barang = bs.kd_barang AND pd.kd_satuan = bs.kd_satuan
-        WHERE CONVERT(DATE, p.tanggal) <= ? AND p.status IN (0, 1)
-        ORDER BY p.tanggal
+        SELECT x.kd_barang, x.harga_per_unit FROM (
+            SELECT pd.kd_barang,
+                pd.harga_beli / NULLIF(bs.jumlah, 0) AS harga_per_unit,
+                ROW_NUMBER() OVER (PARTITION BY pd.kd_barang ORDER BY p.tanggal DESC, p.no_transaksi DESC) AS rn
+            FROM t_pembelian_detail pd
+            INNER JOIN t_pembelian p ON pd.no_transaksi = p.no_transaksi
+            INNER JOIN m_barang_satuan bs ON pd.kd_barang = bs.kd_barang AND pd.kd_satuan = bs.kd_satuan
+            WHERE CONVERT(DATE, p.tanggal) <= ? AND p.status IN (0, 1)
+        ) x WHERE x.rn = 1
         """,
         [tanggal],
     )
-    last_map: dict = {}
-    for r in _dictify(cur):
-        last_map[r["kd_barang"]] = _f(r["harga_per_unit"])
+    last_map = {_k(r["kd_barang"]): _f(r["harga_per_unit"]) for r in _dictify(cur)}
 
     cur.execute("SELECT kd_barang, harga_beli_awal FROM m_barang_divisi")
     init_map: dict = {}
     for r in _dictify(cur):
-        init_map.setdefault(r["kd_barang"], _f(r["harga_beli_awal"]))
+        init_map.setdefault(_k(r["kd_barang"]), _f(r["harga_beli_awal"]))
 
     return avg_map, last_map, init_map
 
@@ -414,20 +477,16 @@ def stok_akhir_per_tanggal(profile, tanggal, kd_divisi=None) -> list[dict]:
         tanggal = dt.datetime(tanggal.year, tanggal.month, tanggal.day, 23, 59, 59)
 
     with mssql.cursor(profile) as cur:
-        factors = _unit_factors(cur)
-        moves = _fetch_movements(cur, kd_divisi=kd_divisi or None, date_to=tanggal)
-        divisi = {r["kd_divisi"]: r for r in _div_rows_full(cur)}
-        meta = _barang_meta(cur)
-        harga_jual = _harga_jual_map(cur)
+        sums = _movement_sums(cur, kd_divisi=kd_divisi or None, date_to=tanggal)
+        divisi = {_k(r["kd_divisi"]): r for r in _div_rows_full(cur)}
+        meta = _cached(profile, "meta", lambda: _barang_meta(cur))
+        harga_jual = _cached(profile, "harga_jual", lambda: _harga_jual_map(cur))
         avg_map, last_map, init_map = _purchase_prices(cur, tanggal)
 
     agg: dict = {}
-    for m in moves:
-        kb = m["kd_barang"]
-        factor = factors.get((kb, m["kd_satuan"]), 1.0)
-        delta = factor * (_f(m["debet"]) - _f(m["kredit"]))
-        key = (m["kd_divisi"], kb)
-        agg[key] = agg.get(key, 0.0) + delta
+    for m in sums:
+        key = (_k(m["kd_divisi"]), _k(m["kd_barang"]))
+        agg[key] = agg.get(key, 0.0) + _f(m["masuk"]) - _f(m["keluar"]) + _f(m["stok_awal"])
 
     out = []
     for (kd_div, kb), stok in agg.items():
@@ -469,18 +528,22 @@ def barang_histori(profile, kd_barang=None, kd_divisi=None, date_from=None, date
             kd_divisi=kd_divisi or None,
             date_to=date_to,
         )
-        factors = _unit_factors(cur)
-        divisi = {r["kd_divisi"]: r for r in _div_rows_full(cur)}
-        satuan = {r["kd_satuan"]: r["nama"] for r in _satuan_rows(cur)}
-        cur.execute("SELECT kd_barang, nama FROM m_barang")
-        barang_map = {r["kd_barang"]: (r["nama"] or "").strip() for r in _dictify(cur)}
+        factors = _cached(profile, "factors", lambda: _unit_factors(cur))
+        divisi = {_k(r["kd_divisi"]): r for r in _div_rows_full(cur)}
+        satuan = {_k(r["kd_satuan"]): r["nama"] for r in _satuan_rows(cur)}
+
+        def _names():
+            cur.execute("SELECT kd_barang, nama FROM m_barang")
+            return {_k(r["kd_barang"]): (r["nama"] or "").strip() for r in _dictify(cur)}
+
+        barang_map = _cached(profile, "barang_names", _names)
 
     rows = []
     for m in sorted(moves, key=lambda x: (x["tanggal"], x["jenis"])):
         if date_from and m["tanggal"] < date_from:
             continue
-        div_info = divisi.get(m["kd_divisi"], {})
-        factor = factors.get((m["kd_barang"], m["kd_satuan"]), 1.0)
+        div_info = divisi.get(_k(m["kd_divisi"]), {})
+        factor = factors.get((_k(m["kd_barang"]), _k(m["kd_satuan"])), 1.0)
         debet, kredit = _f(m["debet"]), _f(m["kredit"])
         rows.append({
             "kd_divisi": (m["kd_divisi"] or "").strip(),
@@ -490,11 +553,11 @@ def barang_histori(profile, kd_barang=None, kd_divisi=None, date_from=None, date
             "transaksi": m["transaksi"],
             "no_transaksi": (m["no_transaksi"] or "").strip(),
             "kd_barang": (m["kd_barang"] or "").strip(),
-            "barang": barang_map.get(m["kd_barang"], ""),
+            "barang": barang_map.get(_k(m["kd_barang"]), ""),
             "debet": debet,
             "kredit": kredit,
             "kd_satuan": (m["kd_satuan"] or "").strip(),
-            "satuan": satuan.get(m["kd_satuan"], (m["kd_satuan"] or "").strip()),
+            "satuan": satuan.get(_k(m["kd_satuan"]), (m["kd_satuan"] or "").strip()),
             "harga": _f(m["harga"]),
             # base-unit net for a correct cross-satuan saldo summary
             "qty_base": round(factor * (debet - kredit), 3),

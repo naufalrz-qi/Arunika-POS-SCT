@@ -39,7 +39,9 @@ def build_conn_str(host, port, db_name, username, password) -> str:
 
 def _connect(host, port, db_name, username, password, autocommit=True):
     conn_str = build_conn_str(host, port, db_name, username, password)
-    return pyodbc.connect(conn_str, timeout=CONNECT_TIMEOUT, autocommit=autocommit)
+    conn = pyodbc.connect(conn_str, timeout=CONNECT_TIMEOUT, autocommit=autocommit)
+    conn.timeout = 60  # Query timeout (seconds); slow queries don't pin the worker indefinitely.
+    return conn
 
 
 def test_connection(host, port, db_name, username, password) -> dict:
@@ -96,7 +98,14 @@ def get_active_profile(db_type: str | None = None):
     from apps.connections.models import ServerProfile
 
     qs = ServerProfile.objects.filter(db_type=db_type) if db_type else ServerProfile.objects.all()
-    return qs.filter(is_default=True).first() or qs.first()
+    profile = qs.filter(is_default=True).first() or qs.first()
+    if profile:
+        # Auto-build the report/stock indexes once per profile per process, in
+        # the background — new connections get them without a manual command.
+        from apps.transactions.indexes import ensure_indexes_async
+
+        ensure_indexes_async(profile)
+    return profile
 
 
 def get_cost_source(retail_profile):

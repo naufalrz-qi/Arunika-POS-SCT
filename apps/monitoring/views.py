@@ -5,7 +5,7 @@ import pyodbc
 from django.contrib.auth import update_session_auth_hash
 from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect
-from inertia import render
+from inertia import defer, render
 
 from apps.auth_app.models import Role, User
 from apps.connections.models import ServerProfile
@@ -39,37 +39,36 @@ def _active():
 # --- Dashboard -------------------------------------------------------------
 
 def dashboard(request):
-    servers = [
-        {"id": p.id, "name": p.name, "host": f"{p.host}:{p.port}", "status": p.last_status}
-        for p in ServerProfile.objects.all()
-    ]
-    recent = [
-        {
-            "id": a.id,
-            "user": a.username or "—",
-            "action": a.action,
-            "detail": a.detail,
-            "time": a.timestamp.strftime("%Y-%m-%d %H:%M"),
-        }
-        for a in ActivityLog.objects.all()[:8]
-    ]
+    # Deferred: bundle servers + summary + activity so shell renders instantly.
+    def load_dashboard():
+        servers = [
+            {"id": p.id, "name": p.name, "host": f"{p.host}:{p.port}", "status": p.last_status}
+            for p in ServerProfile.objects.all()
+        ]
+        recent = [
+            {
+                "id": a.id,
+                "user": a.username or "—",
+                "action": a.action,
+                "detail": a.detail,
+                "time": a.timestamp.strftime("%Y-%m-%d %H:%M"),
+            }
+            for a in ActivityLog.objects.all()[:8]
+        ]
 
-    profile = _active()
-    summary = {"total_transactions": 0, "total_items": 0, "revenue": 0, "hourly_transactions": []}
-    conn_error = None
-    if profile:
-        try:
-            summary = tx.dashboard_summary(profile)
-        except pyodbc.Error as exc:
-            conn_error = f"Gagal membaca transaksi: {exc.args[-1] if exc.args else exc}"
-    else:
-        conn_error = CONN_ERROR
+        profile = _active()
+        summary = {"total_transactions": 0, "total_items": 0, "revenue": 0, "hourly_transactions": []}
+        conn_error = None
+        if profile:
+            try:
+                summary = tx.dashboard_summary(profile)
+            except pyodbc.Error as exc:
+                conn_error = f"Gagal membaca transaksi: {exc.args[-1] if exc.args else exc}"
+        else:
+            conn_error = CONN_ERROR
 
-    online = sum(1 for s in servers if s["status"] == "online")
-    return render(
-        request,
-        "Admin/Dashboard",
-        props={
+        online = sum(1 for s in servers if s["status"] == "online")
+        return {
             "servers": servers,
             "stats": {
                 "total_transactions": summary["total_transactions"],
@@ -81,7 +80,12 @@ def dashboard(request):
             "hourly_transactions": summary["hourly_transactions"],
             "recent_activity": recent,
             "conn_error": conn_error,
-        },
+        }
+
+    return render(
+        request,
+        "Admin/Dashboard",
+        props={"dashboard": defer(load_dashboard)},
     )
 
 
@@ -328,75 +332,82 @@ def logs_index(request):
 # --- Monitoring Stok (computed from movement card, table-level) ------------
 
 def stock_index(request):
-    profile = _active()
     kd_divisi = request.GET.get("kd_divisi", "")
     tanggal = _parse_date(request.GET.get("tanggal")) or dt.datetime.now()
 
-    levels, divisi_list, conn_error = [], [], None
-    if profile:
-        try:
-            divisi_list = inv.list_divisi(profile)
-            levels = inv.stok_akhir_per_tanggal(
-                profile,
-                tanggal=_eod(tanggal),
-                kd_divisi=kd_divisi or None,
-            )
-        except pyodbc.Error as exc:
-            conn_error = f"Gagal membaca stok: {exc.args[-1] if exc.args else exc}"
-    else:
-        conn_error = CONN_ERROR
+    # Deferred: the shell renders instantly, Inertia fetches this bundle right
+    # after mount (the stock computation takes seconds on real servers).
+    def load_stok():
+        profile = _active()
+        levels, divisi_list, conn_error = [], [], None
+        if profile:
+            try:
+                divisi_list = inv.list_divisi(profile)
+                levels = inv.stok_akhir_per_tanggal(
+                    profile,
+                    tanggal=_eod(tanggal),
+                    kd_divisi=kd_divisi or None,
+                )
+            except pyodbc.Error as exc:
+                conn_error = f"Gagal membaca stok: {exc.args[-1] if exc.args else exc}"
+        else:
+            conn_error = CONN_ERROR
+        return {"levels": levels, "divisi_list": divisi_list, "conn_error": conn_error}
 
     return render(
         request,
         "Admin/Inventory/Stock",
         props={
-            "levels": levels,
-            "divisi_list": divisi_list,
+            "stok": defer(load_stok),
             "filters": {
                 "kd_divisi": kd_divisi,
                 "tanggal": request.GET.get("tanggal", ""),
             },
-            "conn_error": conn_error,
         },
     )
 
 
 def barang_histori_index(request):
-    profile = _active()
     kd_barang = request.GET.get("kd_barang", "").strip()
     kd_divisi = request.GET.get("kd_divisi", "")
     date_from = _parse_date(request.GET.get("date_from"))
     date_to = _parse_date(request.GET.get("date_to"))
 
-    rows, divisi_list, conn_error = [], [], None
-    if profile:
-        try:
-            divisi_list = inv.list_divisi(profile)
-            rows = inv.barang_histori(
-                profile,
-                kd_barang=kd_barang or None,
-                kd_divisi=kd_divisi or None,
-                date_from=date_from,
-                date_to=_eod(date_to),
-            )
-        except pyodbc.Error as exc:
-            conn_error = f"Gagal membaca histori: {exc.args[-1] if exc.args else exc}"
-    else:
-        conn_error = CONN_ERROR
+    def load_histori():
+        profile = _active()
+        rows, divisi_list, conn_error = [], [], None
+        if profile:
+            try:
+                divisi_list = inv.list_divisi(profile)
+                rows = inv.barang_histori(
+                    profile,
+                    kd_barang=kd_barang or None,
+                    kd_divisi=kd_divisi or None,
+                    date_from=date_from,
+                    date_to=_eod(date_to),
+                )
+            except pyodbc.Error as exc:
+                conn_error = f"Gagal membaca histori: {exc.args[-1] if exc.args else exc}"
+        else:
+            conn_error = CONN_ERROR
+
+        return {
+            "rows": rows,
+            "divisi_list": divisi_list,
+            "conn_error": conn_error,
+        }
 
     return render(
         request,
         "Admin/Inventory/BarangHistori",
         props={
-            "rows": rows,
-            "divisi_list": divisi_list,
+            "histori": defer(load_histori),
             "filters": {
                 "kd_barang": kd_barang,
                 "kd_divisi": kd_divisi,
                 "date_from": request.GET.get("date_from", ""),
                 "date_to": request.GET.get("date_to", ""),
             },
-            "conn_error": conn_error,
         },
     )
 
@@ -469,9 +480,66 @@ retur_penjualan = _mock_page("Admin/Reports/ReturPenjualan")
 # Pembelian
 pembelian = _mock_page("Admin/Reports/Pembelian")
 retur_pembelian = _mock_page("Admin/Reports/ReturPembelian")
-# Inventori
-stok_divisi = _mock_page("Admin/Inventory/StokDivisi")
-stok_akhir = _mock_page("Admin/Inventory/StokAkhir")
+# Inventori — real services, deferred
+def stok_divisi(request):
+    kd_divisi = request.GET.get("kd_divisi", "")
+    date_from = _parse_date(request.GET.get("date_from")) or dt.datetime.now() - dt.timedelta(days=30)
+    date_to = _parse_date(request.GET.get("date_to")) or dt.datetime.now()
+
+    def load():
+        profile = _active()
+        rows, divisi_list, conn_error = [], [], None
+        if profile:
+            try:
+                divisi_list = inv.list_divisi(profile)
+                rows = inv.stock_levels(
+                    profile,
+                    kd_divisi=kd_divisi or None,
+                    date_from=date_from,
+                    date_to=_eod(date_to),
+                )
+            except pyodbc.Error as exc:
+                conn_error = f"Gagal membaca stok divisi: {exc.args[-1] if exc.args else exc}"
+        else:
+            conn_error = CONN_ERROR
+        return {"rows": rows, "divisi_list": divisi_list, "conn_error": conn_error}
+
+    return render(
+        request,
+        "Admin/Inventory/StokDivisi",
+        props={
+            "data": defer(load),
+            "filters": {
+                "kd_divisi": kd_divisi,
+                "date_from": request.GET.get("date_from", ""),
+                "date_to": request.GET.get("date_to", ""),
+            },
+        },
+    )
+
+def stok_akhir(request):
+    tanggal = _parse_date(request.GET.get("tanggal")) or dt.datetime.now()
+
+    def load():
+        profile = _active()
+        rows, conn_error = [], None
+        if profile:
+            try:
+                rows = inv.stok_akhir_per_tanggal(profile, tanggal=_eod(tanggal))
+            except pyodbc.Error as exc:
+                conn_error = f"Gagal membaca stok akhir: {exc.args[-1] if exc.args else exc}"
+        else:
+            conn_error = CONN_ERROR
+        return {"rows": rows, "conn_error": conn_error}
+
+    return render(
+        request,
+        "Admin/Inventory/StokAkhir",
+        props={
+            "data": defer(load),
+            "filters": {"tanggal": request.GET.get("tanggal", "")},
+        },
+    )
 opname = _mock_page("Admin/Inventory/Opname")
 # Analitik
 fmi_penjualan = _mock_page("Admin/Analytics/FmiPenjualan")

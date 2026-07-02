@@ -240,6 +240,7 @@ def update_harga(profile, kd_barang: str, prices: dict) -> int:
             )
             n += cur.rowcount
         cur.connection.commit()
+    _invalidate_inventory_cache(profile)
     return n
 
 
@@ -261,6 +262,7 @@ def update_status(profile, kd_barang: str, table: str, status, kd_divisi: str | 
         cur.execute(sql, params)
         n = cur.rowcount
         cur.connection.commit()
+    _invalidate_inventory_cache(profile)
     return n
 
 
@@ -324,10 +326,18 @@ def sync_harga_jual(src_profile, dst_profile, keys: list, with_margin: bool = Fa
                 )
             n += cur.rowcount
         cur.connection.commit()
+    _invalidate_inventory_cache(dst_profile)
     return n
 
 
 # --- helpers ---------------------------------------------------------------
+
+
+def _invalidate_inventory_cache(profile):
+    """Master-data writes must bust the inventory master cache (services.py)."""
+    from apps.inventory.services import invalidate_master_cache
+
+    invalidate_master_cache(profile.pk)
 
 def _dictify(cursor) -> list[dict]:
     cols = [c[0] for c in cursor.description]

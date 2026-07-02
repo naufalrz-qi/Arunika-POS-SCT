@@ -13,18 +13,21 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 def _env_bool(name, default=False):
     return os.environ.get(name, str(int(default))).lower() in ("1", "true", "yes", "on")
 
-# SECURITY: dev-only key. Replace via env var in production.
-SECRET_KEY = "django-insecure-dev-key-frontend-phase-change-me"
+# SECURITY: production must set via env var (no default in prod).
+SECRET_KEY = os.environ.get(
+    "SECRET_KEY",
+    "django-insecure-dev-key-frontend-phase-change-me"
+)
 
-DEBUG = True
+DEBUG = _env_bool("DEBUG", default=True)
 
-# PRD §3.3 — dual access (LAN lokal + Tailscale). Adjust IPs per deployment.
-ALLOWED_HOSTS = [
-    "127.0.0.1",
-    "localhost",
-    "192.168.1.10",   # IP LAN lokal mesin kasir (contoh)
-    "100.64.0.1",     # Tailscale IP mesin kasir (contoh, range 100.x.x.x)
-]
+# PRD §3.3 — dual access (LAN lokal + Tailscale). Allow env override.
+ALLOWED_HOSTS = (
+    os.environ.get(
+        "ALLOWED_HOSTS",
+        "127.0.0.1,localhost,192.168.1.10,100.64.0.1"
+    ).split(",")
+)
 
 # Display name shared to the frontend via inertia_share.
 APP_NAME = "Sukses Crown Toys"
@@ -47,17 +50,17 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    "django.middleware.security.SecurityMiddleware",
+    "django.middleware.gzip.GZipMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware" if not DEBUG else "django.middleware.security.SecurityMiddleware",
+    "django.middleware.security.SecurityMiddleware" if DEBUG else "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    # Inertia
     "inertia.middleware.InertiaMiddleware",
     "apps.core.middleware.inertia_share",
-    # App access control (order matters: after auth, before views)
     "apps.core.middleware.auth_required",
     "apps.core.middleware.admin_network_guard",
 ]
@@ -102,9 +105,9 @@ PASSWORD_HASHERS = [
 
 AUTH_PASSWORD_VALIDATORS = []
 
-# Idle session expiry (PRD §8.1) — slide expiry on each request.
+# Idle session expiry (PRD §8.1) — do NOT save every request (kills SQLite concurrency).
 SESSION_COOKIE_AGE = int(os.environ.get("SESSION_IDLE_SECONDS", 60 * 60 * 4))  # 4h
-SESSION_SAVE_EVERY_REQUEST = True
+SESSION_SAVE_EVERY_REQUEST = False
 
 # --- Network access control (PRD §3.4 / §7.6) ------------------------------
 # When enabled, /admin-panel/* is reachable only from the Tailscale CGNAT range.
@@ -123,17 +126,29 @@ INERTIA_LAYOUT = "base.html"
 
 # --- Static / Vite ---------------------------------------------------------
 STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"  # For collectstatic; whitenoise serves from here in prod.
 
 DJANGO_VITE = {
     "default": {
-        "dev_mode": DEBUG,
+        "dev_mode": _env_bool("DJANGO_VITE_DEV", default=DEBUG),
         "dev_server_host": "localhost",
         "dev_server_port": 5173,
         "manifest_path": BASE_DIR / "frontend" / "dist" / "manifest.json",
     }
 }
 
-# Where Vite build output lives (collected as static in production).
 STATICFILES_DIRS = [BASE_DIR / "frontend" / "dist"]
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage" if not DEBUG else "django.contrib.staticfiles.storage.StaticFilesStorage"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# --- SQLite WAL mode (multi-reader/single-writer) ----
+# Enabled so SELECT doesn't stall on WRITE; readers see last committed state while
+# a writer prepares the next. Readers don't block each other.
+def _enable_sqlite_wal(sender, connection, **kwargs):
+    if connection.vendor == "sqlite":
+        with connection.cursor() as cursor:
+            cursor.execute("PRAGMA journal_mode=WAL")
+
+from django.db.backends.signals import connection_created
+connection_created.connect(_enable_sqlite_wal)
