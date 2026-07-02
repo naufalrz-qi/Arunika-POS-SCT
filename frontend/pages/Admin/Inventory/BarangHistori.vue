@@ -49,12 +49,12 @@ const typeFilter = ref("");
 const rowSearch = ref("");
 
 const typeOptions = computed(() =>
-  [...new Set(props.rows.map((r) => r.transaksi))].sort().map((t) => ({ value: t, label: t })),
+  [...new Set((data.value.rows || []).map((r) => r.transaksi))].sort().map((t) => ({ value: t, label: t })),
 );
 
 const displayed = computed(() => {
   const term = rowSearch.value.toLowerCase().trim();
-  return props.rows.filter((r) => {
+  return (data.value.rows || []).filter((r) => {
     const okType = !typeFilter.value || r.transaksi === typeFilter.value;
     const okSearch =
       !term ||
@@ -105,8 +105,6 @@ const columns = [
 
 <template>
   <AdminLayout title="Barang Histori">
-    <Banner v-if="conn_error" variant="warning" :message="conn_error" />
-
     <Card class="mb-6">
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Input v-model="form.kd_barang" label="Kode Barang" placeholder="mis. BRG0001 (opsional)" @keyup.enter="tampilkan" />
@@ -119,7 +117,14 @@ const columns = [
       </div>
     </Card>
 
-    <div v-if="rows.length > 0">
+    <Deferred data="histori">
+      <template #fallback>
+        <LoadingCard message="Mengambil data histori…" />
+      </template>
+
+    <Banner v-if="data.conn_error" variant="warning" :message="data.conn_error" />
+
+    <div v-if="(data.rows || []).length > 0">
       <div class="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Card>
           <p class="text-xs text-ink-muted">Total Baris</p>
@@ -160,12 +165,13 @@ const columns = [
       </DataTable>
     </div>
 
-    <Card v-else-if="!conn_error">
+    <Card v-else-if="!data.conn_error">
       <p class="py-8 text-center text-sm text-ink-muted">
         Gunakan filter di atas untuk menampilkan histori barang.<br />
         Minimal isi salah satu filter: kode barang, divisi, atau rentang tanggal.
       </p>
     </Card>
+    </Deferred>
   </AdminLayout>
 </template>
 
