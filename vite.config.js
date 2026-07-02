@@ -22,6 +22,12 @@ export default defineConfig(({ mode }) => {
       host: "0.0.0.0",
       port: Number(env.DJANGO_VITE_DEV_SERVER_PORT) || 5173,
       watch: { usePolling: true },
+      allowedHosts: [".echidna-carob.ts.net", "localhost", "127.0.0.1"],
+      // Django's dev_server_host is fixed to "localhost" in settings.py, so the
+      // page (served from whatever hostname you browse to) always requests
+      // scripts from http://localhost:5173 — a different origin. Vite's dev
+      // server otherwise replies without CORS headers and the browser blocks it.
+      cors: true,
     },
     build: {
       manifest: "manifest.json",

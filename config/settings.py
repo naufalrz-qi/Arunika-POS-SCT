@@ -21,13 +21,9 @@ SECRET_KEY = os.environ.get(
 
 DEBUG = _env_bool("DEBUG", default=True)
 
-# PRD §3.3 — dual access (LAN lokal + Tailscale). Allow env override.
-ALLOWED_HOSTS = (
-    os.environ.get(
-        "ALLOWED_HOSTS",
-        "127.0.0.1,localhost,192.168.1.10,100.64.0.1"
-    ).split(",")
-)
+# PRD §3.3 — dual access (LAN lokal + Tailscale). Set real hosts in .env
+# (ALLOWED_HOSTS=host1,host2,...). Default is loopback-only for a fresh clone.
+ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
 
 # Display name shared to the frontend via inertia_share.
 APP_NAME = "Sukses Crown Toys"
