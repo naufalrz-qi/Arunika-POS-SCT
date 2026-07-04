@@ -12,10 +12,9 @@ const props = defineProps({
 const rows = computed(() => props.data?.rows || []);
 const columns = [
   { key: "kd_barang", label: "Kode" },
-  { key: "barang", label: "Barang" },
+  { key: "nama", label: "Barang" },
   { key: "divisi", label: "Divisi" },
-  { key: "stok", label: "Stok", align: "right", format: "number" },
-  { key: "stok_min", label: "Stok Min", align: "right", format: "number" },
+  { key: "stok_akhir", label: "Stok", align: "right", format: "number" },
 ];
 </script>
 
@@ -28,14 +27,14 @@ const columns = [
         :columns="columns"
         :rows="rows"
         row-key="kd_barang"
-        :search-keys="['kd_barang','barang']"
+        :search-keys="['kd_barang','nama']"
         export-name="stok-divisi"
         sheet-name="Stok Divisi"
         :conn-error="data && data.conn_error"
       >
-        <template #cell-stok="{ row }">
-          <Badge v-if="row.stok < row.stok_min" variant="danger">{{ row.stok }}</Badge>
-          <span v-else>{{ new Intl.NumberFormat('id-ID').format(row.stok) }}</span>
+        <template #cell-stok_akhir="{ row }">
+          <Badge v-if="row.stok_min !== undefined && row.stok_akhir < row.stok_min" variant="danger">{{ row.stok_akhir }}</Badge>
+          <span v-else>{{ new Intl.NumberFormat('id-ID').format(row.stok_akhir || 0) }}</span>
         </template>
       </ReportView>
     </Deferred>

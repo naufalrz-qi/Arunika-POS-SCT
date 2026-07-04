@@ -27,24 +27,24 @@ function pick(v) {
 
 <template>
   <div class="relative">
-    <span v-if="label" class="mb-1 block text-xs text-ink-muted">{{ label }}</span>
+    <span v-if="label" class="mb-1.5 block text-[10px] font-heading font-bold uppercase tracking-widest text-ink-muted">{{ label }}</span>
     <button
       type="button"
       @click="open = !open"
-      class="flex w-full items-center justify-between rounded-card border border-border-default bg-surface px-3 py-2 text-left text-sm text-ink"
+      class="flex h-10 w-full items-center justify-between rounded border border-border-strong bg-surface/50 backdrop-blur-sm px-3 py-2 text-left text-sm text-ink transition-all duration-200 hover:border-brand-400 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 focus:shadow-[0_0_10px_rgba(11,61,145,0.2)]"
     >
       <span :class="modelValue === '' || modelValue === null ? 'text-ink-subtle' : ''">{{ currentLabel }}</span>
-      <span class="text-ink-subtle">▾</span>
+      <span class="text-brand-500">▾</span>
     </button>
     <div
       v-if="open"
-      class="absolute z-20 mt-1 w-full rounded-card border border-border-default bg-surface shadow-lg"
+      class="absolute z-20 mt-1 w-full rounded border border-border-strong bg-surface shadow-[0_4_15px_rgba(0,0,0,0.15)] backdrop-blur-md"
     >
       <input
         v-model="q"
         type="text"
         placeholder="Cari…"
-        class="w-full border-b border-border-default bg-surface px-3 py-2 text-sm text-ink"
+        class="h-10 w-full border-b border-border-strong bg-transparent px-3 py-2 text-sm text-ink focus:outline-none focus:bg-surface-3/50"
       />
       <div class="max-h-56 overflow-y-auto scroll-slim">
         <button

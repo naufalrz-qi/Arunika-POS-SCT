@@ -1,6 +1,5 @@
 <script setup>
 import { computed, ref } from "vue";
-import AdminLayout from "@/layouts/AdminLayout.vue";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
 import Input from "@/components/ui/Input.vue";
@@ -44,7 +43,7 @@ function exportXlsx() {
 </script>
 
 <template>
-  <AdminLayout :title="title">
+  <div>
     <Banner v-if="connError" variant="warning" :message="connError" />
 
     <!-- Optional filter panel (collapsible). -->
@@ -88,5 +87,5 @@ function exportXlsx() {
         <slot :name="name" v-bind="slotProps" />
       </template>
     </DataTable>
-  </AdminLayout>
+  </div>
 </template>

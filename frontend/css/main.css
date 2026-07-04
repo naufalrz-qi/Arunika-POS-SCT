@@ -4,6 +4,7 @@
 @import "@fontsource/inter/600.css";
 @import "@fontsource/poppins/400.css";
 @import "@fontsource/poppins/600.css";
+@import "@fontsource/poppins/700.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -24,14 +25,17 @@
   --color-brand-300: oklch(0.77 0.12 264);
   --color-brand-400: oklch(0.66 0.16 264);
   --color-brand-500: oklch(0.55 0.18 264);
-  --color-brand-600: oklch(0.46 0.16 264);
-  --color-brand-700: oklch(0.38 0.15 264);
-  --color-brand-800: oklch(0.32 0.12 264);
-  --color-brand-900: oklch(0.27 0.09 264);
+  --color-brand-600: oklch(0.46 0.20 264);
+  --color-brand-700: oklch(0.38 0.18 264);
+  --color-brand-800: oklch(0.32 0.15 264);
+  --color-brand-900: oklch(0.27 0.12 264);
 
   /* RX-78-2 identity accents — fixed in both modes */
   --color-rx-red: oklch(0.58 0.24 27); /* #E60012 chest/feet */
   --color-rx-yellow: oklch(0.85 0.17 90); /* #FFC400 V-fin */
+  --color-rx-white: oklch(0.99 0.01 264); /* Gundam White */
+  --color-rx-gray: oklch(0.45 0.01 264); /* Inner Frame Gray */
+  --color-rx-neon: oklch(0.80 0.15 175); /* Camera/Eye Green/Cyan */
 
   /* Semantic status colors — fixed in both modes */
   --color-success-50: oklch(0.97 0.03 150);
@@ -50,19 +54,20 @@
   --color-danger-700: oklch(0.49 0.18 25);
 
   /* Panels sharpened a touch for the mecha "panel-line" feel */
-  --radius-card: 0.5rem;
+  --radius-card: 0.75rem;
 }
 
 /* Light mode (default) */
 :root {
   --surface: oklch(1 0 0);
-  --surface-2: oklch(0.985 0 0);
-  --surface-3: oklch(0.97 0 0);
-  --ink: oklch(0.20 0 0);
-  --ink-muted: oklch(0.44 0 0);
-  --ink-subtle: oklch(0.55 0 0);
-  --border: oklch(0.92 0 0);
-  --border-strong: oklch(0.87 0 0);
+  --surface-solid: oklch(1 0 0);
+  --surface-2: oklch(0.96 0.01 264);
+  --surface-3: oklch(0.93 0.02 264);
+  --ink: oklch(0.20 0.02 264);
+  --ink-muted: oklch(0.44 0.02 264);
+  --ink-subtle: oklch(0.55 0.02 264);
+  --border: oklch(0.88 0.02 264);
+  --border-strong: oklch(0.72 0.04 264);
   --success-bg: oklch(0.97 0.03 150);
   --success-fg: oklch(0.49 0.13 150);
   --warning-bg: oklch(0.97 0.04 85);
@@ -71,19 +76,20 @@
   --danger-fg: oklch(0.49 0.18 25);
   --brand-bg: oklch(0.95 0.03 264);
   --brand-fg: oklch(0.45 0.16 264);
-  --sidebar-bg: oklch(0.20 0.03 264);
+  --sidebar-bg: rgba(11, 23, 42, 0.95); /* Deep dark blue for sidebar */
 }
 
 /* Dark mode */
 .dark {
-  --surface: oklch(0.23 0.006 264);
-  --surface-2: oklch(0.19 0.006 264);
-  --surface-3: oklch(0.27 0.006 264);
+  --surface: oklch(0.23 0.01 264);
+  --surface-solid: oklch(0.23 0.01 264);
+  --surface-2: oklch(0.16 0.02 264);
+  --surface-3: oklch(0.27 0.02 264);
   --ink: oklch(0.96 0 0);
-  --ink-muted: oklch(0.72 0 0);
-  --ink-subtle: oklch(0.60 0 0);
-  --border: oklch(0.30 0.006 264);
-  --border-strong: oklch(0.38 0.006 264);
+  --ink-muted: oklch(0.72 0.01 264);
+  --ink-subtle: oklch(0.60 0.01 264);
+  --border: oklch(0.30 0.02 264);
+  --border-strong: oklch(0.40 0.03 264);
   --success-bg: oklch(0.28 0.05 150);
   --success-fg: oklch(0.80 0.13 150);
   --warning-bg: oklch(0.30 0.05 80);
@@ -92,12 +98,13 @@
   --danger-fg: oklch(0.80 0.15 25);
   --brand-bg: oklch(0.30 0.07 264);
   --brand-fg: oklch(0.82 0.11 264);
-  --sidebar-bg: oklch(0.16 0.03 264);
+  --sidebar-bg: rgba(11, 15, 25, 0.95);
 }
 
 /* Semantic tokens → Tailwind utilities */
 @theme inline {
   --color-surface: var(--surface);
+  --color-surface-solid: var(--surface-solid);
   --color-surface-2: var(--surface-2);
   --color-surface-3: var(--surface-3);
   --color-ink: var(--ink);
@@ -119,10 +126,12 @@
 /* Base resets / niceties */
 html {
   scrollbar-gutter: stable;
+  scroll-behavior: smooth;
 }
 
 body {
   font-family: var(--font-sans);
+  background-color: var(--surface-2);
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -133,8 +142,8 @@ h1, h2, h3, h4, h5, h6 {
 .panel-strip {
   background: linear-gradient(
     90deg,
-    var(--color-rx-red) 0 68%,
-    var(--color-rx-yellow) 68% 100%
+    var(--color-rx-red) 0 50%,
+    var(--color-rx-yellow) 50% 100%
   );
 }
 
@@ -144,13 +153,148 @@ h1, h2, h3, h4, h5, h6 {
   clip-path: polygon(50% 0, 100% 100%, 0 100%);
 }
 
-/* Fluid page entrance (layout remounts per navigation). */
+/* Floating nav panels: detached from viewport edges, soft neutral elevation
+   (no colored glow) so they read as separate cards over the page. */
+.floating-panel {
+  box-shadow: 0 4px 16px -4px rgba(0, 0, 0, 0.16), 0 2px 6px -2px rgba(0, 0, 0, 0.1);
+}
+.dark .floating-panel {
+  box-shadow: 0 4px 20px -4px rgba(0, 0, 0, 0.5), 0 2px 8px -2px rgba(0, 0, 0, 0.4);
+}
+
+/* Gundam shoulder-armor corner bevel for floating nav panels: one bigger
+   cut (top-right, the "shoulder") plus a small bevel on the other 3 corners. */
+.shoulder-panel {
+  clip-path: polygon(
+    0 10px, 10px 0,
+    calc(100% - 18px) 0, 100% 18px,
+    100% calc(100% - 10px), calc(100% - 10px) 100%,
+    10px 100%, 0 calc(100% - 10px)
+  );
+}
+
+/* Same corner-bevel language, but all 4 corners equal — for content panels
+   (cards, tables) and controls (buttons) rather than the nav shell. */
+.panel-cut {
+  clip-path: polygon(
+    12px 0, calc(100% - 12px) 0,
+    100% 12px, 100% calc(100% - 12px),
+    calc(100% - 12px) 100%, 12px 100%,
+    0 calc(100% - 12px), 0 12px
+  );
+}
+.panel-cut-sm {
+  clip-path: polygon(
+    6px 0, calc(100% - 6px) 0,
+    100% 6px, 100% calc(100% - 6px),
+    calc(100% - 6px) 100%, 6px 100%,
+    0 calc(100% - 6px), 0 6px
+  );
+}
+
+/* Border that actually follows a cut corner. `clip-path` clips EVERYTHING
+   an element paints — background, border, its own pseudo-elements — to the
+   polygon (same as overflow:hidden but shaped), so a border drawn on the
+   same element as the cut just gets clipped away at the diagonal. The fix:
+   put the "border" on an unclipped ::after belonging to a plain OUTER
+   wrapper, and keep the clip-path shape on the (inner) content element.
+     <div class="panel-cut-frame">          <- this, no clip-path of its own
+       <div class="panel-cut ...">          <- the actual shaped content
+     </div>
+   .panel-cut-frame-accent swaps the ring for the mecha-card family's
+   brand-blue top edge instead of a plain border. */
+/* box-shadow extends past the box edge same as border does, so it lives
+   here too (not on the clipped inner element) — this is what actually
+   separates a panel-cut-frame'd card/table from the page canvas. */
+.panel-cut-frame {
+  position: relative;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.08), 0 1px 2px -1px rgba(0, 0, 0, 0.06);
+  transition: box-shadow 0.3s ease;
+}
+.dark .panel-cut-frame {
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.3), 0 1px 2px -1px rgba(0, 0, 0, 0.25);
+}
+.panel-cut-frame:hover {
+  box-shadow: 0 12px 30px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+}
+.dark .panel-cut-frame:hover {
+  box-shadow: 0 12px 30px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+}
+.panel-cut-frame::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  clip-path: polygon(
+    12px 0, calc(100% - 12px) 0,
+    100% 12px, 100% calc(100% - 12px),
+    calc(100% - 12px) 100%, 12px 100%,
+    0 calc(100% - 12px), 0 12px
+  );
+  background: var(--border);
+  z-index: -1;
+  pointer-events: none;
+  transition: background 0.3s ease;
+}
+.panel-cut-frame.panel-cut-frame-accent::after {
+  background: linear-gradient(180deg, var(--color-brand-500) 0 2px, var(--border-strong) 2px 100%);
+}
+.panel-cut-frame.panel-cut-frame-accent:hover::after {
+  background: var(--color-brand-400);
+}
+
+/* Mecha Card effect: hover-lift + panel-line reveal. Elevation/border live
+   on the wrapping .panel-cut-frame instead (see comment above) since
+   clip-path would clip them away here. */
+.mecha-card {
+  position: relative;
+  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+.mecha-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 3px;
+  background: linear-gradient(90deg, var(--color-rx-red), var(--color-rx-yellow));
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.mecha-card:hover {
+  transform: translateY(-4px);
+}
+.mecha-card:hover::before {
+  opacity: 1;
+}
+
+/* Fluid page entrance */
 @keyframes page-in {
-  from { opacity: 0; transform: translateY(6px); }
+  from { opacity: 0; transform: translateY(12px) scale(0.99); }
   to { opacity: 1; transform: none; }
 }
 .page-enter {
-  animation: page-in 0.24s ease-out;
+  animation: page-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Staggered children animation */
+.stagger-1 { animation: page-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) 0.05s forwards; opacity: 0; }
+.stagger-2 { animation: page-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) 0.1s forwards; opacity: 0; }
+.stagger-3 { animation: page-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) 0.15s forwards; opacity: 0; }
+.stagger-4 { animation: page-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) 0.2s forwards; opacity: 0; }
+
+@keyframes slide-right {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: none; }
+}
+.slide-right-enter {
+  animation: slide-right 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes pulse-glow {
+  0% { box-shadow: 0 0 0 0 rgba(230, 0, 18, 0.4); }
+  70% { box-shadow: 0 0 0 6px rgba(230, 0, 18, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(230, 0, 18, 0); }
+}
+.animate-pulse-glow {
+  animation: pulse-glow 2s infinite;
 }
 
 /* Seamless, unobtrusive scrollbars for scroll regions. */
@@ -159,17 +303,23 @@ h1, h2, h3, h4, h5, h6 {
   scrollbar-color: var(--border-strong) transparent;
 }
 .scroll-slim::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 .scroll-slim::-webkit-scrollbar-thumb {
   background-color: var(--border-strong);
   border-radius: 9999px;
+  transition: background-color 0.2s;
+}
+.scroll-slim::-webkit-scrollbar-thumb:hover {
+  background-color: var(--ink-muted);
 }
 .scroll-slim::-webkit-scrollbar-track {
   background: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .page-enter { animation: none; }
+  .page-enter, .stagger-1, .stagger-2, .stagger-3, .stagger-4, .slide-right-enter { animation: none; opacity: 1; }
+  .mecha-card { transition: none; transform: none; }
 }
+

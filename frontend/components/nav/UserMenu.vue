@@ -13,16 +13,16 @@ const open = ref(false);
 <template>
   <div class="relative">
     <button
-      class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-white transition hover:bg-white/10"
+      class="flex h-10 items-center gap-2.5 rounded-lg border border-white/10 bg-white/5 pl-1.5 pr-3 text-white transition-all duration-200 hover:border-white/20 hover:bg-white/10"
       @click="open = !open"
       @blur="open = false"
     >
-      <div class="flex h-8 w-8 items-center justify-center rounded-full bg-brand-600 text-sm font-semibold text-white">
+      <div class="flex h-7 w-7 items-center justify-center rounded-full bg-brand-500 font-heading text-xs font-bold uppercase text-white">
         {{ (user?.name || "?").charAt(0) }}
       </div>
       <div class="hidden text-left sm:block">
-        <p class="text-sm font-medium leading-tight text-white">{{ user?.name }}</p>
-        <p class="text-xs capitalize text-white/60">{{ user?.role }}</p>
+        <p class="text-xs font-bold leading-none tracking-wide text-white">{{ user?.name }}</p>
+        <p class="text-[10px] uppercase tracking-wider text-white/60 mt-0.5">{{ user?.role }}</p>
       </div>
     </button>
 

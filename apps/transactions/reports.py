@@ -125,26 +125,26 @@ def penjualan_customer(f):
         where.append("c.nama LIKE ?")
         params.append(f"%{f['search']}%")
     inner = (
-        "SELECT n.kd_customer, COALESCE(c.nama, '') AS customer, COALESCE(c.kota, '') AS kota, "
+        "SELECT n.kd_customer, COALESCE(c.nama, '') AS customer, "
         "COUNT(n.no_transaksi) AS jml_nota, COALESCE(SUM(n.total_bersih), 0) AS total "
         f"FROM ({_nota_net(' AND '.join(where))}) n "
         "LEFT JOIN m_customer c ON n.kd_customer = c.kd_customer "
-        "GROUP BY n.kd_customer, c.nama, c.kota"
+        "GROUP BY n.kd_customer, c.nama"
     )
     return inner, params
 
 
 # --- Penjualan per User (B10) --
 
-SORTS_PENJUALAN_USER = {"user": "user", "jml_nota": "jml_nota", "total": "total"}
+SORTS_PENJUALAN_USER = {"user": "[user]", "jml_nota": "jml_nota", "total": "total"}
 SUMMARY_PENJUALAN_USER = (
-    "COUNT(DISTINCT q.kd_user) AS jml_baris, 0 AS total_qty, COALESCE(SUM(q.total_bersih), 0) AS total_nilai"
+    "COUNT(DISTINCT q.kd_user) AS jml_baris, 0 AS total_qty, COALESCE(SUM(q.total), 0) AS total_nilai"
 )
 
 def penjualan_user(f):
     where, params = _base_where(f)
     inner = (
-        "SELECT COALESCE(u.nama, n.kd_user) AS user, n.kd_user, "
+        "SELECT COALESCE(u.nama, n.kd_user) AS [user], n.kd_user, "
         "COUNT(n.no_transaksi) AS jml_nota, COALESCE(SUM(n.total_bersih), 0) AS total "
         f"FROM ({_nota_net(' AND '.join(where))}) n "
         "LEFT JOIN apps_user u ON n.kd_user = u.username "
@@ -157,7 +157,7 @@ def penjualan_user(f):
 
 SORTS_PENJUALAN_PERIODE = {"periode": "periode", "total": "total"}
 SUMMARY_PENJUALAN_PERIODE = (
-    "COUNT(DISTINCT q.periode) AS jml_baris, 0 AS total_qty, COALESCE(SUM(q.total_bersih), 0) AS total_nilai"
+    "COUNT(DISTINCT q.periode) AS jml_baris, 0 AS total_qty, COALESCE(SUM(q.total), 0) AS total_nilai"
 )
 
 def penjualan_periode(f):
@@ -215,7 +215,7 @@ def pembelian(f):
     inner = (
         "SELECT h.no_transaksi, h.tanggal, COALESCE(s.nama, '') AS supplier, "
         "b.nama AS barang, d.qty, d.harga_beli AS harga, "
-        f"{_line_net('harga_beli', 'd')} AS subtotal "
+        f"(d.qty * d.harga_beli) AS subtotal "
         "FROM t_pembelian h "
         "INNER JOIN t_pembelian_detail d ON h.no_transaksi = d.no_transaksi "
         "INNER JOIN m_barang b ON d.kd_barang = b.kd_barang "
@@ -238,7 +238,7 @@ def retur_pembelian(f):
     inner = (
         "SELECT h.no_retur, h.tanggal, COALESCE(s.nama, '') AS supplier, "
         "b.nama AS barang, d.qty, "
-        f"{_line_net('harga_beli', 'd')} AS nilai "
+        f"(d.qty * d.harga) AS nilai "
         "FROM t_pembelian_retur h "
         "INNER JOIN t_pembelian_retur_detail d ON h.no_retur = d.no_retur "
         "INNER JOIN m_barang b ON d.kd_barang = b.kd_barang "
@@ -259,8 +259,10 @@ def opname(f):
     where, params = _base_where(f)
     _search(where, params, f, ["b.kd_barang", "b.nama"])
     inner = (
-        "SELECT h.kd_barang, b.nama AS barang, h.qty_sistem, h.qty_fisik, "
-        "(h.qty_fisik - h.qty_sistem) AS diferensi, h.tanggal "
+        "SELECT h.kd_barang, b.nama AS barang, "
+        "CASE WHEN h.status=2 THEN 0 ELSE h.qty END AS qty_sistem, "
+        "CASE WHEN h.status=2 THEN h.qty ELSE 0 END AS qty_fisik, "
+        "CASE WHEN h.status=2 THEN h.qty ELSE -h.qty END AS diferensi, h.tanggal "
         "FROM t_opname_stok h "
         "INNER JOIN m_barang b ON h.kd_barang = b.kd_barang "
         f"WHERE {' AND '.join(where)}"
@@ -270,27 +272,22 @@ def opname(f):
 
 # --- Kas Harian (B16) --
 
-SORTS_KAS = {"tanggal": "tanggal", "opening": "opening", "masuk": "masuk", "keluar": "keluar", "penutupan": "penutupan"}
+SORTS_KAS = {"tanggal": "tanggal", "masuk": "masuk", "keluar": "keluar"}
 SUMMARY_KAS = (
-    "COUNT(*) AS jml_baris, COALESCE(SUM(q.opening), 0) AS total_opening, "
+    "COUNT(*) AS jml_baris, 0 AS total_opening, "
     "COALESCE(SUM(q.masuk), 0) AS total_masuk, COALESCE(SUM(q.keluar), 0) AS total_keluar"
 )
 
 def kas(f):
-    where, params = _base_where(f)
+    where, params = _base_where(f, "h.tanggal", "h.kd_kas")
     where_str = ' AND '.join(where) if where else "1=1"
-    # Simplified: aggregated kas by date (union of all kas-affecting tables)
     inner = (
         "SELECT h.tanggal, "
-        "COALESCE(SUM(CASE WHEN k.tipe = 'masuk' THEN k.jumlah ELSE 0 END), 0) AS masuk, "
-        "COALESCE(SUM(CASE WHEN k.tipe = 'keluar' THEN k.jumlah ELSE 0 END), 0) AS keluar, "
-        "COALESCE(MAX(h.opening), 0) AS opening, "
-        "COALESCE(MAX(h.penutupan), 0) AS penutupan "
-        "FROM (SELECT DISTINCT CAST(tanggal AS DATE) AS tanggal FROM t_mutasi_kas "
-        f"WHERE {where_str}) h "
-        "LEFT JOIN (SELECT tanggal, 'masuk' AS tipe, SUM(jumlah) AS jumlah FROM t_mutasi_kas WHERE tipe='masuk' GROUP BY tanggal "
-        "UNION ALL SELECT tanggal, 'keluar', SUM(jumlah) FROM t_mutasi_kas WHERE tipe='keluar' GROUP BY tanggal) k "
-        "ON h.tanggal = CAST(k.tanggal AS DATE) "
+        "COALESCE(SUM(CASE WHEN h.status = 1 THEN h.jumlah ELSE 0 END), 0) AS masuk, "
+        "COALESCE(SUM(CASE WHEN h.status = 2 THEN h.jumlah ELSE 0 END), 0) AS keluar, "
+        "0 AS opening, 0 AS penutupan "
+        "FROM t_arus_kas h "
+        f"WHERE {where_str} "
         "GROUP BY h.tanggal"
     )
     return inner, params

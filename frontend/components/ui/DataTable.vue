@@ -74,7 +74,8 @@ function formatCell(value, col) {
 </script>
 
 <template>
-  <div class="overflow-hidden rounded-card border border-border-default bg-surface">
+  <div class="panel-cut-frame">
+    <div class="overflow-hidden panel-cut bg-surface">
     <div class="overflow-x-auto">
       <table class="min-w-full divide-y divide-border-default text-sm tabular-nums">
         <thead class="bg-surface-2 sticky top-0">
@@ -126,6 +127,7 @@ function formatCell(value, col) {
     </div>
     <div v-if="!loading && sortedRows.length > perPage" class="border-t border-border-default px-3 bg-surface-2">
       <Pagination v-model:page="page" :total="sortedRows.length" :per-page="perPage" />
+    </div>
     </div>
   </div>
 </template>

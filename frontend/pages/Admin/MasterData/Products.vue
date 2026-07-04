@@ -101,7 +101,7 @@ function save() {
         </div>
       </template>
 
-      <div class="mb-4 flex flex-col gap-3 sm:flex-row">
+      <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end">
         <div class="sm:max-w-xs sm:flex-1">
           <Input v-model="search" placeholder="Cari kode / nama produk…" />
         </div>

@@ -17,10 +17,17 @@ const URL = "/admin-panel/laporan/penjualan-customer";
 const { form, apply, onPage, onSort, reset, exportHref } = useServerReport(URL, props.filters);
 
 const columns = [
-  { key: "customer", label: "Customer", sortable: true },
-  { key: "kota", label: "Kota" },
-  { key: "jml_nota", label: "Jml Nota", align: "right", format: "number", sortable: true },
-  { key: "total", label: "Total", align: "right", format: "rupiah", sortable: true },
+  { key: "kd_customer", label: "Kode" },
+  { key: "customer", label: "Customer" },
+  { key: "jml_nota", label: "Jml Nota", align: "right", sortable: true },
+  { key: "total", label: "Total Penjualan", align: "right", sortable: true },
+];
+
+const exportColumns = [
+  { key: "kd_customer", label: "Kode" },
+  { key: "customer", label: "Customer" },
+  { key: "jml_nota", label: "Jml Nota" },
+  { key: "total", label: "Total Penjualan" },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);

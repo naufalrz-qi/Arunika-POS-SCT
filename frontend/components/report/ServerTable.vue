@@ -49,7 +49,9 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 
 <template>
   <div>
-    <div class="overflow-x-auto rounded-card border border-border-default scroll-slim">
+    <div class="panel-cut-frame">
+      <div class="overflow-hidden panel-cut bg-surface">
+      <div class="overflow-x-auto scroll-slim">
       <table class="w-full min-w-[720px] text-sm">
         <thead class="sticky top-0 bg-surface-3">
           <tr>
@@ -74,6 +76,8 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           </tr>
         </tbody>
       </table>
+      </div>
+      </div>
     </div>
     <EmptyState v-if="!rows.length" :message="emptyMessage" class="mt-3" />
     <div class="mt-3 flex items-center justify-between">
