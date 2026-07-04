@@ -313,3 +313,97 @@ def shift(f):
         f"WHERE {' AND '.join(where)}"
     )
     return inner, params
+
+
+# --- Promo & Diskon (B18) --
+
+SORTS_PROMO = {"kd_promo": "kd_promo", "barang": "barang", "harga_promo": "harga_promo", "tanggal_awal": "tanggal_awal"}
+SUMMARY_PROMO = "COUNT(*) AS jml_baris, COUNT(DISTINCT kd_barang) AS jml_barang"
+
+def promo(f):
+    where = ["1=1"]
+    params = []
+    if f.get("date_from"):
+        where.append("tanggal_awal >= ?")
+        params.append(f["date_from"])
+    if f.get("date_to"):
+        where.append("tanggal_akhir <= ?")
+        params.append(f["date_to"])
+    _search(where, params, f, ["kd_promo", "b.nama"])
+    inner = (
+        "SELECT p.kd_promo, d.kd_divisi AS divisi, b.nama AS barang, p.harga_promo, "
+        "p.tanggal_awal, p.tanggal_akhir, CASE WHEN p.flag_aktif=1 THEN 'Aktif' ELSE 'Nonaktif' END AS status "
+        "FROM m_promo p "
+        "LEFT JOIN m_barang b ON p.kd_barang = b.kd_barang "
+        "LEFT JOIN (SELECT DISTINCT kd_barang, kd_divisi FROM t_penjualan_detail d INNER JOIN t_penjualan h ON d.no_transaksi=h.no_transaksi) d ON p.kd_barang=d.kd_barang "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
+
+
+# --- Voucher (B19) --
+
+SORTS_VOUCHER = {"kd_voucher": "kd_voucher", "divisi": "divisi", "nominal": "nominal"}
+SUMMARY_VOUCHER = "COUNT(*) AS jml_baris, COALESCE(SUM(nominal), 0) AS total_nominal"
+
+def voucher(f):
+    where = ["1=1"]
+    params = []
+    if f.get("date_from"):
+        where.append("tanggal_awal >= ?")
+        params.append(f["date_from"])
+    if f.get("date_to"):
+        where.append("tanggal_akhir <= ?")
+        params.append(f["date_to"])
+    _search(where, params, f, ["v.kd_voucher"])
+    inner = (
+        "SELECT v.kd_voucher, COALESCE(d.kd_divisi, '') AS divisi, v.nominal, v.tanggal_awal, v.tanggal_akhir, "
+        "CASE WHEN v.flag_aktif=1 THEN 'Aktif' ELSE 'Nonaktif' END AS status "
+        "FROM m_voucher v "
+        "LEFT JOIN (SELECT DISTINCT kd_voucher, kd_divisi FROM t_penjualan WHERE kd_voucher IS NOT NULL) d ON v.kd_voucher=d.kd_voucher "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
+
+
+# --- FMI Penjualan (B20) - Fast Moving Items by quantity sold --
+
+SORTS_FMI_PENJUALAN = {"qty_terjual": "qty_terjual", "nilai": "nilai", "kelas": "kelas"}
+SUMMARY_FMI_PENJUALAN = (
+    "COUNT(DISTINCT kd_barang) AS jml_barang, COALESCE(SUM(qty_terjual), 0) AS total_qty, COALESCE(SUM(nilai), 0) AS total_nilai"
+)
+
+def fmi_penjualan(f):
+    where, params = _base_where(f)
+    inner = (
+        "SELECT b.kd_barang, b.nama AS barang, b.kd_kategori AS kategori, "
+        "COALESCE(SUM(d.qty), 0) AS qty_terjual, COALESCE(SUM(d.qty * d.harga_jual * (1-COALESCE(d.diskon1,0)/100.0)), 0) AS nilai, "
+        "CASE WHEN COALESCE(SUM(d.qty), 0) > 100 THEN 'A' WHEN COALESCE(SUM(d.qty), 0) > 50 THEN 'B' ELSE 'C' END AS kelas "
+        "FROM m_barang b "
+        "LEFT JOIN t_penjualan_detail d ON b.kd_barang = d.kd_barang "
+        "LEFT JOIN t_penjualan h ON d.no_transaksi = h.no_transaksi "
+        f"WHERE 1=1 {' AND ' + ' AND '.join(where) if where else ''} "
+        "GROUP BY b.kd_barang, b.nama, b.kd_kategori"
+    )
+    return inner, params
+
+
+# --- FMI Stok (B21) - Stock velocity analysis --
+
+SORTS_FMI_STOK = {"qty_stok": "qty_stok", "nilai_stok": "nilai_stok", "turnover_rate": "turnover_rate"}
+SUMMARY_FMI_STOK = (
+    "COUNT(DISTINCT kd_barang) AS jml_barang, COALESCE(SUM(qty_stok), 0) AS total_qty, COALESCE(SUM(nilai_stok), 0) AS total_nilai"
+)
+
+def fmi_stok(f):
+    where, params = _base_where(f)
+    inner = (
+        "SELECT b.kd_barang, b.nama AS barang, b.kd_kategori AS kategori, "
+        "COALESCE(SUM(s.qty), 0) AS qty_stok, COALESCE(SUM(s.qty * b.harga_beli), 0) AS nilai_stok, "
+        "COALESCE(SUM(CASE WHEN s.qty > 0 THEN 1 ELSE 0 END), 0) AS turnover_rate "
+        "FROM m_barang b "
+        "LEFT JOIN (SELECT kd_barang, SUM(qty) as qty FROM t_stok GROUP BY kd_barang) s ON b.kd_barang = s.kd_barang "
+        f"WHERE 1=1 {' AND ' + ' AND '.join(where) if where else ''} "
+        "GROUP BY b.kd_barang, b.nama, b.kd_kategori, b.harga_beli"
+    )
+    return inner, params

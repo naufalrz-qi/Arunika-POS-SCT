@@ -43,10 +43,14 @@ urlpatterns = [
     path("laporan/retur-pembelian/export", views.retur_pembelian_export, name="retur_pembelian_export"),
     # Analitik (FMI)
     path("analitik/fmi-penjualan", views.fmi_penjualan, name="fmi_penjualan"),
+    path("analitik/fmi-penjualan/export", views.fmi_penjualan_export, name="fmi_penjualan_export"),
     path("analitik/fmi-stok", views.fmi_stok, name="fmi_stok"),
+    path("analitik/fmi-stok/export", views.fmi_stok_export, name="fmi_stok_export"),
     # Promo & Voucher
     path("promo/diskon", views.promo, name="promo"),
+    path("promo/diskon/export", views.promo_export, name="promo_export"),
     path("promo/voucher", views.voucher, name="voucher"),
+    path("promo/voucher/export", views.voucher_export, name="voucher_export"),
     # Kas & Shift
     path("kas/harian", views.kas_harian, name="kas"),
     path("kas/harian/export", views.kas_harian_export, name="kas_harian_export"),

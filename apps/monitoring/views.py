@@ -770,13 +770,67 @@ _OPNAME = {
 opname = _report_view(_OPNAME)
 opname_export = _report_export(_OPNAME)
 
-# Analitik
-fmi_penjualan = _mock_page("Admin/Analytics/FmiPenjualan")
-fmi_stok = _mock_page("Admin/Analytics/FmiStok")
-
 # Promo & Voucher
-promo = _mock_page("Admin/Promo/Promo")
-voucher = _mock_page("Admin/Promo/Voucher")
+_PROMO = {
+    "component": "Admin/Promo/Promo",
+    "url": "/admin-panel/promo/diskon",
+    "inner": rpt.promo,
+    "sorts": rpt.SORTS_PROMO,
+    "default_sort": "tanggal_awal",
+    "summary": rpt.SUMMARY_PROMO,
+    "filter_keys": [],
+    "options": lambda p: {},
+    "filename": "promo",
+    "columns": [{"key": "kd_promo", "label": "Kode Promo"}, {"key": "divisi", "label": "Divisi"}, {"key": "barang", "label": "Barang"}, {"key": "harga_promo", "label": "Harga Promo", "format": "rupiah"}, {"key": "tanggal_awal", "label": "Tanggal Awal", "format": "date"}, {"key": "tanggal_akhir", "label": "Tanggal Akhir", "format": "date"}, {"key": "status", "label": "Status"}],
+}
+promo = _report_view(_PROMO)
+promo_export = _report_export(_PROMO)
+
+_VOUCHER = {
+    "component": "Admin/Promo/Voucher",
+    "url": "/admin-panel/promo/voucher",
+    "inner": rpt.voucher,
+    "sorts": rpt.SORTS_VOUCHER,
+    "default_sort": "kd_voucher",
+    "summary": rpt.SUMMARY_VOUCHER,
+    "filter_keys": [],
+    "options": lambda p: {},
+    "filename": "voucher",
+    "columns": [{"key": "kd_voucher", "label": "Kode Voucher"}, {"key": "divisi", "label": "Divisi"}, {"key": "nominal", "label": "Nominal", "format": "rupiah"}, {"key": "tanggal_awal", "label": "Tanggal Awal", "format": "date"}, {"key": "tanggal_akhir", "label": "Tanggal Akhir", "format": "date"}, {"key": "status", "label": "Status"}],
+}
+voucher = _report_view(_VOUCHER)
+voucher_export = _report_export(_VOUCHER)
+
+# Analitik
+_FMI_PENJUALAN = {
+    "component": "Admin/Analytics/FmiPenjualan",
+    "url": "/admin-panel/analitik/fmi-penjualan",
+    "inner": rpt.fmi_penjualan,
+    "sorts": rpt.SORTS_FMI_PENJUALAN,
+    "default_sort": "qty_terjual",
+    "summary": rpt.SUMMARY_FMI_PENJUALAN,
+    "filter_keys": ["kd_divisi"],
+    "options": lambda p: {"divisi": _opt_divisi(p)},
+    "filename": "fmi-penjualan",
+    "columns": [{"key": "kd_barang", "label": "Kode"}, {"key": "barang", "label": "Barang"}, {"key": "kategori", "label": "Kategori"}, {"key": "qty_terjual", "label": "Qty Terjual", "align": "right", "format": "number"}, {"key": "nilai", "label": "Nilai", "align": "right", "format": "rupiah"}, {"key": "kelas", "label": "Kelas"}],
+}
+fmi_penjualan = _report_view(_FMI_PENJUALAN)
+fmi_penjualan_export = _report_export(_FMI_PENJUALAN)
+
+_FMI_STOK = {
+    "component": "Admin/Analytics/FmiStok",
+    "url": "/admin-panel/analitik/fmi-stok",
+    "inner": rpt.fmi_stok,
+    "sorts": rpt.SORTS_FMI_STOK,
+    "default_sort": "qty_stok",
+    "summary": rpt.SUMMARY_FMI_STOK,
+    "filter_keys": ["kd_divisi"],
+    "options": lambda p: {"divisi": _opt_divisi(p)},
+    "filename": "fmi-stok",
+    "columns": [{"key": "kd_barang", "label": "Kode"}, {"key": "barang", "label": "Barang"}, {"key": "kategori", "label": "Kategori"}, {"key": "qty_stok", "label": "Qty Stok", "align": "right", "format": "number"}, {"key": "nilai_stok", "label": "Nilai Stok", "align": "right", "format": "rupiah"}, {"key": "turnover_rate", "label": "Turnover"}],
+}
+fmi_stok = _report_view(_FMI_STOK)
+fmi_stok_export = _report_export(_FMI_STOK)
 
 # Kas & Shift
 _KAS = {
