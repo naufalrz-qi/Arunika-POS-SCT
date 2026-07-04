@@ -10,36 +10,10 @@ debet, kredit, kd_satuan, harga, jenis.
 from __future__ import annotations
 
 import datetime as dt
-import time
 from decimal import Decimal
 
 from core import mssql
-
-# --- Master-data cache -------------------------------------------------------
-# m_* tables change rarely but streaming them costs seconds per page load on
-# slow links (54k products ≈ 9s over WAN). Cached per profile with a TTL;
-# master-data writes must call invalidate_master_cache().
-_MASTER_TTL = 600  # seconds
-_master_cache: dict = {}
-
-
-def _cached(profile, name, build):
-    key = (profile.pk, name)
-    hit = _master_cache.get(key)
-    if hit and hit[0] > time.monotonic():
-        return hit[1]
-    val = build()
-    _master_cache[key] = (time.monotonic() + _MASTER_TTL, val)
-    return val
-
-
-def invalidate_master_cache(profile_id=None):
-    """Call after writing to m_* tables so pages see fresh master data."""
-    if profile_id is None:
-        _master_cache.clear()
-    else:
-        for k in [k for k in _master_cache if k[0] == profile_id]:
-            del _master_cache[k]
+from core.cache import _cached, invalidate_master_cache  # noqa: F401 (re-exported)
 
 
 def _f(v) -> float:
@@ -83,15 +57,23 @@ def _unit_factors(cur) -> dict:
 
 # --- Movement set (the 9 UNION ALL sources, table-level) --------------------
 
-def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None):
+def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date_from=None):
     """Build the UNION ALL movement query + params. Optional filters are applied
-    inside every source so the DB can seek instead of scanning."""
+    inside every source so the DB can seek instead of scanning.
+
+    `date_from` bounds transaction-based sources ([1]-[8]) only — never block
+    [0] Stok Awal (a point-in-time opening balance, not a dated movement).
+    Callers that need pre-date_from history for a running balance (stock_card,
+    _movement_sums) must not pass it."""
     params: list = []
 
     def trans_filters(tcol, dcol, divcol):
         """Common WHERE tail for transaction-based sources (closing/date/div/barang)."""
         clause = f" AND {tcol} <= ?" if date_to else ""
         p = [date_to] if date_to else []
+        if date_from:
+            clause += f" AND {tcol} >= ?"
+            p.append(date_from)
         if kd_divisi:
             clause += f" AND {divcol} = ?"
             p.append(kd_divisi)
@@ -198,9 +180,11 @@ def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None):
     return "\nUNION ALL\n".join(blocks), params
 
 
-def _fetch_movements(cur, *, kd_barang=None, kd_divisi=None, date_to=None) -> list[dict]:
+def _fetch_movements(cur, *, kd_barang=None, kd_divisi=None, date_to=None, date_from=None) -> list[dict]:
     closing = _closing_date(cur)
-    sql, params = _movement_sql(closing, kd_barang=kd_barang, kd_divisi=kd_divisi, date_to=date_to)
+    sql, params = _movement_sql(
+        closing, kd_barang=kd_barang, kd_divisi=kd_divisi, date_to=date_to, date_from=date_from
+    )
     cur.execute(sql, params)
     return _dictify(cur)
 
@@ -527,6 +511,7 @@ def barang_histori(profile, kd_barang=None, kd_divisi=None, date_from=None, date
             kd_barang=kd_barang or None,
             kd_divisi=kd_divisi or None,
             date_to=date_to,
+            date_from=date_from,
         )
         factors = _cached(profile, "factors", lambda: _unit_factors(cur))
         divisi = {_k(r["kd_divisi"]): r for r in _div_rows_full(cur)}
@@ -540,8 +525,6 @@ def barang_histori(profile, kd_barang=None, kd_divisi=None, date_from=None, date
 
     rows = []
     for m in sorted(moves, key=lambda x: (x["tanggal"], x["jenis"])):
-        if date_from and m["tanggal"] < date_from:
-            continue
         div_info = divisi.get(_k(m["kd_divisi"]), {})
         factor = factors.get((_k(m["kd_barang"]), _k(m["kd_satuan"])), 1.0)
         debet, kredit = _f(m["debet"]), _f(m["kredit"])

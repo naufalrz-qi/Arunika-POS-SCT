@@ -1,6 +1,6 @@
 <script setup>
-import { computed, reactive, ref } from "vue";
-import { Deferred, router } from "@inertiajs/vue3";
+import { computed, ref } from "vue";
+import { Deferred } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
@@ -9,6 +9,8 @@ import Select from "@/components/ui/Select.vue";
 import Banner from "@/components/ui/Banner.vue";
 import DataTable from "@/components/ui/DataTable.vue";
 import Spinner from "@/components/ui/Spinner.vue";
+import DateRangeFilter from "@/components/report/DateRangeFilter.vue";
+import { useReportFilters } from "@/composables/useReportFilters";
 import { downloadXlsx, stamp } from "@/utils/xlsx";
 
 const props = defineProps({
@@ -20,24 +22,14 @@ const props = defineProps({
 const levels = computed(() => props.stok?.levels ?? []);
 const connError = computed(() => props.stok?.conn_error ?? null);
 
-const pull = reactive({
+const { filters: pull, loading: pulling, apply: tarikData } = useReportFilters("/admin-panel/inventory/stock", {
   kd_divisi: props.filters.kd_divisi || "",
   tanggal: props.filters.tanggal || new Date().toISOString().slice(0, 10),
 });
-const pulling = ref(false);
 
 const divisiOptions = computed(() =>
   (props.stok?.divisi_list ?? []).map((d) => ({ value: d.kd_divisi, label: d.nama })),
 );
-
-function tarikData() {
-  pulling.value = true;
-  router.get("/admin-panel/inventory/stock", { ...pull }, {
-    preserveState: true,
-    preserveScroll: true,
-    onFinish: () => (pulling.value = false),
-  });
-}
 
 const q = ref("");
 const catFilter = ref("");
@@ -87,13 +79,13 @@ const columns = [
     <Banner v-if="connError" variant="warning" :message="connError" />
 
     <Card title="Tarik Data" subtitle="Pilih divisi & tanggal, lalu tarik dari server" class="mb-4">
-      <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Select v-model="pull.kd_divisi" label="Divisi" :options="divisiOptions" placeholder="Semua Divisi" />
-        <Input v-model="pull.tanggal" label="Per Tanggal" type="date" />
-        <div class="flex items-end">
-          <Button class="w-full" :loading="pulling" @click="tarikData">Tarik Data</Button>
-        </div>
-      </div>
+      <DateRangeFilter
+        mode="single"
+        :filters="pull"
+        :divisi-options="divisiOptions"
+        :loading="pulling"
+        @submit="tarikData()"
+      />
     </Card>
 
     <Deferred data="stok">

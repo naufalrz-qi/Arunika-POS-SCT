@@ -129,16 +129,43 @@ INDEXES = {
     "IX_mcustomer_nama": (
         "CREATE NONCLUSTERED INDEX IX_mcustomer_nama ON m_customer (nama)"
     ),
+    # --- movement engine composites (apps/inventory/services.py _movement_sql) --
+    "IX_mbarangdivisi_barang_divisi": (
+        # [0] "Stok Awal" block filters bd.kd_barang/bd.kd_divisi; also read in
+        # full by list_barang_edit (apps/master_data/services.py).
+        "CREATE NONCLUSTERED INDEX IX_mbarangdivisi_barang_divisi ON m_barang_divisi (kd_barang, kd_divisi)"
+    ),
+    "IX_topname_stok_tanggal_divisi_barang": (
+        # Complements IX_topname_stok_tanggal/IX_topname_stok_barang: the Opname
+        # movement block filters kd_divisi/kd_barang together with tanggal when
+        # stock_card/barang_histori scope to one product or division.
+        "CREATE NONCLUSTERED INDEX IX_topname_stok_tanggal_divisi_barang ON t_opname_stok (tanggal, kd_divisi, kd_barang)"
+    ),
+    "IX_tmutasistok_divisi": (
+        # Mutasi Keluar/Masuk blocks filter kd_divisi_asal/kd_divisi_tujuan in
+        # addition to tanggal.
+        "CREATE NONCLUSTERED INDEX IX_tmutasistok_divisi ON t_mutasi_stok (kd_divisi_asal, kd_divisi_tujuan)"
+    ),
+    "IX_mbarangsatuan_barang_satuan": (
+        # Supports the bs join in _movement_sums and the unit-price join in
+        # _purchase_prices (both in apps/inventory/services.py).
+        "CREATE NONCLUSTERED INDEX IX_mbarangsatuan_barang_satuan ON m_barang_satuan (kd_barang, kd_satuan)"
+    ),
 }
 
 
-def ensure_indexes(profile, out=None) -> list[tuple[str, str]]:
-    """Create missing indexes on `profile`'s DB. Returns [(name, ddl)] failures.
+def ensure_indexes(profile, out=None):
+    """Create missing indexes on `profile`'s DB.
 
     Idempotent. `out` (optional callable) receives progress lines for the CLI.
+    Returns `(failed, results)`:
+      - `failed`: list[(name, ddl)] — kept for the CLI command's error report.
+      - `results`: list[dict] — {name, status: "exists"|"created"|"failed",
+        detail} per index, for structured UI display (Kelola Server button).
     """
     say = out or (lambda msg: None)
     failed = []
+    results = []
     with mssql.cursor(profile) as cur:
         # These SET options must be ON to index a table with computed columns.
         cur.execute("SET ANSI_NULLS ON")
@@ -147,21 +174,25 @@ def ensure_indexes(profile, out=None) -> list[tuple[str, str]]:
             cur.execute("SELECT 1 FROM sys.indexes WHERE name = ?", [name])
             if cur.fetchone():
                 say(f"  {name}: sudah ada, lewati.")
+                results.append({"name": name, "status": "exists", "detail": ""})
                 continue
             say(f"  {name}: membuat (bisa ~1 mnt)…")
             try:
                 cur.execute(ddl)
                 say(f"  {name}: OK.")
                 log.info("Index %s dibuat di %s", name, profile.name)
+                results.append({"name": name, "status": "created", "detail": ""})
             except pyodbc.Error as exc:
                 msg = str(exc.args[-1] if exc.args else exc)
                 if "already exists" in msg:  # lost a race with another builder
                     say(f"  {name}: sudah ada, lewati.")
+                    results.append({"name": name, "status": "exists", "detail": ""})
                     continue
                 say(f"  {name}: GAGAL — {msg}")
                 log.warning("Index %s gagal di %s: %s", name, profile.name, msg)
                 failed.append((name, ddl))
-    return failed
+                results.append({"name": name, "status": "failed", "detail": msg})
+    return failed, results
 
 
 # Profiles already ensured this process — don't re-check on every request.
@@ -186,7 +217,7 @@ def ensure_indexes_async(profile) -> None:
 
 def _safe_ensure(profile):
     try:
-        failed = ensure_indexes(profile)
+        failed, _results = ensure_indexes(profile)
         if failed:
             detail = f"Index {profile.name}: gagal {', '.join(n for n, _ in failed)}"
         else:

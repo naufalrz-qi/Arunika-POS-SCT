@@ -1,4 +1,5 @@
 """Connection Manager (PRD §7.2) — real ServerProfile CRUD + encrypted passwords."""
+import pyodbc
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
@@ -6,6 +7,7 @@ from inertia import render
 
 from apps.core.http import get_data
 from apps.core.models import log_activity
+from apps.transactions import indexes
 from core import mssql
 
 from .models import ConnStatus, DbType, ServerProfile
@@ -77,3 +79,22 @@ def connections_test(request, conn_id):
     profile.last_checked = timezone.now()
     profile.save(update_fields=["last_status", "last_checked"])
     return JsonResponse({"id": conn_id, **result})
+
+
+def connections_check_indexes(request, conn_id):
+    """Manually re-run the index registry on a saved profile, on demand.
+
+    Complements the automatic build on activation/registration (PRD §9,
+    `ensure_indexes_async`) — this gives an immediate, visible per-index
+    result instead of waiting on the background thread + ActivityLog.
+    """
+    profile = get_object_or_404(ServerProfile, pk=conn_id)
+    try:
+        failed, results = indexes.ensure_indexes(profile)
+    except pyodbc.Error as exc:
+        return JsonResponse(
+            {"id": conn_id, "ok": False, "results": [], "error": str(exc.args[-1] if exc.args else exc)},
+            status=502,
+        )
+    log_activity(request, "konfigurasi", f"Cek indexing {profile.name}")
+    return JsonResponse({"id": conn_id, "ok": not failed, "results": results})

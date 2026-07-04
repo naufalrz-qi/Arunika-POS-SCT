@@ -1,6 +1,6 @@
 <script setup>
-import { computed, reactive, ref } from "vue";
-import { Deferred, router } from "@inertiajs/vue3";
+import { computed, ref } from "vue";
+import { Deferred } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
@@ -10,6 +10,8 @@ import Badge from "@/components/ui/Badge.vue";
 import Banner from "@/components/ui/Banner.vue";
 import DataTable from "@/components/ui/DataTable.vue";
 import LoadingCard from "@/components/ui/LoadingCard.vue";
+import DateRangeFilter from "@/components/report/DateRangeFilter.vue";
+import { useReportFilters } from "@/composables/useReportFilters";
 import { downloadXlsx, stamp } from "@/utils/xlsx";
 
 const props = defineProps({
@@ -19,31 +21,16 @@ const props = defineProps({
 
 const data = computed(() => props.histori || {});
 
-const form = reactive({
+const { filters: form, loading, apply: tampilkan } = useReportFilters("/admin-panel/inventory/histori", {
   kd_barang: props.filters.kd_barang || "",
   kd_divisi: props.filters.kd_divisi || "",
   date_from: props.filters.date_from || "",
   date_to: props.filters.date_to || "",
 });
-const loading = ref(false);
 
 const divisiOptions = computed(() =>
   (data.value.divisi_list || []).map((d) => ({ value: d.kd_divisi, label: d.nama })),
 );
-
-function tampilkan() {
-  const params = {};
-  if (form.kd_barang.trim()) params.kd_barang = form.kd_barang.trim();
-  if (form.kd_divisi) params.kd_divisi = form.kd_divisi;
-  if (form.date_from) params.date_from = form.date_from;
-  if (form.date_to) params.date_to = form.date_to;
-  loading.value = true;
-  router.get("/admin-panel/inventory/histori", params, {
-    preserveState: true,
-    preserveScroll: true,
-    onFinish: () => (loading.value = false),
-  });
-}
 
 const typeFilter = ref("");
 const rowSearch = ref("");
@@ -106,15 +93,19 @@ const columns = [
 <template>
   <AdminLayout title="Barang Histori">
     <Card class="mb-6">
-      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Input v-model="form.kd_barang" label="Kode Barang" placeholder="mis. BRG0001 (opsional)" @keyup.enter="tampilkan" />
-        <Select v-model="form.kd_divisi" label="Divisi" :options="divisiOptions" placeholder="Semua Divisi" />
-        <Input v-model="form.date_from" label="Dari Tanggal" type="date" />
-        <Input v-model="form.date_to" label="Sampai Tanggal" type="date" />
-      </div>
-      <div class="mt-3 flex justify-end">
-        <Button :loading="loading" @click="tampilkan">Tampilkan</Button>
-      </div>
+      <DateRangeFilter
+        mode="range"
+        :filters="form"
+        :divisi-options="divisiOptions"
+        :loading="loading"
+        :inline-submit="false"
+        submit-label="Tampilkan"
+        @submit="tampilkan()"
+      >
+        <template #before>
+          <Input v-model="form.kd_barang" label="Kode Barang" placeholder="mis. BRG0001 (opsional)" @keyup.enter="tampilkan()" />
+        </template>
+      </DateRangeFilter>
     </Card>
 
     <Deferred data="histori">

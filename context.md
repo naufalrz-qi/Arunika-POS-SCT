@@ -18,16 +18,16 @@ Ringkasan arsitektur + status untuk planning lanjutan. Django + Inertia.js + Vue
 
 Route prefix `/admin-panel/`. View di `apps/monitoring/views.py` (kecuali connections di `apps/connections/views.py`). Menu def: `apps/core/menus.py`.
 
-**REAL MS SQL (7):** dashboard, stock (Monitoring Stok), barang_histori, products, customers, update_barang, sync_harga.
-**REAL SQLite (4):** users, connections, logs, menus.
-**MASIH MOCK (17):** penjualan_all, penjualan_nota, penjualan_customer, penjualan_user, penjualan_periode, retur_penjualan, pembelian, retur_pembelian, stok_divisi*, stok_akhir*, opname, fmi_penjualan, fmi_stok, promo, voucher, kas, shift.
-  - *stok_divisi/stok_akhir: VIEW sudah real+defer, hanya frontend belum lepas mock.
-
-Mock frontend: `frontend/mock/*.js` (penjualan.js, pembelian.js, inventory.js, analitik.js, promo.js, kas.js). Tiap page mock definisikan `columns` = KONTRAK kolom yang service harus kembalikan.
+**SEMUA 28 menu sudah REAL** (migrasi Fase 3-7 selesai) — `frontend/mock/*.js` sudah dihapus total, tidak ada lagi import `@/mock` di `frontend/pages`. Laporan penjualan/pembelian pakai `apps/transactions/reports.py` (SQL builder per laporan + pagination server-side + export XLSX via `openpyxl`).
+Catatan: route `master/suppliers` dan `master/sync-history` (`apps/monitoring/urls.py`) sudah ada view-nya tapi BELUM terdaftar di `apps/core/menus.py` — halaman ada tapi tak muncul di nav sampai menu key ditambahkan.
 
 ## Service backend (reusable)
 
-`apps/transactions/services.py`: `dashboard_summary(profile, day=None)`. Helper `_f`, `_dictify`. (Laporan penjualan/pembelian BELUM ada → dibuat di sini.)
+`apps/transactions/services.py`: `dashboard_summary(profile, day=None)`. Helper `_f`, `_dictify`.
+
+`apps/transactions/reports.py`: SQL builder generik per laporan (`penjualan_detail`, `penjualan_nota`, `penjualan_customer`, `penjualan_user`, `penjualan_periode`, `retur_penjualan`, `pembelian`, `retur_pembelian`, `opname`, `kas`, `shift`, `promo`, `voucher`, `fmi_penjualan`, `fmi_stok`) — tiap fungsi terima dict filter `f`, return `(inner_sql, params)` untuk dibungkus pagination di `apps/core/reporting.py`.
+
+`apps/core/reporting.py`: `parse_report_params(request, sorts, default_sort, max_range_days=MAX_RANGE_DAYS)` (validasi tanggal, default bulan berjalan, tolak rentang > `max_range_days`), `run_paged(cur, inner_sql, params, f)` / `run_all(cur, inner_sql, params, f)` (COUNT + OFFSET/FETCH vs tanpa paging), `xlsx_response(filename, columns, rows)` (openpyxl), `opt(rows, value_key, label_key)` → `[{value,label}]`.
 
 `apps/inventory/services.py` (movement engine, raw tables):
 - `_movement_sql` (9-way UNION ALL: t_penjualan/pembelian(+retur), t_mutasi_stok, t_opname_stok, dll).
@@ -48,10 +48,14 @@ Kolom asli WAJIB dicek via INFORMATION_SCHEMA sebelum tulis SQL (nama kolom lega
 - **Collation CI**: SQL Server anggap `'LYG005'`=`'lyg005'` & abaikan trailing space; dict Python tidak. Semua join key `kd_*` di Python WAJIB `_k()`.
 - **Tanpa view/UDF/SP legacy** (PRD §5.3) — query langsung tabel, parameterized.
 - **Agregasi di SQL**, bukan Python (movement bisa jutaan row).
-- **Index tanggal header auto-ensured** per koneksi aktif (`apps/transactions/indexes.py`, hook di `get_active_profile`). Idempoten, background thread.
+- **Indexing**: auto-ensured per koneksi aktif/registrasi (`apps/transactions/indexes.py`, hook di `get_active_profile` + `connections_save`), bisa dimatikan via env `POS_AUTO_INDEX=0`. Hasil dicatat `ActivityLog`. Tombol "Cek Indexing" manual di halaman Kelola Server (`Admin/Connections/Index.vue`) untuk re-check on-demand + lihat status per index — pelengkap, bukan pengganti auto-trigger. `ensure_indexes()` return `(failed, results)`.
 - **.env Windows**: jangan `Set-Content -Encoding utf8` (bikin BOM rusak key pertama & mojibake). Pakai append UTF-8 tanpa BOM.
 - **Inertia POST = JSON**: `request.POST` kosong; baca via `apps/core/http.get_data()`.
 - **Tutup buku** server aktif lama (mis. Lotim 2024-01-12) → movement besar; sarankan klien tutup buku untuk percepat.
+- **Cache TTL bersama** (`core/cache.py`, `_cached`/`invalidate_master_cache`, 600s) dipakai `apps/inventory/services.py` DAN `apps/master_data/services.py` — satu dict, satu invalidasi. JANGAN cache kolom yang berubah tiap transaksi kasir (mis. `m_barang_stok_akhir`) atau query bertingkat search-term (key bisa membengkak).
+- **Filter tanggal report/listing**: dorong ke SQL (`WHERE tanggal >= ?`) kalau fungsinya tak perlu histori sebelum `date_from` untuk saldo berjalan (lihat `barang_histori` vs `stock_card` di `apps/inventory/services.py`) — jangan tarik semua baris ke Python lalu buang.
+- **Filter/fetch halaman Inventory** (`Stock.vue`, `BarangHistori.vue`): pakai `frontend/composables/useReportFilters.js` + `frontend/components/report/DateRangeFilter.vue`, jangan hand-roll `reactive`+`router.get` lagi. Halaman laporan (`ReportView`) punya pola pagination server-side sendiri di `apps/core/reporting.py` — jangan campur dua pola ini.
+- **No `v-html`/dynamic `<component :is>`** dari string backend untuk konten sel laporan — pakai slot `cell-<key>` yang sudah ada di `DataTable.vue`.
 
 ## Scalability (Fase 0 SUDAH dikerjakan)
 
@@ -65,9 +69,9 @@ View: bungkus kerja berat dalam fungsi, `props={"key": defer(fn)}`. Frontend: `<
 
 ## Progress implementasi
 
-- ✅ Fase 0 (platform), Fase 1 (dashboard, barang_histori).
-- 🔶 Fase 2: view stok_divisi/stok_akhir real+defer (props key `data`), frontend belum.
-- ⬜ Fase 3–6: 15 view mock + frontend. Fase 7: verifikasi + load test.
+- ✅ Fase 0–6: semua 28 menu real (`frontend/mock/*` sudah dihapus), pagination server-side + export XLSX di laporan, indexing diperluas (~30 index) + audit trail `ActivityLog`, redesign UI ("mecha" theme, token warna `rx-red`/`rx-yellow` di `frontend/css/main.css`).
+- ⬜ Fase 7: verifikasi + load test — commit terakhir sebelum sesi ini ("Frontend, backend, masih error mwahaha") mengindikasikan masih ada bug runtime belum diselesaikan setelah redesign UI; belum diverifikasi `npm run build` bersih di kondisi terbaru.
+- ⬜ Menu key `supplier`/`sync_history` belum ditambahkan ke `apps/core/menus.py` walau view/route sudah ada.
 
 ## Di luar scope
 
