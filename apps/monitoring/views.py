@@ -611,16 +611,6 @@ def _report_export(spec):
     return view
 
 
-# Frontend phase: these pages render their data from client-side mock modules
-# (frontend/mock/*.js), so the Django view only needs to render the component.
-
-def _mock_page(component):
-    def view(request):
-        return render(request, component, props={})
-
-    return view
-
-
 # Penjualan
 _PENJUALAN_ALL = {
     "component": "Admin/Reports/PenjualanAll",
