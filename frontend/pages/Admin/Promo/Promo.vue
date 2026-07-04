@@ -1,39 +1,39 @@
 <script setup>
+import { computed } from "vue";
+import { Deferred } from "@inertiajs/vue3";
+import AdminLayout from "@/layouts/AdminLayout.vue";
 import ReportView from "@/components/report/ReportView.vue";
-import Badge from "@/components/ui/Badge.vue";
-import { promo } from "@/mock/promo";
+import LoadingCard from "@/components/ui/LoadingCard.vue";
 
+const props = defineProps({
+  data: { type: Object, default: null },
+});
+const rows = computed(() => props.data?.rows || []);
 const columns = [
-  { key: "kode", label: "Kode Promo", sortable: true },
-  { key: "nama", label: "Nama Promo", sortable: true },
-  { key: "tipe", label: "Tipe", align: "center" },
-  { key: "nilai", label: "Nilai", align: "right" },
-  { key: "min_belanja", label: "Min. Belanja", align: "right", format: "rupiah" },
-  { key: "mulai", label: "Mulai", sortable: true },
-  { key: "selesai", label: "Selesai" },
-  { key: "status", label: "Status", align: "center" },
+  { key: "kd_promo", label: "Kode Promo" },
+  { key: "divisi", label: "Divisi" },
+  { key: "barang", label: "Barang" },
+  { key: "harga_promo", label: "Harga Promo", align: "right", format: "rupiah" },
+  { key: "tanggal_awal", label: "Tanggal Awal", format: "date" },
+  { key: "tanggal_akhir", label: "Tanggal Akhir", format: "date" },
+  { key: "status", label: "Status" },
 ];
-
-const statusVariant = (s) =>
-  s === "Aktif" ? "success" : s === "Terjadwal" ? "brand" : "neutral";
 </script>
 
 <template>
-  <ReportView
-    title="Promo & Diskon"
-    :columns="columns"
-    :rows="promo"
-    row-key="kode"
-    :search-keys="['kode', 'nama', 'tipe', 'status']"
-    search-placeholder="kode / nama promo…"
-    export-name="promo-diskon"
-    sheet-name="Promo"
-  >
-    <template #cell-nilai="{ row }">
-      {{ row.tipe === "Persen" ? row.nilai + "%" : "Rp " + Number(row.nilai).toLocaleString("id-ID") }}
-    </template>
-    <template #cell-status="{ value }">
-      <Badge :variant="statusVariant(value)">{{ value }}</Badge>
-    </template>
-  </ReportView>
+  <AdminLayout title="Promo & Diskon">
+    <Deferred data="data">
+      <template #fallback><LoadingCard message="Mengambil data…" /></template>
+      <ReportView
+        title="Promo & Diskon"
+        :columns="columns"
+        :rows="rows"
+        row-key="kd_promo"
+        :search-keys="['kd_promo','barang']"
+        export-name="promo-diskon"
+        sheet-name="Promo"
+        :conn-error="data && data.conn_error"
+      />
+    </Deferred>
+  </AdminLayout>
 </template>

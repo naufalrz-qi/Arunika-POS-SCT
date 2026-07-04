@@ -1,39 +1,38 @@
 <script setup>
+import { computed } from "vue";
+import { Deferred } from "@inertiajs/vue3";
+import AdminLayout from "@/layouts/AdminLayout.vue";
 import ReportView from "@/components/report/ReportView.vue";
-import Badge from "@/components/ui/Badge.vue";
-import { voucher } from "@/mock/promo";
+import LoadingCard from "@/components/ui/LoadingCard.vue";
 
+const props = defineProps({
+  data: { type: Object, default: null },
+});
+const rows = computed(() => props.data?.rows || []);
 const columns = [
-  { key: "kode", label: "Kode Voucher", sortable: true },
-  { key: "nama", label: "Nama", sortable: true },
-  { key: "nilai", label: "Nilai", align: "right", format: "rupiah" },
-  { key: "kuota", label: "Kuota", align: "right", format: "number" },
-  { key: "terpakai", label: "Terpakai", align: "right", format: "number", sortable: true },
-  { key: "sisa", label: "Sisa", align: "right", format: "number" },
-  { key: "mulai", label: "Mulai" },
-  { key: "selesai", label: "Selesai" },
-  { key: "status", label: "Status", align: "center" },
+  { key: "kd_voucher", label: "Kode Voucher" },
+  { key: "nama", label: "Nama" },
+  { key: "nominal", label: "Nominal", align: "right", format: "rupiah" },
+  { key: "dipakai", label: "Dipakai", align: "right", format: "number" },
+  { key: "nilai_dipakai", label: "Nilai Dipakai", align: "right", format: "rupiah" },
+  { key: "status", label: "Status" },
 ];
-
-const rows = voucher.map((v) => ({ ...v, sisa: v.kuota - v.terpakai }));
-
-const statusVariant = (s) =>
-  s === "Aktif" ? "success" : s === "Terjadwal" ? "brand" : s === "Habis" ? "danger" : "neutral";
 </script>
 
 <template>
-  <ReportView
-    title="Voucher"
-    :columns="columns"
-    :rows="rows"
-    row-key="kode"
-    :search-keys="['kode', 'nama', 'status']"
-    search-placeholder="kode / nama voucher…"
-    export-name="voucher"
-    sheet-name="Voucher"
-  >
-    <template #cell-status="{ value }">
-      <Badge :variant="statusVariant(value)">{{ value }}</Badge>
-    </template>
-  </ReportView>
+  <AdminLayout title="Voucher">
+    <Deferred data="data">
+      <template #fallback><LoadingCard message="Mengambil data…" /></template>
+      <ReportView
+        title="Voucher"
+        :columns="columns"
+        :rows="rows"
+        row-key="kd_voucher"
+        :search-keys="['kd_voucher','nama']"
+        export-name="voucher"
+        sheet-name="Voucher"
+        :conn-error="data && data.conn_error"
+      />
+    </Deferred>
+  </AdminLayout>
 </template>

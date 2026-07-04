@@ -1,33 +1,63 @@
 <script setup>
-import ReportView from "@/components/report/ReportView.vue";
-import Badge from "@/components/ui/Badge.vue";
-import { shift } from "@/mock/kas";
+import { computed } from "vue";
+import AdminLayout from "@/layouts/AdminLayout.vue";
+import ReportPage from "@/components/report/ReportPage.vue";
+import FilterPanel from "@/components/ui/FilterPanel.vue";
+import DateRangeField from "@/components/ui/DateRangeField.vue";
+import SelectSearch from "@/components/ui/SelectSearch.vue";
+import Input from "@/components/ui/Input.vue";
+import { useServerReport } from "@/composables/useServerReport.js";
+
+const props = defineProps({
+  report: { type: Object, default: null },
+  filters: { type: Object, default: () => ({}) },
+});
+
+const URL = "/admin-panel/kas/shift";
+const { form, apply, onPage, onSort, reset, exportHref } = useServerReport(URL, props.filters);
 
 const columns = [
-  { key: "shift", label: "Shift", sortable: true },
-  { key: "kasir", label: "Kasir", sortable: true },
-  { key: "mulai", label: "Mulai" },
-  { key: "selesai", label: "Selesai" },
-  { key: "divisi", label: "Divisi" },
-  { key: "transaksi", label: "Transaksi", align: "right", format: "number", sortable: true },
-  { key: "omzet", label: "Omzet", align: "right", format: "rupiah", sortable: true },
-  { key: "status", label: "Status", align: "center" },
+  { key: "no_transaksi", label: "No. Transaksi", sortable: true },
+  { key: "tanggal", label: "Tanggal", sortable: true, format: "date" },
+  { key: "pegawai", label: "Pegawai" },
+  { key: "shift", label: "Shift" },
+  { key: "keterangan", label: "Keterangan" },
 ];
+
+const divisiOptions = computed(() => props.report?.options?.divisi || []);
+const summaryItems = computed(() => {
+  const s = props.report?.summary || {};
+  const nf = new Intl.NumberFormat("id-ID");
+  return [
+    { label: "Jumlah Shift", value: nf.format(s.jml_shift || 0) },
+  ];
+});
 </script>
 
 <template>
-  <ReportView
-    title="Shift Kasir"
-    :columns="columns"
-    :rows="shift"
-    row-key="kasir"
-    :search-keys="['shift', 'kasir', 'divisi', 'status']"
-    search-placeholder="shift / kasir / divisi…"
-    export-name="shift-kasir"
-    sheet-name="Shift Kasir"
-  >
-    <template #cell-status="{ value }">
-      <Badge :variant="value === 'Berjalan' ? 'brand' : 'success'">{{ value }}</Badge>
-    </template>
-  </ReportView>
+  <AdminLayout title="Shift Kasir">
+    <ReportPage
+      title="Shift Kasir"
+      deferred-key="report"
+      :data="report"
+      :columns="columns"
+      row-key="no_transaksi"
+      :page="Number(form.page)"
+      :per-page="Number(form.per_page)"
+      :sort-key="form.sort"
+      :sort-dir="form.sort_dir"
+      :export-href="exportHref"
+      :summary-items="summaryItems"
+      @page-change="onPage"
+      @sort-change="onSort"
+    >
+      <template #filters>
+        <FilterPanel @submit="apply({ page: 1 })" @reset="reset">
+          <DateRangeField v-model:from="form.date_from" v-model:to="form.date_to" />
+          <SelectSearch v-model="form.kd_divisi" :options="divisiOptions" label="Divisi" />
+          <Input v-model="form.search" label="Cari" placeholder="pegawai / shift" />
+        </FilterPanel>
+      </template>
+    </ReportPage>
+  </AdminLayout>
 </template>

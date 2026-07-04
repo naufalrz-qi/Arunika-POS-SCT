@@ -8,6 +8,7 @@ import Banner from "@/components/ui/Banner.vue";
 import BarChart from "@/components/charts/BarChart.vue";
 import Icon from "@/components/nav/Icon.vue";
 import LoadingCard from "@/components/ui/LoadingCard.vue";
+import SummaryStrip from "@/components/ui/SummaryStrip.vue";
 
 const props = defineProps({
   dashboard: { type: Object, default: null },
@@ -18,21 +19,12 @@ const data = computed(() => props.dashboard || {});
 const rupiah = (n) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n || 0);
 
-// RX-78-2 tricolor: blue (primary), yellow (V-fin), red (chest), navy.
-const kpis = computed(() => [
-  { label: "Transaksi Hari Ini", value: data.value.stats?.total_transactions ?? 0, icon: "cart", tone: "blue" },
-  { label: "Item Terjual", value: data.value.stats?.total_items ?? 0, icon: "box", tone: "yellow" },
-  { label: "Omzet", value: rupiah(data.value.stats?.revenue), icon: "cash", tone: "red" },
-  { label: "Server Online", value: `${data.value.stats?.servers_online ?? 0} / ${data.value.stats?.servers_total ?? 0}`, icon: "server", tone: "navy" },
+const summaryItems = computed(() => [
+  { label: "Transaksi Hari Ini", value: data.value.stats?.total_transactions ?? 0 },
+  { label: "Item Terjual", value: data.value.stats?.total_items ?? 0 },
+  { label: "Omzet", value: rupiah(data.value.stats?.revenue) },
+  { label: "Server Online", value: `${data.value.stats?.servers_online ?? 0} / ${data.value.stats?.servers_total ?? 0}` },
 ]);
-
-// Tricolor top panel-line (flush bar) + mode-aware icon chip (kept semantic for contrast).
-const tones = {
-  blue: { bar: "bg-brand-600", chip: "bg-brand-bg text-brand-fg" },
-  yellow: { bar: "bg-rx-yellow", chip: "bg-warning-bg text-warning-fg" },
-  red: { bar: "bg-rx-red", chip: "bg-danger-bg text-danger-fg" },
-  navy: { bar: "bg-brand-900", chip: "bg-surface-3 text-ink-muted" },
-};
 
 const chartData = computed(() =>
   (data.value.hourly_transactions || []).map((h) => ({ label: h.hour, value: h.count })),
@@ -48,25 +40,7 @@ const chartData = computed(() =>
 
     <Banner v-if="data.conn_error" variant="warning" :message="data.conn_error" />
 
-    <!-- KPI cards -->
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      <div
-        v-for="kpi in kpis"
-        :key="kpi.label"
-        class="overflow-hidden rounded-card border border-border-default bg-surface shadow-sm transition hover:shadow-md"
-      >
-        <div :class="['h-1', tones[kpi.tone].bar]" />
-        <div class="flex items-center gap-4 p-5">
-          <span :class="['flex h-12 w-12 shrink-0 items-center justify-center rounded-md', tones[kpi.tone].chip]">
-            <Icon :name="kpi.icon" size="h-6 w-6" />
-          </span>
-          <div class="min-w-0">
-            <p class="truncate text-sm text-ink-muted">{{ kpi.label }}</p>
-            <p class="mt-0.5 text-2xl font-semibold tabular-nums text-ink">{{ kpi.value }}</p>
-          </div>
-        </div>
-      </div>
-    </div>
+    <SummaryStrip :items="summaryItems" />
 
     <div class="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
       <!-- Chart -->

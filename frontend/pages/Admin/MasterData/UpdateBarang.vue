@@ -10,6 +10,7 @@ import Badge from "@/components/ui/Badge.vue";
 import Banner from "@/components/ui/Banner.vue";
 import DataTable from "@/components/ui/DataTable.vue";
 import Modal from "@/components/ui/Modal.vue";
+import { useUiStore } from "@/stores/ui.js";
 
 const props = defineProps({
   active: { type: Object, default: null },
@@ -101,6 +102,17 @@ watch(() => props.items, () => {
 const editing = ref(null);
 const priceForm = useForm({ profile: null, kd_barang: "", prices: {} });
 const statusSel = reactive({ m_barang: "1", m_barang_divisi: "1", m_barang_satuan: "1" });
+const showConfirm = ref(false);
+const ui = useUiStore();
+
+const priceDiff = computed(() => {
+  if (!editing.value) return [];
+  return editing.value.satuan.map((u) => ({
+    kd_satuan: u.kd_satuan,
+    lama: u.harga_jual,
+    baru: Number(priceForm.prices[u.kd_satuan]) || 0,
+  })).filter((d) => d.lama !== d.baru);
+});
 
 function openEdit(item) {
   editing.value = item;
@@ -118,10 +130,22 @@ const liveMargin = (unit) => {
   return modal > 0 ? ((harga - modal) / modal) * 100 : 0;
 };
 
+function askConfirm() {
+  showConfirm.value = true;
+}
+
+function confirmSave() {
+  showConfirm.value = false;
+  saveHarga();
+}
+
 function saveHarga() {
   priceForm.post("/admin-panel/master/update-barang/harga", {
     preserveScroll: true,
-    onSuccess: () => (editing.value = null),
+    onSuccess: () => {
+      editing.value = null;
+      ui.pushToast("Harga berhasil disimpan.", "success");
+    },
   });
 }
 
@@ -276,7 +300,7 @@ function saveStatus(table) {
                 variant="success"
                 size="sm"
                 :loading="priceForm.processing"
-                @click="saveHarga"
+                @click="askConfirm"
               >
                 Simpan
               </Button>
@@ -305,6 +329,30 @@ function saveStatus(table) {
       </div>
       <template #footer>
         <Button variant="ghost" @click="editing = null">Tutup</Button>
+      </template>
+    </Modal>
+
+    <Modal :show="showConfirm" title="Konfirmasi Perubahan Harga" @close="showConfirm = false">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-ink-muted">
+            <th class="py-1 text-left">Satuan</th>
+            <th class="py-1 text-right">Harga Lama</th>
+            <th class="py-1 text-right">Harga Baru</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="d in priceDiff" :key="d.kd_satuan" class="border-t border-border-default">
+            <td class="py-1">{{ d.kd_satuan }}</td>
+            <td class="py-1 text-right text-ink-muted">{{ d.lama }}</td>
+            <td class="py-1 text-right font-semibold text-ink">{{ d.baru }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-if="!priceDiff.length" class="text-sm text-ink-muted">Tidak ada perubahan harga.</p>
+      <template #footer>
+        <Button variant="ghost" @click="showConfirm = false">Batal</Button>
+        <Button variant="primary" :disabled="!priceDiff.length" @click="confirmSave">Simpan</Button>
       </template>
     </Modal>
   </AdminLayout>

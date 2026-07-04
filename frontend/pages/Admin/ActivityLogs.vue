@@ -7,6 +7,10 @@ import Select from "@/components/ui/Select.vue";
 import Button from "@/components/ui/Button.vue";
 import Badge from "@/components/ui/Badge.vue";
 import DataTable from "@/components/ui/DataTable.vue";
+import FilterPanel from "@/components/ui/FilterPanel.vue";
+import DateRangeField from "@/components/ui/DateRangeField.vue";
+import SelectSearch from "@/components/ui/SelectSearch.vue";
+import ExportButton from "@/components/ui/ExportButton.vue";
 
 const props = defineProps({
   logs: { type: Array, default: () => [] },
@@ -21,6 +25,14 @@ const dateTo = ref("");
 
 const userOptions = computed(() => props.users.map((u) => ({ value: u, label: u })));
 const actionOptions = computed(() => props.action_types.map((a) => ({ value: a, label: a })));
+
+const exportColumns = [
+  { key: "timestamp", label: "Waktu" },
+  { key: "user", label: "User" },
+  { key: "action", label: "Aksi" },
+  { key: "detail", label: "Detail" },
+  { key: "ip_address", label: "IP" },
+];
 
 const filtered = computed(() =>
   props.logs.filter((log) => {
@@ -58,24 +70,21 @@ const actionVariant = (a) => {
 
 <template>
   <AdminLayout title="Log Aktivitas">
-    <Card title="Filter">
-      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <Select v-model="userFilter" label="User" :options="userOptions" placeholder="Semua user" />
-        <Select v-model="actionFilter" label="Tipe Aksi" :options="actionOptions" placeholder="Semua aksi" />
-        <Input v-model="dateFrom" label="Dari Tanggal" type="date" />
-        <Input v-model="dateTo" label="Sampai Tanggal" type="date" />
-        <div class="flex items-end">
-          <Button variant="secondary" class="w-full" @click="resetFilters">Reset</Button>
-        </div>
-      </div>
-    </Card>
-
-    <div class="mt-6">
-      <DataTable :columns="columns" :rows="filtered" :per-page="15" empty-message="Tidak ada log untuk filter ini.">
-        <template #cell-action="{ value }">
-          <Badge :variant="actionVariant(value)">{{ value }}</Badge>
-        </template>
-      </DataTable>
+    <div class="mb-4 flex items-center justify-between">
+      <h1 class="text-xl font-semibold text-ink">Log Aktivitas</h1>
+      <ExportButton mode="client" filename="aktivitas-log" :columns="exportColumns" :rows="filtered" sheet-name="Log" />
     </div>
+
+    <FilterPanel @submit="() => {}" @reset="resetFilters">
+      <Input v-model="actionFilter" label="Aksi" placeholder="cari aksi…" />
+      <SelectSearch v-model="userFilter" :options="userOptions" label="User" />
+      <DateRangeField v-model:from="dateFrom" v-model:to="dateTo" />
+    </FilterPanel>
+
+    <DataTable :columns="columns" :rows="filtered" :per-page="15" empty-message="Tidak ada log untuk filter ini.">
+      <template #cell-action="{ value }">
+        <Badge :variant="actionVariant(value)">{{ value }}</Badge>
+      </template>
+    </DataTable>
   </AdminLayout>
 </template>

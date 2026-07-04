@@ -43,6 +43,8 @@ def connections_save(request):
         request.session["flash_error"] = "Server retail wajib memilih Sumber Modal (grosir/gudang)."
         return redirect("/admin-panel/connections")
     profile.save()
+    from apps.transactions.indexes import ensure_indexes_async
+    ensure_indexes_async(profile)  # PRD §9 — build registry indexes on registration
     log_activity(request, "konfigurasi", f"Simpan koneksi {profile.name}")
     request.session["flash_success"] = "Profil koneksi disimpan."
     return redirect("/admin-panel/connections")

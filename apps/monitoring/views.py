@@ -15,6 +15,8 @@ from apps.core.models import ActivityLog, log_activity
 from apps.inventory import services as inv
 from apps.master_data import services as master
 from apps.transactions import services as tx
+from apps.core import reporting
+from apps.transactions import reports as rpt
 from core import mssql
 
 
@@ -460,6 +462,101 @@ def menus_save(request):
 
 
 # --- Laporan & fitur baru ---------------------------------------------------
+# --- Server-side report plumbing (PRD §6) ---------------------------------
+
+def _opt_divisi(profile):
+    return reporting.opt(inv.list_divisi(profile), "kd_divisi", "nama")
+
+
+def _opt_master(profile, sql):
+    with mssql.cursor(profile) as cur:
+        cur.execute(sql)
+        cols = [c[0] for c in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    return reporting.opt(rows, cols[0], cols[1])
+
+
+def _opt_customer(profile):
+    return _opt_master(profile, "SELECT TOP 1000 kd_customer, nama FROM m_customer WHERE status = 1 ORDER BY nama")
+
+
+def _opt_supplier(profile):
+    return _opt_master(profile, "SELECT TOP 1000 kd_supplier, nama FROM m_supplier ORDER BY nama")
+
+
+def _opt_kas(profile):
+    return _opt_master(profile, "SELECT kd_kas, keterangan FROM m_kas WHERE status <> 0 ORDER BY keterangan")
+
+
+def _spec_params(request, spec):
+    f = reporting.parse_report_params(request, spec["sorts"], spec["default_sort"])
+    for k in spec.get("filter_keys", []):
+        f[k] = (request.GET.get(k) or "").strip()
+    return f
+
+
+def _spec_filters(f, spec):
+    filters = {
+        "date_from": f["date_from_s"], "date_to": f["date_to_s"],
+        "search": f["search"], "sort": f["sort"], "sort_dir": f["sort_dir"],
+        "page": f["page"], "per_page": f["per_page"],
+    }
+    for k in spec.get("filter_keys", []):
+        filters[k] = f[k]
+    return filters
+
+
+def _report_view(spec):
+    def view(request):
+        f = _spec_params(request, spec)
+
+        def load_report():
+            rows, total, summary, options, conn_error = [], 0, {}, {}, None
+            profile = _active()
+            if profile:
+                try:
+                    inner, params = spec["inner"](f)
+                    with mssql.cursor(profile) as cur:
+                        rows, total = reporting.run_paged(cur, inner, params, f)
+                        cur.execute(f"SELECT {spec['summary']} FROM ({inner}) AS q", params)
+                        summary = reporting.clean_rows(reporting.dictify(cur))[0]
+                    if spec.get("options"):
+                        options = spec["options"](profile)
+                except pyodbc.Error as exc:
+                    conn_error = f"Gagal membaca laporan: {exc.args[-1] if exc.args else exc}"
+            else:
+                conn_error = CONN_ERROR
+            if f["warning"]:
+                conn_error = f["warning"] if not conn_error else f"{conn_error} {f['warning']}"
+            return {"rows": rows, "total": total, "summary": summary,
+                    "options": options, "conn_error": conn_error}
+
+        return render(request, spec["component"],
+                      props={"report": defer(load_report), "filters": _spec_filters(f, spec)})
+
+    return view
+
+
+def _report_export(spec):
+    def view(request):
+        f = _spec_params(request, spec)
+        profile = _active()
+        if not profile:
+            request.session["flash_error"] = CONN_ERROR
+            return redirect(spec["url"])
+        try:
+            inner, params = spec["inner"](f)
+            with mssql.cursor(profile) as cur:
+                rows = reporting.run_all(cur, inner, params, f)
+        except pyodbc.Error as exc:
+            request.session["flash_error"] = f"Gagal export: {exc.args[-1] if exc.args else exc}"
+            return redirect(spec["url"])
+        log_activity(request, "export", f"Export {spec['filename']}: {len(rows)} baris")
+        return reporting.xlsx_response(spec["filename"], spec["columns"], rows)
+
+    return view
+
+
 # Frontend phase: these pages render their data from client-side mock modules
 # (frontend/mock/*.js), so the Django view only needs to render the component.
 
@@ -471,15 +568,133 @@ def _mock_page(component):
 
 
 # Penjualan
-penjualan_all = _mock_page("Admin/Reports/PenjualanAll")
-penjualan_nota = _mock_page("Admin/Reports/PenjualanNota")
-penjualan_customer = _mock_page("Admin/Reports/PenjualanCustomer")
-penjualan_user = _mock_page("Admin/Reports/PenjualanUser")
-penjualan_periode = _mock_page("Admin/Reports/PenjualanPeriode")
-retur_penjualan = _mock_page("Admin/Reports/ReturPenjualan")
+_PENJUALAN_ALL = {
+    "component": "Admin/Reports/PenjualanAll",
+    "url": "/admin-panel/laporan/penjualan",
+    "inner": rpt.penjualan_detail,
+    "sorts": rpt.SORTS_PENJUALAN_DETAIL,
+    "default_sort": "tanggal",
+    "summary": rpt.SUMMARY_PENJUALAN_DETAIL,
+    "filter_keys": ["kd_divisi"],
+    "options": lambda p: {"divisi": _opt_divisi(p)},
+    "filename": "penjualan-detail",
+    "columns": [
+        {"key": "no_transaksi", "label": "No. Transaksi"},
+        {"key": "tanggal", "label": "Tanggal"},
+        {"key": "customer", "label": "Customer"},
+        {"key": "barang", "label": "Barang"},
+        {"key": "qty", "label": "Qty"},
+        {"key": "harga", "label": "Harga"},
+        {"key": "subtotal", "label": "Subtotal"},
+    ],
+}
+penjualan_all = _report_view(_PENJUALAN_ALL)
+penjualan_all_export = _report_export(_PENJUALAN_ALL)
+_PENJUALAN_NOTA = {
+    "component": "Admin/Reports/PenjualanNota",
+    "url": "/admin-panel/laporan/penjualan-nota",
+    "inner": rpt.penjualan_nota,
+    "sorts": rpt.SORTS_PENJUALAN_NOTA,
+    "default_sort": "tanggal",
+    "summary": rpt.SUMMARY_PENJUALAN_NOTA,
+    "filter_keys": ["kd_divisi", "kd_customer"],
+    "options": lambda p: {"divisi": _opt_divisi(p), "customer": _opt_customer(p)},
+    "filename": "penjualan-nota",
+    "columns": [{"key": "no_transaksi", "label": "No. Nota"}, {"key": "tanggal", "label": "Tanggal"}, {"key": "customer", "label": "Customer"}, {"key": "total_kotor", "label": "Total Kotor"}, {"key": "potongan", "label": "Potongan"}, {"key": "pajak", "label": "Pajak"}, {"key": "total_bersih", "label": "Total Bersih"}],
+}
+penjualan_nota = _report_view(_PENJUALAN_NOTA)
+penjualan_nota_export = _report_export(_PENJUALAN_NOTA)
+
+_PENJUALAN_CUSTOMER = {
+    "component": "Admin/Reports/PenjualanCustomer",
+    "url": "/admin-panel/laporan/penjualan-customer",
+    "inner": rpt.penjualan_customer,
+    "sorts": rpt.SORTS_PENJUALAN_CUSTOMER,
+    "default_sort": "total",
+    "summary": rpt.SUMMARY_PENJUALAN_CUSTOMER,
+    "filter_keys": ["kd_divisi"],
+    "options": lambda p: {"divisi": _opt_divisi(p)},
+    "filename": "penjualan-customer",
+    "columns": [{"key": "customer", "label": "Customer"}, {"key": "kota", "label": "Kota"}, {"key": "jml_nota", "label": "Jml Nota"}, {"key": "total", "label": "Total"}],
+}
+penjualan_customer = _report_view(_PENJUALAN_CUSTOMER)
+penjualan_customer_export = _report_export(_PENJUALAN_CUSTOMER)
+
+_PENJUALAN_USER = {
+    "component": "Admin/Reports/PenjualanUser",
+    "url": "/admin-panel/laporan/penjualan-user",
+    "inner": rpt.penjualan_user,
+    "sorts": rpt.SORTS_PENJUALAN_USER,
+    "default_sort": "total",
+    "summary": rpt.SUMMARY_PENJUALAN_USER,
+    "filter_keys": ["kd_divisi"],
+    "options": lambda p: {"divisi": _opt_divisi(p)},
+    "filename": "penjualan-user",
+    "columns": [{"key": "user", "label": "User / Kasir"}, {"key": "jml_nota", "label": "Jml Nota"}, {"key": "total", "label": "Total"}],
+}
+penjualan_user = _report_view(_PENJUALAN_USER)
+penjualan_user_export = _report_export(_PENJUALAN_USER)
+
+_PENJUALAN_PERIODE = {
+    "component": "Admin/Reports/PenjualanPeriode",
+    "url": "/admin-panel/laporan/penjualan-periode",
+    "inner": rpt.penjualan_periode,
+    "sorts": rpt.SORTS_PENJUALAN_PERIODE,
+    "default_sort": "total",
+    "summary": rpt.SUMMARY_PENJUALAN_PERIODE,
+    "filter_keys": ["kd_divisi", "granularitas"],
+    "options": lambda p: {"divisi": _opt_divisi(p)},
+    "filename": "penjualan-periode",
+    "columns": [{"key": "periode", "label": "Periode"}, {"key": "jml_nota", "label": "Jml Nota"}, {"key": "total", "label": "Total"}],
+}
+penjualan_periode = _report_view(_PENJUALAN_PERIODE)
+penjualan_periode_export = _report_export(_PENJUALAN_PERIODE)
+
+_RETUR_PENJUALAN = {
+    "component": "Admin/Reports/ReturPenjualan",
+    "url": "/admin-panel/laporan/retur-penjualan",
+    "inner": rpt.retur_penjualan,
+    "sorts": rpt.SORTS_RETUR_PENJUALAN,
+    "default_sort": "tanggal",
+    "summary": rpt.SUMMARY_RETUR_PENJUALAN,
+    "filter_keys": ["kd_divisi", "kd_customer"],
+    "options": lambda p: {"divisi": _opt_divisi(p), "customer": _opt_customer(p)},
+    "filename": "retur-penjualan",
+    "columns": [{"key": "no_retur", "label": "No. Retur"}, {"key": "tanggal", "label": "Tanggal"}, {"key": "customer", "label": "Customer"}, {"key": "barang", "label": "Barang"}, {"key": "qty", "label": "Qty"}, {"key": "nilai", "label": "Nilai"}],
+}
+retur_penjualan = _report_view(_RETUR_PENJUALAN)
+retur_penjualan_export = _report_export(_RETUR_PENJUALAN)
+
 # Pembelian
-pembelian = _mock_page("Admin/Reports/Pembelian")
-retur_pembelian = _mock_page("Admin/Reports/ReturPembelian")
+_PEMBELIAN = {
+    "component": "Admin/Reports/Pembelian",
+    "url": "/admin-panel/laporan/pembelian",
+    "inner": rpt.pembelian,
+    "sorts": rpt.SORTS_PEMBELIAN,
+    "default_sort": "tanggal",
+    "summary": rpt.SUMMARY_PEMBELIAN,
+    "filter_keys": ["kd_divisi", "kd_supplier"],
+    "options": lambda p: {"divisi": _opt_divisi(p), "supplier": _opt_supplier(p)},
+    "filename": "pembelian",
+    "columns": [{"key": "no_transaksi", "label": "No. Transaksi"}, {"key": "tanggal", "label": "Tanggal"}, {"key": "supplier", "label": "Supplier"}, {"key": "barang", "label": "Barang"}, {"key": "qty", "label": "Qty"}, {"key": "harga", "label": "Harga Beli"}, {"key": "subtotal", "label": "Subtotal"}],
+}
+pembelian = _report_view(_PEMBELIAN)
+pembelian_export = _report_export(_PEMBELIAN)
+
+_RETUR_PEMBELIAN = {
+    "component": "Admin/Reports/ReturPembelian",
+    "url": "/admin-panel/laporan/retur-pembelian",
+    "inner": rpt.retur_pembelian,
+    "sorts": rpt.SORTS_RETUR_PEMBELIAN,
+    "default_sort": "tanggal",
+    "summary": rpt.SUMMARY_RETUR_PEMBELIAN,
+    "filter_keys": ["kd_divisi", "kd_supplier"],
+    "options": lambda p: {"divisi": _opt_divisi(p), "supplier": _opt_supplier(p)},
+    "filename": "retur-pembelian",
+    "columns": [{"key": "no_retur", "label": "No. Retur"}, {"key": "tanggal", "label": "Tanggal"}, {"key": "supplier", "label": "Supplier"}, {"key": "barang", "label": "Barang"}, {"key": "qty", "label": "Qty"}, {"key": "nilai", "label": "Nilai"}],
+}
+retur_pembelian = _report_view(_RETUR_PEMBELIAN)
+retur_pembelian_export = _report_export(_RETUR_PEMBELIAN)
 # Inventori — real services, deferred
 def stok_divisi(request):
     kd_divisi = request.GET.get("kd_divisi", "")
@@ -540,16 +755,59 @@ def stok_akhir(request):
             "filters": {"tanggal": request.GET.get("tanggal", "")},
         },
     )
-opname = _mock_page("Admin/Inventory/Opname")
+_OPNAME = {
+    "component": "Admin/Inventory/Opname",
+    "url": "/admin-panel/inventory/opname",
+    "inner": rpt.opname,
+    "sorts": rpt.SORTS_OPNAME,
+    "default_sort": "tanggal",
+    "summary": rpt.SUMMARY_OPNAME,
+    "filter_keys": ["kd_divisi"],
+    "options": lambda p: {"divisi": _opt_divisi(p)},
+    "filename": "opname",
+    "columns": [{"key": "kd_barang", "label": "Kd. Barang"}, {"key": "barang", "label": "Barang"}, {"key": "qty_sistem", "label": "Qty Sistem", "format": "number"}, {"key": "qty_fisik", "label": "Qty Fisik", "format": "number"}, {"key": "diferensi", "label": "Diferensi", "format": "number"}, {"key": "tanggal", "label": "Tanggal", "format": "date"}],
+}
+opname = _report_view(_OPNAME)
+opname_export = _report_export(_OPNAME)
+
 # Analitik
 fmi_penjualan = _mock_page("Admin/Analytics/FmiPenjualan")
 fmi_stok = _mock_page("Admin/Analytics/FmiStok")
+
 # Promo & Voucher
 promo = _mock_page("Admin/Promo/Promo")
 voucher = _mock_page("Admin/Promo/Voucher")
+
 # Kas & Shift
-kas_harian = _mock_page("Admin/Cash/Kas")
-shift = _mock_page("Admin/Cash/Shift")
+_KAS = {
+    "component": "Admin/Cash/Kas",
+    "url": "/admin-panel/kas/harian",
+    "inner": rpt.kas,
+    "sorts": rpt.SORTS_KAS,
+    "default_sort": "tanggal",
+    "summary": rpt.SUMMARY_KAS,
+    "filter_keys": [],
+    "options": lambda p: {},
+    "filename": "kas-harian",
+    "columns": [{"key": "tanggal", "label": "Tanggal", "format": "date"}, {"key": "opening", "label": "Opening", "format": "rupiah"}, {"key": "masuk", "label": "Masuk", "format": "rupiah"}, {"key": "keluar", "label": "Keluar", "format": "rupiah"}, {"key": "penutupan", "label": "Penutupan", "format": "rupiah"}],
+}
+kas_harian = _report_view(_KAS)
+kas_harian_export = _report_export(_KAS)
+
+_SHIFT = {
+    "component": "Admin/Cash/Shift",
+    "url": "/admin-panel/kas/shift",
+    "inner": rpt.shift,
+    "sorts": rpt.SORTS_SHIFT,
+    "default_sort": "tanggal",
+    "summary": rpt.SUMMARY_SHIFT,
+    "filter_keys": [],
+    "options": lambda p: {},
+    "filename": "shift",
+    "columns": [{"key": "tanggal", "label": "Tanggal", "format": "date"}, {"key": "nama_pegawai", "label": "Pegawai"}, {"key": "shift", "label": "Shift"}, {"key": "kd_kas", "label": "Kas"}],
+}
+shift = _report_view(_SHIFT)
+shift_export = _report_export(_SHIFT)
 
 
 # --- Profil Saya (edit own account) ----------------------------------------

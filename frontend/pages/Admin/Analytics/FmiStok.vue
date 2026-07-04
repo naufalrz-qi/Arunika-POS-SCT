@@ -1,40 +1,46 @@
 <script setup>
+import { computed } from "vue";
+import { Deferred } from "@inertiajs/vue3";
+import AdminLayout from "@/layouts/AdminLayout.vue";
 import ReportView from "@/components/report/ReportView.vue";
+import LoadingCard from "@/components/ui/LoadingCard.vue";
 import Badge from "@/components/ui/Badge.vue";
-import { fmiStok } from "@/mock/analitik";
 
+const props = defineProps({
+  data: { type: Object, default: null },
+});
+const rows = computed(() => props.data?.rows || []);
 const columns = [
-  { key: "tanggal", label: "Tanggal", sortable: true },
-  { key: "divisi", label: "Divisi" },
-  { key: "kode", label: "Kode", sortable: true },
-  { key: "barang", label: "Barang", sortable: true },
-  { key: "stok", label: "Stok", align: "right", format: "number", sortable: true },
-  { key: "satuan", label: "Satuan", align: "center" },
-  { key: "klas", label: "Klasifikasi", align: "center" },
-  { key: "kosong", label: "Status Stok", align: "center" },
+  { key: "kd_barang", label: "Kode" },
+  { key: "barang", label: "Barang" },
+  { key: "stok", label: "Stok", align: "right", format: "number" },
+  { key: "terjual", label: "Terjual", align: "right", format: "number" },
+  { key: "rasio", label: "Rasio", align: "right", format: "number" },
+  { key: "status", label: "Status" },
 ];
-
-const klas = (r) => (r.fmi ? "Fast Moving" : r.smi ? "Slow Moving" : "Medium");
-const variant = (r) => (r.fmi ? "success" : r.smi ? "danger" : "neutral");
 </script>
 
 <template>
-  <ReportView
-    title="FMI Stok (Risiko Stok)"
-    :columns="columns"
-    :rows="fmiStok"
-    row-key="kode"
-    :search-keys="['kode', 'barang', 'divisi']"
-    search-placeholder="kode / barang…"
-    export-name="fmi-stok"
-    sheet-name="FMI Stok"
-  >
-    <template #cell-klas="{ row }">
-      <Badge :variant="variant(row)">{{ klas(row) }}</Badge>
-    </template>
-    <template #cell-kosong="{ row }">
-      <Badge v-if="row.stok <= 0" variant="danger">Kosong</Badge>
-      <Badge v-else variant="success">Tersedia</Badge>
-    </template>
-  </ReportView>
+  <AdminLayout title="FMI Stok">
+    <Deferred data="data">
+      <template #fallback><LoadingCard message="Mengambil data…" /></template>
+      <ReportView
+        title="FMI Stok"
+        :columns="columns"
+        :rows="rows"
+        row-key="kd_barang"
+        :search-keys="['kd_barang','barang']"
+        export-name="fmi-stok"
+        sheet-name="FMI Stok"
+        :conn-error="data && data.conn_error"
+      >
+        <template #cell-status="{ value }">
+          <Badge v-if="value === 'Kritis'" variant="danger">Kritis</Badge>
+          <Badge v-else-if="value === 'Overstock'" variant="warning">Overstock</Badge>
+          <Badge v-else-if="value === 'Sehat'" variant="success">Sehat</Badge>
+          <span v-else>{{ value }}</span>
+        </template>
+      </ReportView>
+    </Deferred>
+  </AdminLayout>
 </template>

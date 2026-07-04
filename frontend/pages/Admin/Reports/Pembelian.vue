@@ -1,31 +1,70 @@
 <script setup>
-import ReportView from "@/components/report/ReportView.vue";
-import { pembelian } from "@/mock/pembelian";
+import { computed } from "vue";
+import AdminLayout from "@/layouts/AdminLayout.vue";
+import ReportPage from "@/components/report/ReportPage.vue";
+import FilterPanel from "@/components/ui/FilterPanel.vue";
+import DateRangeField from "@/components/ui/DateRangeField.vue";
+import SelectSearch from "@/components/ui/SelectSearch.vue";
+import Input from "@/components/ui/Input.vue";
+import { useServerReport } from "@/composables/useServerReport.js";
+
+const props = defineProps({
+  report: { type: Object, default: null },
+  filters: { type: Object, default: () => ({}) },
+});
+
+const URL = "/admin-panel/laporan/pembelian";
+const { form, apply, onPage, onSort, reset, exportHref } = useServerReport(URL, props.filters);
 
 const columns = [
   { key: "no_transaksi", label: "No. Transaksi", sortable: true },
-  { key: "no_order", label: "No. Order" },
-  { key: "tanggal", label: "Tanggal", sortable: true },
-  { key: "supplier", label: "Supplier", sortable: true },
-  { key: "divisi", label: "Divisi" },
-  { key: "pembayaran", label: "Pembayaran" },
-  { key: "jatuh_tempo", label: "Jatuh Tempo" },
-  { key: "bank", label: "Bank" },
-  { key: "no_rekening", label: "No. Rekening" },
-  { key: "cabang", label: "Cabang" },
-  { key: "total_pembelian", label: "Total Pembelian", align: "right", format: "rupiah", sortable: true },
+  { key: "tanggal", label: "Tanggal", sortable: true, format: "date" },
+  { key: "supplier", label: "Supplier" },
+  { key: "barang", label: "Barang" },
+  { key: "qty", label: "Qty", align: "right", format: "number" },
+  { key: "harga_beli", label: "Harga Beli", align: "right", format: "rupiah" },
+  { key: "subtotal", label: "Subtotal", align: "right", format: "rupiah", sortable: true },
 ];
+
+const divisiOptions = computed(() => props.report?.options?.divisi || []);
+const supplierOptions = computed(() => props.report?.options?.supplier || []);
+const summaryItems = computed(() => {
+  const s = props.report?.summary || {};
+  const nf = new Intl.NumberFormat("id-ID");
+  const rp = new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 });
+  return [
+    { label: "Jumlah Baris", value: nf.format(s.jml_baris || 0) },
+    { label: "Total Qty", value: nf.format(s.total_qty || 0) },
+    { label: "Total Nilai", value: rp.format(s.total_nilai || 0) },
+  ];
+});
 </script>
 
 <template>
-  <ReportView
-    title="Laporan Pembelian"
-    :columns="columns"
-    :rows="pembelian"
-    row-key="no_transaksi"
-    :search-keys="['no_transaksi', 'no_order', 'supplier', 'divisi', 'cabang']"
-    search-placeholder="no transaksi / supplier / cabang…"
-    export-name="pembelian"
-    sheet-name="Pembelian"
-  />
+  <AdminLayout title="Pembelian">
+    <ReportPage
+      title="Pembelian"
+      deferred-key="report"
+      :data="report"
+      :columns="columns"
+      row-key="no_transaksi"
+      :page="Number(form.page)"
+      :per-page="Number(form.per_page)"
+      :sort-key="form.sort"
+      :sort-dir="form.sort_dir"
+      :export-href="exportHref"
+      :summary-items="summaryItems"
+      @page-change="onPage"
+      @sort-change="onSort"
+    >
+      <template #filters>
+        <FilterPanel @submit="apply({ page: 1 })" @reset="reset">
+          <DateRangeField v-model:from="form.date_from" v-model:to="form.date_to" />
+          <SelectSearch v-model="form.kd_divisi" :options="divisiOptions" label="Divisi" />
+          <SelectSearch v-model="form.kd_supplier" :options="supplierOptions" label="Supplier" />
+          <Input v-model="form.search" label="Cari" placeholder="no transaksi / barang / supplier" />
+        </FilterPanel>
+      </template>
+    </ReportPage>
+  </AdminLayout>
 </template>

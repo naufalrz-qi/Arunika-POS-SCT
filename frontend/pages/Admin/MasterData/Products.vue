@@ -11,6 +11,7 @@ import Banner from "@/components/ui/Banner.vue";
 import DataTable from "@/components/ui/DataTable.vue";
 import Modal from "@/components/ui/Modal.vue";
 import Icon from "@/components/nav/Icon.vue";
+import ExportButton from "@/components/ui/ExportButton.vue";
 
 const props = defineProps({
   products: { type: Array, default: () => [] },
@@ -46,6 +47,16 @@ const columns = [
   { key: "stok", label: "Stok", sortable: true, align: "right" },
   { key: "status", label: "Status", align: "center" },
   { key: "actions", label: "", align: "right" },
+];
+
+const exportColumns = [
+  { key: "kd_barang", label: "Kode" },
+  { key: "nama", label: "Nama Produk" },
+  { key: "kategori", label: "Kategori" },
+  { key: "satuan", label: "Satuan" },
+  { key: "harga_jual", label: "Harga" },
+  { key: "stok", label: "Stok" },
+  { key: "status", label: "Status" },
 ];
 
 const showForm = ref(false);
@@ -84,7 +95,10 @@ function save() {
     <Banner v-if="conn_error" variant="warning" :message="conn_error" />
     <Card>
       <template #header>
-        <Button size="sm" @click="openCreate"><Icon name="plus" size="h-4 w-4" /> Tambah Produk</Button>
+        <div class="flex items-center justify-between">
+          <Button size="sm" @click="openCreate"><Icon name="plus" size="h-4 w-4" /> Tambah Produk</Button>
+          <ExportButton mode="client" filename="produk" :columns="exportColumns" :rows="filtered" sheet-name="Produk" />
+        </div>
       </template>
 
       <div class="mb-4 flex flex-col gap-3 sm:flex-row">

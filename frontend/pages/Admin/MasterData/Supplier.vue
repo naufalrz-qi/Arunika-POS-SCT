@@ -15,62 +15,56 @@ import SelectSearch from "@/components/ui/SelectSearch.vue";
 import StatusSelect from "@/components/ui/StatusSelect.vue";
 
 const props = defineProps({
-  customers: { type: Array, default: () => [] },
+  suppliers: { type: Array, default: () => [] },
   conn_error: { type: String, default: null },
 });
-
-const rupiah = (n) =>
-  new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n || 0);
 
 const search = ref("");
 const kotaFilter = ref("");
 const statusFilter = ref("");
 
 const kotaOptions = computed(() => {
-  const cities = new Set(props.customers.map(c => c.kota).filter(Boolean));
+  const cities = new Set(props.suppliers.map(s => s.kota).filter(Boolean));
   return Array.from(cities).map(city => ({ value: city, label: city }));
 });
 
 const filtered = computed(() => {
   const q = search.value.toLowerCase().trim();
-  return props.customers.filter(c => {
-    const matchQ = !q || c.nama.toLowerCase().includes(q) || c.kd_customer.toLowerCase().includes(q) || (c.hp || "").includes(q);
-    const matchKota = !kotaFilter.value || c.kota === kotaFilter.value;
-    const matchStatus = statusFilter.value === "" || (c.status === (statusFilter.value === "1" ? 1 : 0));
+  return props.suppliers.filter(s => {
+    const matchQ = !q || s.nama.toLowerCase().includes(q) || s.kd_supplier.toLowerCase().includes(q) || (s.kota || "").toLowerCase().includes(q);
+    const matchKota = !kotaFilter.value || s.kota === kotaFilter.value;
+    const matchStatus = statusFilter.value === "" || (s.status === (statusFilter.value === "1" ? 1 : 0));
     return matchQ && matchKota && matchStatus;
   });
 });
 
 const columns = [
-  { key: "kd_customer", label: "Kode", sortable: true },
+  { key: "kd_supplier", label: "Kode", sortable: true },
   { key: "nama", label: "Nama", sortable: true },
+  { key: "kota", label: "Kota" },
+  { key: "kontak", label: "Kontak" },
   { key: "hp", label: "HP" },
-  { key: "alamat", label: "Alamat" },
-  { key: "point", label: "Poin", sortable: true, align: "right" },
-  { key: "limit_kredit", label: "Limit Kredit", sortable: true, align: "right" },
   { key: "status", label: "Status", align: "center" },
   { key: "actions", label: "", align: "right" },
 ];
 
 const exportColumns = [
-  { key: "kd_customer", label: "Kode" },
+  { key: "kd_supplier", label: "Kode" },
   { key: "nama", label: "Nama" },
   { key: "kota", label: "Kota" },
+  { key: "kontak", label: "Kontak" },
   { key: "hp", label: "HP" },
-  { key: "alamat", label: "Alamat" },
-  { key: "point", label: "Poin" },
-  { key: "limit_kredit", label: "Limit Kredit" },
   { key: "status", label: "Status" },
 ];
 
 const showForm = ref(false);
 const form = useForm({
-  kd_customer: "",
+  kd_supplier: "",
   nama: "",
+  kota: "",
+  kontak: "",
   hp: "",
-  email: "",
-  alamat: "",
-  limit_kredit: 0,
+  status: 1,
   _editing: false,
 });
 
@@ -79,35 +73,35 @@ function openCreate() {
   form.clearErrors();
   showForm.value = true;
 }
-function openEdit(c) {
-  form.kd_customer = c.kd_customer;
-  form.nama = c.nama;
-  form.hp = c.hp;
-  form.email = c.email;
-  form.alamat = c.alamat;
-  form.limit_kredit = c.limit_kredit;
+function openEdit(s) {
+  form.kd_supplier = s.kd_supplier;
+  form.nama = s.nama;
+  form.kota = s.kota;
+  form.kontak = s.kontak;
+  form.hp = s.hp;
+  form.status = s.status;
   form._editing = true;
   showForm.value = true;
 }
 function save() {
-  form.post("/admin-panel/master/customers/save", { onSuccess: () => (showForm.value = false) });
+  form.post("/admin-panel/master/suppliers/save", { onSuccess: () => (showForm.value = false) });
 }
 </script>
 
 <template>
-  <AdminLayout title="Master Pelanggan">
+  <AdminLayout title="Master Supplier">
     <Banner v-if="conn_error" variant="warning" :message="conn_error" />
     <Card>
       <template #header>
         <div class="flex items-center justify-between">
-          <Button size="sm" @click="openCreate"><Icon name="plus" size="h-4 w-4" /> Tambah Pelanggan</Button>
-          <ExportButton mode="client" filename="pelanggan" :columns="exportColumns" :rows="filtered" sheet-name="Pelanggan" />
+          <Button size="sm" @click="openCreate"><Icon name="plus" size="h-4 w-4" /> Tambah Supplier</Button>
+          <ExportButton mode="client" filename="supplier" :columns="exportColumns" :rows="filtered" sheet-name="Supplier" />
         </div>
       </template>
 
       <div class="mb-4 flex flex-col gap-3 sm:flex-row">
         <div class="sm:max-w-xs sm:flex-1">
-          <Input v-model="search" placeholder="Cari kode / nama / HP…" />
+          <Input v-model="search" placeholder="Cari kode / nama / kota…" />
         </div>
         <div class="sm:w-48">
           <SelectSearch v-model="kotaFilter" :options="kotaOptions" placeholder="Semua kota" label="Kota" />
@@ -117,9 +111,7 @@ function save() {
         </div>
       </div>
 
-      <DataTable :columns="columns" row-key="kd_customer" :rows="filtered" empty-message="Pelanggan tidak ditemukan.">
-        <template #cell-point="{ value }">{{ value.toLocaleString("id-ID") }}</template>
-        <template #cell-limit_kredit="{ value }">{{ rupiah(value) }}</template>
+      <DataTable :columns="columns" row-key="kd_supplier" :rows="filtered" empty-message="Supplier tidak ditemukan.">
         <template #cell-status="{ value }">
           <Badge :variant="value ? 'success' : 'danger'">{{ value ? "Aktif" : "Nonaktif" }}</Badge>
         </template>
@@ -129,14 +121,14 @@ function save() {
       </DataTable>
     </Card>
 
-    <Modal :show="showForm" :title="form._editing ? 'Edit Pelanggan' : 'Tambah Pelanggan'" @close="showForm = false">
+    <Modal :show="showForm" :title="form._editing ? 'Edit Supplier' : 'Tambah Supplier'" @close="showForm = false">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Input v-model="form.kd_customer" label="Kode Pelanggan" :error="form.errors.kd_customer" required />
+        <Input v-model="form.kd_supplier" label="Kode Supplier" :error="form.errors.kd_supplier" required />
         <Input v-model="form.nama" label="Nama" :error="form.errors.nama" required />
+        <Input v-model="form.kota" label="Kota" />
+        <Input v-model="form.kontak" label="Kontak" />
         <Input v-model="form.hp" label="No. HP" />
-        <Input v-model="form.email" label="Email" type="email" />
-        <Input v-model="form.alamat" label="Alamat" />
-        <Input v-model="form.limit_kredit" label="Limit Kredit" type="number" />
+        <StatusSelect v-model="form.status" />
       </div>
       <template #footer>
         <Button variant="secondary" @click="showForm = false">Batal</Button>

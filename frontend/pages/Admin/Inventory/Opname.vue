@@ -1,45 +1,66 @@
 <script setup>
-import ReportView from "@/components/report/ReportView.vue";
-import Badge from "@/components/ui/Badge.vue";
-import { opname } from "@/mock/inventory";
+import { computed } from "vue";
+import AdminLayout from "@/layouts/AdminLayout.vue";
+import ReportPage from "@/components/report/ReportPage.vue";
+import FilterPanel from "@/components/ui/FilterPanel.vue";
+import DateRangeField from "@/components/ui/DateRangeField.vue";
+import SelectSearch from "@/components/ui/SelectSearch.vue";
+import Input from "@/components/ui/Input.vue";
+import { useServerReport } from "@/composables/useServerReport.js";
+
+const props = defineProps({
+  report: { type: Object, default: null },
+  filters: { type: Object, default: () => ({}) },
+});
+
+const URL = "/admin-panel/inventory/opname";
+const { form, apply, onPage, onSort, reset, exportHref } = useServerReport(URL, props.filters);
 
 const columns = [
-  { key: "no_transaksi", label: "No. Transaksi", sortable: true },
-  { key: "tanggal", label: "Tanggal", sortable: true },
+  { key: "no_transaksi", label: "No. Opname", sortable: true },
+  { key: "tanggal", label: "Tanggal", sortable: true, format: "date" },
   { key: "divisi", label: "Divisi" },
-  { key: "barang", label: "Barang", sortable: true },
-  { key: "satuan", label: "Satuan", align: "center" },
-  { key: "qty", label: "Qty", align: "right", format: "number" },
-  { key: "status", label: "Status", align: "center" },
-  { key: "keterangan", label: "Keterangan" },
-  { key: "petugas", label: "Petugas" },
+  { key: "barang", label: "Barang" },
+  { key: "qty_sistem", label: "Qty Sistem", align: "right", format: "number" },
+  { key: "qty_fisik", label: "Qty Fisik", align: "right", format: "number" },
+  { key: "selisih", label: "Selisih", align: "right", format: "number", sortable: true },
 ];
 
-const statusVariant = (s) => {
-  if (s === "Hilang" || s === "Rusak" || s.includes("(-)")) return "danger";
-  if (s.includes("(+)")) return "success";
-  return "neutral";
-};
+const divisiOptions = computed(() => props.report?.options?.divisi || []);
+const summaryItems = computed(() => {
+  const s = props.report?.summary || {};
+  const nf = new Intl.NumberFormat("id-ID");
+  return [
+    { label: "Jumlah Opname", value: nf.format(s.jml_opname || 0) },
+    { label: "Total Selisih", value: nf.format(s.total_selisih || 0) },
+  ];
+});
 </script>
 
 <template>
-  <ReportView
-    title="Opname Stok"
-    :columns="columns"
-    :rows="opname"
-    row-key="no_transaksi"
-    :search-keys="['no_transaksi', 'barang', 'petugas', 'divisi']"
-    search-placeholder="no transaksi / barang / petugas…"
-    export-name="opname-stok"
-    sheet-name="Opname Stok"
-  >
-    <template #cell-qty="{ value }">
-      <span :class="value < 0 ? 'font-semibold text-danger-600' : 'font-semibold text-success-700'">
-        {{ value > 0 ? "+" : "" }}{{ Number(value).toLocaleString("id-ID") }}
-      </span>
-    </template>
-    <template #cell-status="{ value }">
-      <Badge :variant="statusVariant(value)">{{ value }}</Badge>
-    </template>
-  </ReportView>
+  <AdminLayout title="Opname Stok">
+    <ReportPage
+      title="Opname Stok"
+      deferred-key="report"
+      :data="report"
+      :columns="columns"
+      row-key="no_transaksi"
+      :page="Number(form.page)"
+      :per-page="Number(form.per_page)"
+      :sort-key="form.sort"
+      :sort-dir="form.sort_dir"
+      :export-href="exportHref"
+      :summary-items="summaryItems"
+      @page-change="onPage"
+      @sort-change="onSort"
+    >
+      <template #filters>
+        <FilterPanel @submit="apply({ page: 1 })" @reset="reset">
+          <DateRangeField v-model:from="form.date_from" v-model:to="form.date_to" />
+          <SelectSearch v-model="form.kd_divisi" :options="divisiOptions" label="Divisi" />
+          <Input v-model="form.search" label="Cari" placeholder="no opname / barang / divisi" />
+        </FilterPanel>
+      </template>
+    </ReportPage>
+  </AdminLayout>
 </template>

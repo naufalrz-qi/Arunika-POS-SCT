@@ -1,32 +1,62 @@
 <script setup>
-import ReportView from "@/components/report/ReportView.vue";
-import Badge from "@/components/ui/Badge.vue";
-import { penjualanUser } from "@/mock/penjualan";
+import { computed } from "vue";
+import AdminLayout from "@/layouts/AdminLayout.vue";
+import ReportPage from "@/components/report/ReportPage.vue";
+import FilterPanel from "@/components/ui/FilterPanel.vue";
+import DateRangeField from "@/components/ui/DateRangeField.vue";
+import SelectSearch from "@/components/ui/SelectSearch.vue";
+import { useServerReport } from "@/composables/useServerReport.js";
+
+const props = defineProps({
+  report: { type: Object, default: null },
+  filters: { type: Object, default: () => ({}) },
+});
+
+const URL = "/admin-panel/laporan/penjualan-user";
+const { form, apply, onPage, onSort, reset, exportHref } = useServerReport(URL, props.filters);
 
 const columns = [
-  { key: "no_transaksi", label: "No. Transaksi", sortable: true },
-  { key: "tanggal", label: "Tanggal", sortable: true },
-  { key: "divisi", label: "Divisi" },
-  { key: "status", label: "Status", align: "center" },
-  { key: "customer", label: "Customer" },
-  { key: "nominal", label: "Nominal", align: "right", format: "rupiah", sortable: true },
-  { key: "user", label: "User", sortable: true },
+  { key: "user", label: "User / Kasir", sortable: true },
+  { key: "jml_nota", label: "Jml Nota", align: "right", format: "number", sortable: true },
+  { key: "total", label: "Total", align: "right", format: "rupiah", sortable: true },
 ];
+
+const divisiOptions = computed(() => props.report?.options?.divisi || []);
+const summaryItems = computed(() => {
+  const s = props.report?.summary || {};
+  const nf = new Intl.NumberFormat("id-ID");
+  const rp = new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 });
+  return [
+    { label: "Jumlah User", value: nf.format(s.jml_user || 0) },
+    { label: "Total Nota", value: nf.format(s.total_nota || 0) },
+    { label: "Total Nilai", value: rp.format(s.total_nilai || 0) },
+  ];
+});
 </script>
 
 <template>
-  <ReportView
-    title="Penjualan per User"
-    :columns="columns"
-    :rows="penjualanUser"
-    row-key="no_transaksi"
-    :search-keys="['no_transaksi', 'customer', 'user', 'divisi']"
-    search-placeholder="no transaksi / user / customer…"
-    export-name="penjualan-per-user"
-    sheet-name="Penjualan per User"
-  >
-    <template #cell-status="{ value }">
-      <Badge :variant="value === 'Lunas' ? 'success' : 'warning'">{{ value }}</Badge>
-    </template>
-  </ReportView>
+  <AdminLayout title="Penjualan per User">
+    <ReportPage
+      title="Penjualan per User"
+      deferred-key="report"
+      :data="report"
+      :columns="columns"
+      row-key="kd_user"
+      :page="Number(form.page)"
+      :per-page="Number(form.per_page)"
+      :sort-key="form.sort"
+      :sort-dir="form.sort_dir"
+      :export-href="exportHref"
+      :summary-items="summaryItems"
+      @page-change="onPage"
+      @sort-change="onSort"
+    >
+      <template #filters>
+        <FilterPanel @submit="apply({ page: 1 })" @reset="reset">
+          <DateRangeField v-model:from="form.date_from" v-model:to="form.date_to" />
+          <SelectSearch v-model="form.kd_divisi" :options="divisiOptions" label="Divisi" />
+        </FilterPanel>
+      </template>
+    </ReportPage>
+  </AdminLayout>
 </template>

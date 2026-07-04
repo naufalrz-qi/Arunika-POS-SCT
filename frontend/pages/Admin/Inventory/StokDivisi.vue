@@ -1,35 +1,43 @@
 <script setup>
+import { computed } from "vue";
+import { Deferred } from "@inertiajs/vue3";
+import AdminLayout from "@/layouts/AdminLayout.vue";
 import ReportView from "@/components/report/ReportView.vue";
-import { stokDivisi } from "@/mock/inventory";
+import LoadingCard from "@/components/ui/LoadingCard.vue";
+import Badge from "@/components/ui/Badge.vue";
 
+const props = defineProps({
+  data: { type: Object, default: null },
+});
+const rows = computed(() => props.data?.rows || []);
 const columns = [
-  { key: "kd_divisi", label: "Kode Divisi" },
-  { key: "divisi", label: "Divisi", sortable: true },
-  { key: "kd_barang", label: "Kode", sortable: true },
-  { key: "barang", label: "Barang", sortable: true },
-  { key: "kategori", label: "Kategori", sortable: true },
-  { key: "jenis", label: "Jenis" },
-  { key: "stok_akhir", label: "Stok Akhir", align: "right", format: "number", sortable: true },
-  { key: "supplier", label: "Supplier" },
+  { key: "kd_barang", label: "Kode" },
+  { key: "barang", label: "Barang" },
+  { key: "divisi", label: "Divisi" },
+  { key: "stok", label: "Stok", align: "right", format: "number" },
+  { key: "stok_min", label: "Stok Min", align: "right", format: "number" },
 ];
 </script>
 
 <template>
-  <ReportView
-    title="Stok per Divisi"
-    :columns="columns"
-    :rows="stokDivisi"
-    row-key="kd_barang"
-    :per-page="25"
-    :search-keys="['kd_barang', 'barang', 'kategori', 'divisi', 'supplier']"
-    search-placeholder="kode / barang / kategori…"
-    export-name="stok-per-divisi"
-    sheet-name="Stok per Divisi"
-  >
-    <template #cell-stok_akhir="{ value }">
-      <span :class="value <= 0 ? 'font-semibold text-danger-600' : 'font-semibold'">
-        {{ Number(value).toLocaleString("id-ID") }}
-      </span>
-    </template>
-  </ReportView>
+  <AdminLayout title="Stok per Divisi">
+    <Deferred data="data">
+      <template #fallback><LoadingCard message="Mengambil data…" /></template>
+      <ReportView
+        title="Stok per Divisi"
+        :columns="columns"
+        :rows="rows"
+        row-key="kd_barang"
+        :search-keys="['kd_barang','barang']"
+        export-name="stok-divisi"
+        sheet-name="Stok Divisi"
+        :conn-error="data && data.conn_error"
+      >
+        <template #cell-stok="{ row }">
+          <Badge v-if="row.stok < row.stok_min" variant="danger">{{ row.stok }}</Badge>
+          <span v-else>{{ new Intl.NumberFormat('id-ID').format(row.stok) }}</span>
+        </template>
+      </ReportView>
+    </Deferred>
+  </AdminLayout>
 </template>
