@@ -8,6 +8,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from core import mssql
+from core.cache import _cached, invalidate_master_cache
 
 MAX_ROWS = 500
 
@@ -57,16 +58,25 @@ def list_products(profile, search: str = "", kd_kategori: str = "") -> list[dict
         )
         barang = _dictify(cur)
 
-        categories = _key_map(cur, "SELECT kd_kategori, nama FROM m_kategori", "kd_kategori", "nama")
-        satuan_names = _key_map(cur, "SELECT kd_satuan, nama FROM m_satuan", "kd_satuan", "nama")
+        categories = _cached(
+            profile, "categories", lambda: _key_map(cur, "SELECT kd_kategori, nama FROM m_kategori", "kd_kategori", "nama")
+        )
+        satuan_names = _cached(
+            profile, "satuan_names", lambda: _key_map(cur, "SELECT kd_satuan, nama FROM m_satuan", "kd_satuan", "nama")
+        )
 
         # First selling unit + price per product.
-        cur.execute("SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan")
-        price_by_barang: dict[str, dict] = {}
-        for r in _dictify(cur):
-            price_by_barang.setdefault(r["kd_barang"], r)
+        def _build_satuan_price():
+            cur.execute("SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan")
+            by_barang: dict[str, dict] = {}
+            for r in _dictify(cur):
+                by_barang.setdefault(r["kd_barang"], r)
+            return by_barang
 
-        # Stock summed across divisions (in Python, not SQL).
+        price_by_barang = _cached(profile, "satuan_price", _build_satuan_price)
+
+        # Stock summed across divisions (in Python, not SQL) — NOT cached: this
+        # column changes on every POS sale/purchase/opname, must stay live.
         cur.execute("SELECT kd_barang, stok_akhir FROM m_barang_stok_akhir")
         stok_by_barang: dict[str, float] = {}
         for r in _dictify(cur):
@@ -154,28 +164,44 @@ def list_barang_edit(profile, search: str = "") -> list[dict]:
             params,
         )
         barang = _dictify(cur)
-        satuan_names = _key_map(cur, "SELECT kd_satuan, nama FROM m_satuan", "kd_satuan", "nama")
+        satuan_names = _cached(
+            profile, "satuan_names", lambda: _key_map(cur, "SELECT kd_satuan, nama FROM m_satuan", "kd_satuan", "nama")
+        )
 
-        cur.execute("SELECT kd_barang, kd_satuan, jumlah, harga_jual, margin, status FROM m_barang_satuan")
-        satuan_by: dict[str, list] = {}
-        for r in _dictify(cur):
-            satuan_by.setdefault(_st(r["kd_barang"]), []).append(r)
+        def _build_satuan_edit():
+            cur.execute("SELECT kd_barang, kd_satuan, jumlah, harga_jual, margin, status FROM m_barang_satuan")
+            by_barang: dict[str, list] = {}
+            for r in _dictify(cur):
+                by_barang.setdefault(_st(r["kd_barang"]), []).append(r)
+            return by_barang
 
-        cur.execute("SELECT kd_barang, kd_divisi, status FROM m_barang_divisi")
-        divisi_by: dict[str, list] = {}
-        for r in _dictify(cur):
-            divisi_by.setdefault(_st(r["kd_barang"]), []).append(r)
+        satuan_by = _cached(profile, "satuan_edit", _build_satuan_edit)
+
+        def _build_divisi_status():
+            cur.execute("SELECT kd_barang, kd_divisi, status FROM m_barang_divisi")
+            by_barang: dict[str, list] = {}
+            for r in _dictify(cur):
+                by_barang.setdefault(_st(r["kd_barang"]), []).append(r)
+            return by_barang
+
+        divisi_by = _cached(profile, "divisi_status", _build_divisi_status)
 
     is_retail = _is_retail(profile)
     modal_all: dict[str, dict] = {}
     if is_retail:
         cost = mssql.get_cost_source(profile)
         if cost:
-            # ponytail: full read of grosir m_barang_satuan (sama pola dgn read lain di sini)
-            with mssql.cursor(cost) as cur:
-                cur.execute("SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan")
-                for r in _dictify(cur):
-                    modal_all.setdefault(_st(r["kd_barang"]), {})[_st(r["kd_satuan"])] = _f(r["harga_jual"])
+            def _build_cost_satuan_price():
+                with mssql.cursor(cost) as cost_cur:
+                    cost_cur.execute("SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan")
+                    by_barang: dict[str, dict] = {}
+                    for r in _dictify(cost_cur):
+                        by_barang.setdefault(_st(r["kd_barang"]), {})[_st(r["kd_satuan"])] = _f(r["harga_jual"])
+                    return by_barang
+
+            # Keyed by the cost-source profile itself: multiple retail profiles
+            # sharing one grosir/gudang source reuse a single cached read.
+            modal_all = _cached(cost, "cost_satuan_price", _build_cost_satuan_price)
 
     out = []
     for b in barang:
@@ -270,12 +296,15 @@ def update_status(profile, kd_barang: str, table: str, status, kd_divisi: str | 
 
 def _harga_map(profile) -> dict:
     """(kd_barang, kd_satuan) -> {harga_jual, margin} untuk satu server."""
-    with mssql.cursor(profile) as cur:
-        cur.execute("SELECT kd_barang, kd_satuan, harga_jual, margin FROM m_barang_satuan")
-        return {
-            (_st(r["kd_barang"]), _st(r["kd_satuan"])): {"harga_jual": _f(r["harga_jual"]), "margin": _f(r["margin"])}
-            for r in _dictify(cur)
-        }
+    def build():
+        with mssql.cursor(profile) as cur:
+            cur.execute("SELECT kd_barang, kd_satuan, harga_jual, margin FROM m_barang_satuan")
+            return {
+                (_st(r["kd_barang"]), _st(r["kd_satuan"])): {"harga_jual": _f(r["harga_jual"]), "margin": _f(r["margin"])}
+                for r in _dictify(cur)
+            }
+
+    return _cached(profile, "harga_margin_map", build)
 
 
 def compare_harga_jual(src_profile, dst_profile) -> list[dict]:
@@ -334,9 +363,8 @@ def sync_harga_jual(src_profile, dst_profile, keys: list, with_margin: bool = Fa
 
 
 def _invalidate_inventory_cache(profile):
-    """Master-data writes must bust the inventory master cache (services.py)."""
-    from apps.inventory.services import invalidate_master_cache
-
+    """Master-data writes must bust the shared cache (core/cache.py) — this
+    clears both inventory's and master_data's cached lookups for the profile."""
     invalidate_master_cache(profile.pk)
 
 def _dictify(cursor) -> list[dict]:

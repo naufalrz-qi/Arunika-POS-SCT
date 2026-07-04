@@ -48,10 +48,14 @@ Kolom asli WAJIB dicek via INFORMATION_SCHEMA sebelum tulis SQL (nama kolom lega
 - **Collation CI**: SQL Server anggap `'LYG005'`=`'lyg005'` & abaikan trailing space; dict Python tidak. Semua join key `kd_*` di Python WAJIB `_k()`.
 - **Tanpa view/UDF/SP legacy** (PRD §5.3) — query langsung tabel, parameterized.
 - **Agregasi di SQL**, bukan Python (movement bisa jutaan row).
-- **Index tanggal header auto-ensured** per koneksi aktif (`apps/transactions/indexes.py`, hook di `get_active_profile`). Idempoten, background thread.
+- **Indexing manual saja** (`apps/transactions/indexes.py`, dict `INDEXES`) — tombol "Cek Indexing" di Kelola Server (`Admin/Connections`) atau `manage.py ensure_indexes`. TIDAK ada auto-trigger di `get_active_profile` lagi (dicabut — operator yang memutuskan kapan jalan). Idempoten, aman dipanggil ulang.
 - **.env Windows**: jangan `Set-Content -Encoding utf8` (bikin BOM rusak key pertama & mojibake). Pakai append UTF-8 tanpa BOM.
 - **Inertia POST = JSON**: `request.POST` kosong; baca via `apps/core/http.get_data()`.
 - **Tutup buku** server aktif lama (mis. Lotim 2024-01-12) → movement besar; sarankan klien tutup buku untuk percepat.
+- **Cache TTL bersama** (`core/cache.py`, `_cached`/`invalidate_master_cache`, 600s) dipakai `apps/inventory/services.py` DAN `apps/master_data/services.py` — satu dict, satu invalidasi. JANGAN cache kolom yang berubah tiap transaksi kasir (mis. `m_barang_stok_akhir`) atau query bertingkat search-term (key bisa membengkak).
+- **Filter tanggal report/listing**: dorong ke SQL (`WHERE tanggal >= ?`) kalau fungsinya tak perlu histori sebelum `date_from` untuk saldo berjalan (lihat `barang_histori` vs `stock_card` di `apps/inventory/services.py`) — jangan tarik semua baris ke Python lalu buang.
+- **Filter/fetch halaman laporan**: pakai `frontend/composables/useReportFilters.js` + `frontend/components/report/DateRangeFilter.vue`, jangan hand-roll `reactive`+`router.get` lagi per halaman.
+- **No `v-html`/dynamic `<component :is>`** dari string backend untuk konten sel laporan — pakai slot `cell-<key>` yang sudah ada di `DataTable.vue`.
 
 ## Scalability (Fase 0 SUDAH dikerjakan)
 

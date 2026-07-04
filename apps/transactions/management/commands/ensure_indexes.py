@@ -1,8 +1,8 @@
-"""Create the report/stock indexes on the legacy t_* tables (manual run).
+"""Create the report/stock indexes on the legacy t_*/m_* tables (manual run).
 
-Indexes are also built automatically in the background the first time a
-connection becomes active (see apps/transactions/indexes.py); this command is
-for off-hours runs or when the SQL login needs a DBA.
+Indexing is manual-only — trigger it here or via the "Cek Indexing" button on
+the Kelola Server page (apps/connections). Use this command for off-hours
+runs or when the SQL login needs a DBA.
 
     python manage.py ensure_indexes              # active connection
     python manage.py ensure_indexes --profile 3  # specific ServerProfile id
@@ -31,7 +31,7 @@ class Command(BaseCommand):
                 raise CommandError("Tidak ada koneksi aktif.")
 
         self.stdout.write(f"Server: {profile.name}")
-        failed = ensure_indexes(profile, out=self.stdout.write)
+        failed, _results = ensure_indexes(profile, out=self.stdout.write)
         if failed:
             self.stderr.write("\nIndex berikut belum dibuat. Jalankan lewat DBA di SSMS:")
             for _, ddl in failed:

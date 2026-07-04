@@ -38,6 +38,7 @@ const columns = [
   { key: "username", label: "User" },
   { key: "is_default", label: "Default", align: "center" },
   { key: "test", label: "Test", align: "center" },
+  { key: "indexing", label: "Indexing", align: "center" },
   { key: "actions", label: "", align: "right" },
 ];
 
@@ -52,6 +53,28 @@ async function testConnection(conn) {
     testState.value = { ...testState.value, [conn.id]: { loading: false, ok: false, message: "Gagal menghubungi server." } };
   }
 }
+
+// Index check results per connection id: { loading, ok, results, error }
+const indexState = ref({});
+const indexDetail = ref(null); // conn row currently showing the results modal
+async function checkIndexes(conn) {
+  indexState.value = { ...indexState.value, [conn.id]: { loading: true } };
+  try {
+    const { data } = await axios.post(`/admin-panel/connections/${conn.id}/check-indexes`);
+    indexState.value = {
+      ...indexState.value,
+      [conn.id]: { loading: false, ok: data.ok, results: data.results || [], error: data.error },
+    };
+  } catch {
+    indexState.value = {
+      ...indexState.value,
+      [conn.id]: { loading: false, ok: false, results: [], error: "Gagal menghubungi server." },
+    };
+  }
+  indexDetail.value = conn;
+}
+const statusVariant = { exists: "neutral", created: "success", failed: "danger" };
+const statusLabel = { exists: "Sudah ada", created: "Dibuat", failed: "Gagal" };
 
 function setDefault(conn) {
   router.post(`/admin-panel/connections/${conn.id}/set-default`, {}, { preserveScroll: true });
@@ -125,6 +148,26 @@ function confirmDelete() {
           </div>
         </template>
 
+        <template #cell-indexing="{ row }">
+          <div class="flex items-center justify-center gap-2">
+            <Button variant="secondary" size="sm" :loading="indexState[row.id]?.loading" @click="checkIndexes(row)">
+              Cek Indexing
+            </Button>
+            <Badge
+              v-if="indexState[row.id] && !indexState[row.id].loading"
+              :variant="indexState[row.id].ok ? 'success' : 'danger'"
+              class="cursor-pointer"
+              @click="indexDetail = row"
+            >
+              {{
+                indexState[row.id].error
+                  ? "Error"
+                  : `${indexState[row.id].results.filter((r) => r.status !== 'failed').length}/${indexState[row.id].results.length} OK`
+              }}
+            </Badge>
+          </div>
+        </template>
+
         <template #cell-actions="{ row }">
           <div class="flex justify-end gap-1">
             <Button variant="ghost" size="sm" @click="openEdit(row)"><Icon name="pencil" size="h-4 w-4" /></Button>
@@ -175,6 +218,29 @@ function confirmDelete() {
       <template #footer>
         <Button variant="secondary" @click="deleteTarget = null">Batal</Button>
         <Button variant="danger" @click="confirmDelete">Hapus</Button>
+      </template>
+    </Modal>
+
+    <!-- Index check results -->
+    <Modal :show="!!indexDetail" title="Hasil Cek Indexing" @close="indexDetail = null">
+      <p v-if="indexDetail && indexState[indexDetail.id]?.error" class="text-sm text-danger-fg">
+        {{ indexState[indexDetail.id].error }}
+      </p>
+      <ul v-else-if="indexDetail" class="divide-y divide-border-default">
+        <li
+          v-for="r in indexState[indexDetail.id]?.results"
+          :key="r.name"
+          class="flex items-center justify-between gap-3 py-2 text-sm"
+        >
+          <div>
+            <p class="font-medium text-ink">{{ r.name }}</p>
+            <p v-if="r.detail" class="text-xs text-ink-subtle">{{ r.detail }}</p>
+          </div>
+          <Badge :variant="statusVariant[r.status] || 'neutral'">{{ statusLabel[r.status] || r.status }}</Badge>
+        </li>
+      </ul>
+      <template #footer>
+        <Button variant="secondary" @click="indexDetail = null">Tutup</Button>
       </template>
     </Modal>
   </AdminLayout>

@@ -99,12 +99,6 @@ def get_active_profile(db_type: str | None = None):
 
     qs = ServerProfile.objects.filter(db_type=db_type) if db_type else ServerProfile.objects.all()
     profile = qs.filter(is_default=True).first() or qs.first()
-    if profile:
-        # Auto-build the report/stock indexes once per profile per process, in
-        # the background — new connections get them without a manual command.
-        from apps.transactions.indexes import ensure_indexes_async
-
-        ensure_indexes_async(profile)
     return profile
 
 
