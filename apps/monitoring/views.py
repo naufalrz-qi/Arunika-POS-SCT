@@ -195,6 +195,60 @@ def customers_index(request):
     )
 
 
+def suppliers_index(request):
+    profile = _active()
+    suppliers, conn_error = [], None
+    if profile:
+        try:
+            with mssql.cursor(profile) as cur:
+                cur.execute(
+                    "SELECT kd_supplier, nama, alamat, kota, telepon, flag_aktif FROM m_supplier ORDER BY nama"
+                )
+                suppliers = reporting.dictify(cur)
+                suppliers = reporting.clean_rows(suppliers)
+        except pyodbc.Error as exc:
+            conn_error = f"Gagal membaca supplier: {exc.args[-1] if exc.args else exc}"
+    else:
+        conn_error = CONN_ERROR
+    return render(
+        request,
+        "Admin/MasterData/Supplier",
+        props={"suppliers": suppliers, "conn_error": conn_error},
+    )
+
+
+def sync_history_index(request):
+    def load_sync():
+        # Query ActivityLog for sync operations
+        syncs = []
+        conn_error = None
+        try:
+            logs = ActivityLog.objects.filter(action="sync").order_by("-timestamp")[:100]
+            syncs = [
+                {
+                    "id": a.id,
+                    "created_at": a.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    "user": a.username or "—",
+                    "src": "source",  # placeholder
+                    "dst": "target",  # placeholder
+                    "mode": "full",  # placeholder
+                    "total_items": 0,  # placeholder
+                    "status": "ok",  # placeholder
+                    "detail": a.detail or "",
+                }
+                for a in logs
+            ]
+        except Exception as exc:
+            conn_error = f"Gagal membaca riwayat sync: {str(exc)}"
+        return {"rows": syncs, "conn_error": conn_error}
+
+    return render(
+        request,
+        "Admin/MasterData/SyncHistory",
+        props={"data": defer(load_sync)},
+    )
+
+
 def customers_save(request):
     request.session["flash_error"] = "Tulis ke master pelanggan belum aktif di fase ini."
     return redirect("/admin-panel/master/customers")
