@@ -840,7 +840,7 @@ _VOUCHER = {
     "filter_keys": [],
     "options": lambda p: {},
     "filename": "voucher",
-    "columns": [{"key": "kd_voucher", "label": "Kode Voucher"}, {"key": "divisi", "label": "Divisi"}, {"key": "nominal", "label": "Nominal", "format": "rupiah"}, {"key": "tanggal_awal", "label": "Tanggal Awal", "format": "date"}, {"key": "tanggal_akhir", "label": "Tanggal Akhir", "format": "date"}, {"key": "status", "label": "Status"}],
+    "columns": [{"key": "kd_voucher", "label": "Kode Voucher"}, {"key": "nama", "label": "Nama"}, {"key": "nominal", "label": "Nominal", "format": "rupiah"}, {"key": "dipakai", "label": "Dipakai"}, {"key": "nilai_dipakai", "label": "Nilai Dipakai", "format": "rupiah"}, {"key": "status", "label": "Status"}],
 }
 voucher = _report_view(_VOUCHER)
 voucher_export = _report_export(_VOUCHER)
@@ -877,20 +877,66 @@ fmi_stok = _report_view(_FMI_STOK)
 fmi_stok_export = _report_export(_FMI_STOK)
 
 # Kas & Shift
-_KAS = {
-    "component": "Admin/Cash/Kas",
-    "url": "/admin-panel/kas/harian",
-    "inner": rpt.kas,
-    "sorts": rpt.SORTS_KAS,
-    "default_sort": "tanggal",
-    "summary": rpt.SUMMARY_KAS,
-    "filter_keys": [],
-    "options": lambda p: {},
-    "filename": "kas-harian",
-    "columns": [{"key": "tanggal", "label": "Tanggal", "format": "date"}, {"key": "opening", "label": "Opening", "format": "rupiah"}, {"key": "masuk", "label": "Masuk", "format": "rupiah"}, {"key": "keluar", "label": "Keluar", "format": "rupiah"}, {"key": "penutupan", "label": "Penutupan", "format": "rupiah"}],
-}
-kas_harian = _report_view(_KAS)
-kas_harian_export = _report_export(_KAS)
+# Kas Harian has a running `saldo` column across the whole selected range, so
+# it can't reuse the generic _report_view (SQL-level OFFSET/FETCH pagination
+# would break the running total) — see rpt.kas_harian_rows().
+_KAS_COLUMNS = [
+    {"key": "tanggal", "label": "Tanggal"},
+    {"key": "kas", "label": "Kas"},
+    {"key": "keterangan", "label": "Keterangan"},
+    {"key": "masuk", "label": "Masuk"},
+    {"key": "keluar", "label": "Keluar"},
+    {"key": "saldo", "label": "Saldo"},
+]
+
+
+def kas_harian(request):
+    f = reporting.parse_report_params(request, rpt.SORTS_KAS, "tanggal")
+    f["kd_kas"] = (request.GET.get("kd_kas") or "").strip()
+
+    def load_report():
+        rows, total, summary, options, conn_error = [], 0, {}, {}, None
+        profile = _active()
+        if profile:
+            try:
+                with mssql.cursor(profile) as cur:
+                    all_rows, summary = rpt.kas_harian_rows(cur, f)
+                    options = {"kas": _opt_kas(profile)}
+                total = len(all_rows)
+                start = (f["page"] - 1) * f["per_page"]
+                rows = all_rows[start:start + f["per_page"]]
+            except pyodbc.Error as exc:
+                conn_error = f"Gagal membaca kas: {exc.args[-1] if exc.args else exc}"
+        else:
+            conn_error = CONN_ERROR
+        if f["warning"]:
+            conn_error = f["warning"] if not conn_error else f"{conn_error} {f['warning']}"
+        return {"rows": rows, "total": total, "summary": summary, "options": options, "conn_error": conn_error}
+
+    return render(request, "Admin/Cash/Kas", props={
+        "report": defer(load_report),
+        "filters": {
+            "date_from": f["date_from_s"], "date_to": f["date_to_s"], "kd_kas": f["kd_kas"],
+            "sort": f["sort"], "sort_dir": f["sort_dir"], "page": f["page"], "per_page": f["per_page"],
+        },
+    })
+
+
+def kas_harian_export(request):
+    f = reporting.parse_report_params(request, rpt.SORTS_KAS, "tanggal")
+    f["kd_kas"] = (request.GET.get("kd_kas") or "").strip()
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect("/admin-panel/kas/harian")
+    try:
+        with mssql.cursor(profile) as cur:
+            rows, _summary = rpt.kas_harian_rows(cur, f)
+    except pyodbc.Error as exc:
+        request.session["flash_error"] = f"Gagal export: {exc.args[-1] if exc.args else exc}"
+        return redirect("/admin-panel/kas/harian")
+    log_activity(request, "export", f"Export kas-harian: {len(rows)} baris")
+    return reporting.xlsx_response("kas-harian", _KAS_COLUMNS, rows)
 
 _SHIFT = {
     "component": "Admin/Cash/Shift",
@@ -902,7 +948,7 @@ _SHIFT = {
     "filter_keys": [],
     "options": lambda p: {},
     "filename": "shift",
-    "columns": [{"key": "tanggal", "label": "Tanggal", "format": "date"}, {"key": "nama_pegawai", "label": "Pegawai"}, {"key": "shift", "label": "Shift"}, {"key": "kd_kas", "label": "Kas"}],
+    "columns": [{"key": "no_transaksi", "label": "No. Transaksi"}, {"key": "tanggal", "label": "Tanggal", "format": "date"}, {"key": "pegawai", "label": "Pegawai"}, {"key": "shift", "label": "Shift"}, {"key": "keterangan", "label": "Keterangan"}],
 }
 shift = _report_view(_SHIFT)
 shift_export = _report_export(_SHIFT)

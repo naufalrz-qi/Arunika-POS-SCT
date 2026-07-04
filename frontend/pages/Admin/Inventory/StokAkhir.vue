@@ -11,7 +11,7 @@ const props = defineProps({
 const rows = computed(() => props.data?.rows || []);
 const columns = [
   { key: "kd_barang", label: "Kode" },
-  { key: "nama", label: "Barang" },
+  { key: "barang", label: "Barang" },
   { key: "kategori", label: "Kategori" },
   { key: "stok_akhir", label: "Stok Akhir", align: "right", format: "number" },
 ];
@@ -26,7 +26,7 @@ const columns = [
         :columns="columns"
         :rows="rows"
         row-key="kd_barang"
-        :search-keys="['kd_barang','nama']"
+        :search-keys="['kd_barang','barang']"
         export-name="stok-akhir"
         sheet-name="Stok Akhir"
         :conn-error="data && data.conn_error"
