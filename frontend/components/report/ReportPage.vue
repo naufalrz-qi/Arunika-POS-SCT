@@ -18,6 +18,7 @@ const props = defineProps({
   sortDir: { type: String, default: "desc" },
   exportHref: { type: String, default: "" },
   summaryItems: { type: Array, default: () => [] },
+  recent: { type: Boolean, default: false }, // showing the "100 terbaru" first-load snapshot
 });
 const emit = defineEmits(["page-change", "sort-change"]);
 </script>
@@ -36,6 +37,11 @@ const emit = defineEmits(["page-change", "sort-change"]);
       <template #fallback><TableSkeleton /></template>
 
       <Banner v-if="data && data.conn_error" variant="warning" :message="data.conn_error" />
+      <Banner
+        v-else-if="recent"
+        variant="info"
+        message="Menampilkan 100 data terbaru. Gunakan filter untuk melihat data lain."
+      />
       <SummaryStrip :items="summaryItems" />
       <ServerTable
         :columns="columns"

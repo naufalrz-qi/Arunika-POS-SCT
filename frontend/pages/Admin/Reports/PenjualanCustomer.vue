@@ -2,11 +2,13 @@
 import { computed } from "vue";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import ReportPage from "@/components/report/ReportPage.vue";
+import ColumnFilters from "@/components/report/ColumnFilters.vue";
 import FilterPanel from "@/components/ui/FilterPanel.vue";
-import DateRangeField from "@/components/ui/DateRangeField.vue";
+import DateModeField from "@/components/ui/DateModeField.vue";
 import SelectSearch from "@/components/ui/SelectSearch.vue";
 import Input from "@/components/ui/Input.vue";
 import { useServerReport } from "@/composables/useServerReport.js";
+import { paramNamesFor } from "@/utils/reportFilters.js";
 
 const props = defineProps({
   report: { type: Object, default: null },
@@ -14,20 +16,23 @@ const props = defineProps({
 });
 
 const URL = "/admin-panel/laporan/penjualan-customer";
-const { form, apply, onPage, onSort, reset, exportHref } = useServerReport(URL, props.filters);
+
+const filterDefs = [
+  { key: "customer", label: "Customer", type: "text" },
+  { key: "jml_nota", label: "Jml Nota", type: "number_range" },
+  { key: "total", label: "Total", type: "number_range" },
+];
+
+const { form, apply, onPage, onSort, reset, exportHref } = useServerReport(
+  URL, props.filters, paramNamesFor(filterDefs),
+);
 
 const columns = [
   { key: "kd_customer", label: "Kode" },
+  { key: "divisi", label: "Divisi", sortable: true },
   { key: "customer", label: "Customer" },
   { key: "jml_nota", label: "Jml Nota", align: "right", sortable: true },
   { key: "total", label: "Total Penjualan", align: "right", sortable: true },
-];
-
-const exportColumns = [
-  { key: "kd_customer", label: "Kode" },
-  { key: "customer", label: "Customer" },
-  { key: "jml_nota", label: "Jml Nota" },
-  { key: "total", label: "Total Penjualan" },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);
@@ -57,14 +62,26 @@ const summaryItems = computed(() => {
       :sort-dir="form.sort_dir"
       :export-href="exportHref"
       :summary-items="summaryItems"
+      :recent="!!filters.recent"
       @page-change="onPage"
       @sort-change="onSort"
     >
       <template #filters>
         <FilterPanel @submit="apply({ page: 1 })" @reset="reset">
-          <DateRangeField v-model:from="form.date_from" v-model:to="form.date_to" />
+          <DateModeField
+            label="Tanggal"
+            :mode="form.date_mode"
+            :from="form.date_from"
+            :to="form.date_to"
+            :date="form.date"
+            @update:mode="form.date_mode = $event"
+            @update:from="form.date_from = $event"
+            @update:to="form.date_to = $event"
+            @update:date="form.date = $event"
+          />
           <SelectSearch v-model="form.kd_divisi" :options="divisiOptions" label="Divisi" />
           <Input v-model="form.search" label="Cari" placeholder="customer" />
+          <ColumnFilters :filter-defs="filterDefs" :form="form" />
         </FilterPanel>
       </template>
     </ReportPage>

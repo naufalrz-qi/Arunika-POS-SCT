@@ -3,7 +3,7 @@ import { computed } from "vue";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import ReportPage from "@/components/report/ReportPage.vue";
 import FilterPanel from "@/components/ui/FilterPanel.vue";
-import DateRangeField from "@/components/ui/DateRangeField.vue";
+import DateModeField from "@/components/ui/DateModeField.vue";
 import SelectSearch from "@/components/ui/SelectSearch.vue";
 import Select from "@/components/ui/Select.vue";
 import { useServerReport } from "@/composables/useServerReport.js";
@@ -19,7 +19,10 @@ const { form, apply, onPage, onSort, reset, exportHref } = useServerReport(URL, 
 const columns = [
   { key: "periode", label: "Periode", sortable: true },
   { key: "jml_nota", label: "Jml Nota", align: "right", format: "number" },
-  { key: "total", label: "Total", align: "right", format: "rupiah", sortable: true },
+  { key: "total_kotor", label: "Total Kotor", align: "right", format: "rupiah" },
+  { key: "total_diskon", label: "Total Diskon", align: "right", format: "rupiah" },
+  { key: "total_pajak", label: "Total Pajak", align: "right", format: "rupiah" },
+  { key: "total", label: "Total Bersih", align: "right", format: "rupiah", sortable: true },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);
@@ -53,12 +56,23 @@ const summaryItems = computed(() => {
       :sort-dir="form.sort_dir"
       :export-href="exportHref"
       :summary-items="summaryItems"
+      :recent="!!filters.recent"
       @page-change="onPage"
       @sort-change="onSort"
     >
       <template #filters>
         <FilterPanel @submit="apply({ page: 1 })" @reset="reset">
-          <DateRangeField v-model:from="form.date_from" v-model:to="form.date_to" />
+          <DateModeField
+            label="Tanggal"
+            :mode="form.date_mode"
+            :from="form.date_from"
+            :to="form.date_to"
+            :date="form.date"
+            @update:mode="form.date_mode = $event"
+            @update:from="form.date_from = $event"
+            @update:to="form.date_to = $event"
+            @update:date="form.date = $event"
+          />
           <Select v-model="form.granularitas" :options="granularitasOptions" label="Granularitas" />
           <SelectSearch v-model="form.kd_divisi" :options="divisiOptions" label="Divisi" />
         </FilterPanel>

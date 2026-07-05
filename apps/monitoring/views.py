@@ -655,18 +655,27 @@ def _opt_kategori_biaya(profile):
     return [{"value": str(s), "label": _KATEGORI_BIAYA_LABEL.get(s, str(s))} for s in statuses]
 
 
-def _spec_params(request, spec):
-    f = reporting.parse_report_params(request, spec["sorts"], spec["default_sort"])
+def _spec_params(request, spec, export=False):
+    # Export always covers the full filtered range — never the "100 terbaru"
+    # first-load cap, which only applies to the on-screen table.
+    f = reporting.parse_report_params(
+        request, spec["sorts"], spec["default_sort"],
+        enable_recent=spec.get("enable_recent", False) and not export,
+        recent_sort=spec.get("recent_sort"),
+    )
     for k in spec.get("filter_keys", []):
         f[k] = (request.GET.get(k) or "").strip()
+    f["filters"] = reporting.parse_column_filters(request, spec.get("filters", {}))
     return f
 
 
 def _spec_filters(f, spec):
     filters = {
         "date_from": f["date_from_s"], "date_to": f["date_to_s"],
+        "date_mode": f["date_mode"],
         "search": f["search"], "sort": f["sort"], "sort_dir": f["sort_dir"],
         "page": f["page"], "per_page": f["per_page"],
+        "recent": f["recent"],
     }
     for k in spec.get("filter_keys", []):
         filters[k] = f[k]
@@ -683,9 +692,14 @@ def _report_view(spec):
             if profile:
                 try:
                     inner, params = spec["inner"](f)
+                    inner, params = reporting.apply_column_filters(inner, params, f)
                     with mssql.cursor(profile) as cur:
-                        rows, total = reporting.run_paged(cur, inner, params, f)
-                        cur.execute(f"SELECT {spec['summary']} FROM ({inner}) AS q", params)
+                        if f["recent"]:
+                            rows, total, summary_sql = reporting.run_recent(cur, inner, params, f)
+                        else:
+                            rows, total = reporting.run_paged(cur, inner, params, f)
+                            summary_sql = inner
+                        cur.execute(f"SELECT {spec['summary']} FROM ({summary_sql}) AS q", params)
                         summary = reporting.clean_rows(reporting.dictify(cur))[0]
                     if spec.get("options"):
                         options = spec["options"](profile)
@@ -706,13 +720,14 @@ def _report_view(spec):
 
 def _report_export(spec):
     def view(request):
-        f = _spec_params(request, spec)
+        f = _spec_params(request, spec, export=True)
         profile = _active()
         if not profile:
             request.session["flash_error"] = CONN_ERROR
             return redirect(spec["url"])
         try:
             inner, params = spec["inner"](f)
+            inner, params = reporting.apply_column_filters(inner, params, f)
             with mssql.cursor(profile) as cur:
                 rows = reporting.run_all(cur, inner, params, f)
         except pyodbc.Error as exc:
@@ -733,15 +748,36 @@ _PENJUALAN_ALL = {
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_PENJUALAN_DETAIL,
     "filter_keys": ["kd_divisi"],
+    "filters": rpt.FILTERS_PENJUALAN_DETAIL,
+    "enable_recent": True,
+    "recent_sort": "tanggal",
     "options": lambda p: {"divisi": _opt_divisi(p)},
     "filename": "penjualan-detail",
     "columns": [
         {"key": "no_transaksi", "label": "No. Transaksi"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "divisi", "label": "Divisi"},
         {"key": "customer", "label": "Customer"},
+        {"key": "kota", "label": "Kota"},
+        {"key": "jth_tempo", "label": "Jth. Tempo"},
+        {"key": "status", "label": "Status"},
+        {"key": "keterangan", "label": "Ket."},
+        {"key": "kd_barang", "label": "Kode Barang"},
         {"key": "barang", "label": "Barang"},
+        {"key": "kategori", "label": "Kategori"},
+        {"key": "sales", "label": "Sales"},
         {"key": "qty", "label": "Qty"},
+        {"key": "satuan", "label": "Satuan"},
         {"key": "harga", "label": "Harga"},
+        {"key": "dd1", "label": "DD1"},
+        {"key": "dd2", "label": "DD2"},
+        {"key": "dd3", "label": "DD3"},
+        {"key": "dd4", "label": "DD4"},
+        {"key": "dt1", "label": "DT1"},
+        {"key": "dt2", "label": "DT2"},
+        {"key": "dt3", "label": "DT3"},
+        {"key": "dt4", "label": "DT4"},
+        {"key": "harga_bersih", "label": "Harga Bersih"},
         {"key": "subtotal", "label": "Subtotal"},
     ],
 }
@@ -755,9 +791,26 @@ _PENJUALAN_NOTA = {
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_PENJUALAN_NOTA,
     "filter_keys": ["kd_divisi", "kd_customer"],
+    "filters": rpt.FILTERS_PENJUALAN_NOTA,
+    "enable_recent": True,
+    "recent_sort": "tanggal",
     "options": lambda p: {"divisi": _opt_divisi(p), "customer": _opt_customer(p)},
     "filename": "penjualan-nota",
-    "columns": [{"key": "no_transaksi", "label": "No. Nota"}, {"key": "tanggal", "label": "Tanggal"}, {"key": "customer", "label": "Customer"}, {"key": "total_kotor", "label": "Total Kotor"}, {"key": "potongan", "label": "Potongan"}, {"key": "pajak", "label": "Pajak"}, {"key": "total_bersih", "label": "Total Bersih"}],
+    "columns": [
+        {"key": "no_transaksi", "label": "No. Nota"},
+        {"key": "tanggal", "label": "Tanggal"},
+        {"key": "divisi", "label": "Divisi"},
+        {"key": "customer", "label": "Customer"},
+        {"key": "kota", "label": "Kota"},
+        {"key": "total_kotor", "label": "Total Kotor"},
+        {"key": "potongan", "label": "Potongan"},
+        {"key": "voucher", "label": "Voucher"},
+        {"key": "total_setelah_voucher", "label": "Total Setelah Voucher"},
+        {"key": "pajak", "label": "Pajak"},
+        {"key": "pajak2", "label": "Pajak 2"},
+        {"key": "total_bersih", "label": "Total Bersih"},
+        {"key": "petugas", "label": "Petugas"},
+    ],
 }
 penjualan_nota = _report_view(_PENJUALAN_NOTA)
 penjualan_nota_export = _report_export(_PENJUALAN_NOTA)
@@ -770,9 +823,16 @@ _PENJUALAN_CUSTOMER = {
     "default_sort": "total",
     "summary": rpt.SUMMARY_PENJUALAN_CUSTOMER,
     "filter_keys": ["kd_divisi"],
+    "filters": rpt.FILTERS_PENJUALAN_CUSTOMER,
+    "enable_recent": True,
     "options": lambda p: {"divisi": _opt_divisi(p)},
     "filename": "penjualan-customer",
-    "columns": [{"key": "customer", "label": "Customer"}, {"key": "jml_nota", "label": "Jml Nota"}, {"key": "total", "label": "Total"}],
+    "columns": [
+        {"key": "divisi", "label": "Divisi"},
+        {"key": "customer", "label": "Customer"},
+        {"key": "jml_nota", "label": "Jml Nota"},
+        {"key": "total", "label": "Total"},
+    ],
 }
 penjualan_customer = _report_view(_PENJUALAN_CUSTOMER)
 penjualan_customer_export = _report_export(_PENJUALAN_CUSTOMER)
@@ -782,12 +842,23 @@ _PENJUALAN_USER = {
     "url": "/admin-panel/laporan/penjualan-user",
     "inner": rpt.penjualan_user,
     "sorts": rpt.SORTS_PENJUALAN_USER,
-    "default_sort": "total",
+    "default_sort": "tanggal",
     "summary": rpt.SUMMARY_PENJUALAN_USER,
     "filter_keys": ["kd_divisi"],
+    "filters": rpt.FILTERS_PENJUALAN_USER,
+    "enable_recent": True,
+    "recent_sort": "tanggal",
     "options": lambda p: {"divisi": _opt_divisi(p)},
     "filename": "penjualan-user",
-    "columns": [{"key": "user", "label": "User / Kasir"}, {"key": "jml_nota", "label": "Jml Nota"}, {"key": "total", "label": "Total"}],
+    "columns": [
+        {"key": "no_transaksi", "label": "No. Transaksi"},
+        {"key": "tanggal", "label": "Tanggal"},
+        {"key": "divisi", "label": "Divisi"},
+        {"key": "status", "label": "Status Transaksi"},
+        {"key": "customer", "label": "Customer"},
+        {"key": "nominal", "label": "Nominal"},
+        {"key": "user", "label": "User"},
+    ],
 }
 penjualan_user = _report_view(_PENJUALAN_USER)
 penjualan_user_export = _report_export(_PENJUALAN_USER)
@@ -797,12 +868,21 @@ _PENJUALAN_PERIODE = {
     "url": "/admin-panel/laporan/penjualan-periode",
     "inner": rpt.penjualan_periode,
     "sorts": rpt.SORTS_PENJUALAN_PERIODE,
-    "default_sort": "total",
+    "default_sort": "periode",
     "summary": rpt.SUMMARY_PENJUALAN_PERIODE,
     "filter_keys": ["kd_divisi", "granularitas"],
+    "enable_recent": True,
+    "recent_sort": "periode",
     "options": lambda p: {"divisi": _opt_divisi(p)},
     "filename": "penjualan-periode",
-    "columns": [{"key": "periode", "label": "Periode"}, {"key": "jml_nota", "label": "Jml Nota"}, {"key": "total", "label": "Total"}],
+    "columns": [
+        {"key": "periode", "label": "Periode"},
+        {"key": "jml_nota", "label": "Jml Nota"},
+        {"key": "total_kotor", "label": "Total Kotor"},
+        {"key": "total_diskon", "label": "Total Diskon"},
+        {"key": "total_pajak", "label": "Total Pajak"},
+        {"key": "total", "label": "Total Bersih"},
+    ],
 }
 penjualan_periode = _report_view(_PENJUALAN_PERIODE)
 penjualan_periode_export = _report_export(_PENJUALAN_PERIODE)
@@ -815,9 +895,29 @@ _RETUR_PENJUALAN = {
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_RETUR_PENJUALAN,
     "filter_keys": ["kd_divisi", "kd_customer"],
+    "filters": rpt.FILTERS_RETUR_PENJUALAN,
+    "enable_recent": True,
+    "recent_sort": "tanggal",
     "options": lambda p: {"divisi": _opt_divisi(p), "customer": _opt_customer(p)},
     "filename": "retur-penjualan",
-    "columns": [{"key": "no_retur", "label": "No. Retur"}, {"key": "tanggal", "label": "Tanggal"}, {"key": "customer", "label": "Customer"}, {"key": "barang", "label": "Barang"}, {"key": "qty", "label": "Qty"}, {"key": "nilai", "label": "Nilai"}],
+    "columns": [
+        {"key": "no_retur", "label": "No. Retur"},
+        {"key": "tanggal", "label": "Tanggal"},
+        {"key": "no_bukti", "label": "No. Bukti"},
+        {"key": "divisi", "label": "Divisi"},
+        {"key": "keterangan_divisi", "label": "Keterangan Divisi"},
+        {"key": "kepala_nota", "label": "Kepala Nota"},
+        {"key": "customer", "label": "Customer"},
+        {"key": "barang", "label": "Barang"},
+        {"key": "satuan", "label": "Satuan"},
+        {"key": "jenis_bayar", "label": "Jenis Bayar"},
+        {"key": "no_rekening", "label": "No. Rekening"},
+        {"key": "bank", "label": "Bank"},
+        {"key": "harga_jual", "label": "Harga Jual"},
+        {"key": "sales", "label": "Sales"},
+        {"key": "qty", "label": "Qty"},
+        {"key": "nilai", "label": "Nilai"},
+    ],
 }
 retur_penjualan = _report_view(_RETUR_PENJUALAN)
 retur_penjualan_export = _report_export(_RETUR_PENJUALAN)
@@ -830,6 +930,9 @@ _PIUTANG = {
     "default_sort": "sisa_piutang",
     "summary": rpt.SUMMARY_PIUTANG,
     "filter_keys": ["kd_divisi", "kd_customer"],
+    "filters": rpt.FILTERS_PIUTANG,
+    "enable_recent": True,
+    "recent_sort": "tanggal",
     "options": lambda p: {"divisi": _opt_divisi(p), "customer": _opt_customer(p)},
     "filename": "piutang",
     "columns": [
@@ -855,9 +958,33 @@ _PEMBELIAN = {
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_PEMBELIAN,
     "filter_keys": ["kd_divisi", "kd_supplier"],
+    "filters": rpt.FILTERS_PEMBELIAN,
+    "enable_recent": True,
+    "recent_sort": "tanggal",
     "options": lambda p: {"divisi": _opt_divisi(p), "supplier": _opt_supplier(p)},
     "filename": "pembelian",
-    "columns": [{"key": "no_transaksi", "label": "No. Transaksi"}, {"key": "tanggal", "label": "Tanggal"}, {"key": "supplier", "label": "Supplier"}, {"key": "barang", "label": "Barang"}, {"key": "qty", "label": "Qty"}, {"key": "harga", "label": "Harga Beli"}, {"key": "subtotal", "label": "Subtotal"}],
+    "columns": [
+        {"key": "no_transaksi", "label": "No. Transaksi"},
+        {"key": "no_order", "label": "No Order"},
+        {"key": "tanggal", "label": "Tanggal"},
+        {"key": "supplier", "label": "Supplier"},
+        {"key": "note", "label": "Note"},
+        {"key": "barang", "label": "Barang"},
+        {"key": "qty", "label": "Qty"},
+        {"key": "satuan", "label": "Satuan"},
+        {"key": "harga", "label": "Harga Beli"},
+        {"key": "diskon_item1", "label": "Diskon Item 1"},
+        {"key": "diskon_item2", "label": "Diskon Item 2"},
+        {"key": "diskon_item3", "label": "Diskon Item 3"},
+        {"key": "diskon_item4", "label": "Diskon Item 4"},
+        {"key": "diskon_total1", "label": "Diskon Total 1"},
+        {"key": "diskon_total2", "label": "Diskon Total 2"},
+        {"key": "diskon_total3", "label": "Diskon Total 3"},
+        {"key": "diskon_total4", "label": "Diskon Total 4"},
+        {"key": "pajak", "label": "Pajak"},
+        {"key": "ppnbm", "label": "PPnBM"},
+        {"key": "subtotal", "label": "Subtotal"},
+    ],
 }
 pembelian = _report_view(_PEMBELIAN)
 pembelian_export = _report_export(_PEMBELIAN)
@@ -870,9 +997,16 @@ _PEMBELIAN_SUPPLIER = {
     "default_sort": "total",
     "summary": rpt.SUMMARY_PEMBELIAN_SUPPLIER,
     "filter_keys": ["kd_divisi"],
+    "filters": rpt.FILTERS_PEMBELIAN_SUPPLIER,
+    "enable_recent": True,
     "options": lambda p: {"divisi": _opt_divisi(p)},
     "filename": "pembelian-supplier",
-    "columns": [{"key": "supplier", "label": "Supplier"}, {"key": "jml_nota", "label": "Jml Nota"}, {"key": "total", "label": "Total"}],
+    "columns": [
+        {"key": "divisi", "label": "Divisi"},
+        {"key": "supplier", "label": "Supplier"},
+        {"key": "jml_nota", "label": "Jml Nota"},
+        {"key": "total", "label": "Total"},
+    ],
 }
 pembelian_supplier = _report_view(_PEMBELIAN_SUPPLIER)
 pembelian_supplier_export = _report_export(_PEMBELIAN_SUPPLIER)
@@ -882,12 +1016,21 @@ _PEMBELIAN_PERIODE = {
     "url": "/admin-panel/laporan/pembelian-periode",
     "inner": rpt.pembelian_periode,
     "sorts": rpt.SORTS_PEMBELIAN_PERIODE,
-    "default_sort": "total",
+    "default_sort": "periode",
     "summary": rpt.SUMMARY_PEMBELIAN_PERIODE,
     "filter_keys": ["kd_divisi", "granularitas"],
+    "enable_recent": True,
+    "recent_sort": "periode",
     "options": lambda p: {"divisi": _opt_divisi(p)},
     "filename": "pembelian-periode",
-    "columns": [{"key": "periode", "label": "Periode"}, {"key": "jml_nota", "label": "Jml Nota"}, {"key": "total", "label": "Total"}],
+    "columns": [
+        {"key": "periode", "label": "Periode"},
+        {"key": "jml_nota", "label": "Jml Nota"},
+        {"key": "total_kotor", "label": "Total Kotor"},
+        {"key": "total_diskon", "label": "Total Diskon"},
+        {"key": "total_pajak", "label": "Total Pajak"},
+        {"key": "total", "label": "Total Bersih"},
+    ],
 }
 pembelian_periode = _report_view(_PEMBELIAN_PERIODE)
 pembelian_periode_export = _report_export(_PEMBELIAN_PERIODE)
@@ -900,9 +1043,29 @@ _RETUR_PEMBELIAN = {
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_RETUR_PEMBELIAN,
     "filter_keys": ["kd_divisi", "kd_supplier"],
+    "filters": rpt.FILTERS_RETUR_PEMBELIAN,
+    "enable_recent": True,
+    "recent_sort": "tanggal",
     "options": lambda p: {"divisi": _opt_divisi(p), "supplier": _opt_supplier(p)},
     "filename": "retur-pembelian",
-    "columns": [{"key": "no_retur", "label": "No. Retur"}, {"key": "tanggal", "label": "Tanggal"}, {"key": "supplier", "label": "Supplier"}, {"key": "barang", "label": "Barang"}, {"key": "qty", "label": "Qty"}, {"key": "nilai", "label": "Nilai"}],
+    "columns": [
+        {"key": "no_retur", "label": "No. Retur"},
+        {"key": "tanggal", "label": "Tanggal"},
+        {"key": "no_bukti", "label": "No. Bukti"},
+        {"key": "divisi", "label": "Divisi"},
+        {"key": "supplier", "label": "Supplier"},
+        {"key": "pembayaran", "label": "Pembayaran"},
+        {"key": "bank", "label": "Bank"},
+        {"key": "no_rekening", "label": "No. Rekening"},
+        {"key": "petugas", "label": "Petugas"},
+        {"key": "kd_barang", "label": "Kode Barang"},
+        {"key": "barang", "label": "Barang"},
+        {"key": "harga", "label": "Harga"},
+        {"key": "satuan", "label": "Satuan"},
+        {"key": "keterangan", "label": "Keterangan"},
+        {"key": "qty", "label": "Qty"},
+        {"key": "nilai", "label": "Nilai"},
+    ],
 }
 retur_pembelian = _report_view(_RETUR_PEMBELIAN)
 retur_pembelian_export = _report_export(_RETUR_PEMBELIAN)
