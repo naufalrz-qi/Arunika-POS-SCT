@@ -1,14 +1,20 @@
 <script setup>
 import { computed } from "vue";
-import { Deferred } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
-import ReportView from "@/components/report/ReportView.vue";
-import LoadingCard from "@/components/ui/LoadingCard.vue";
+import ReportPage from "@/components/report/ReportPage.vue";
+import FilterPanel from "@/components/ui/FilterPanel.vue";
+import DateRangeField from "@/components/ui/DateRangeField.vue";
+import Input from "@/components/ui/Input.vue";
+import { useServerReport } from "@/composables/useServerReport.js";
 
 const props = defineProps({
-  data: { type: Object, default: null },
+  report: { type: Object, default: null },
+  filters: { type: Object, default: () => ({}) },
 });
-const rows = computed(() => props.data?.rows || []);
+
+const URL = "/admin-panel/promo/diskon";
+const { form, apply, onPage, onSort, reset, exportHref } = useServerReport(URL, props.filters);
+
 const columns = [
   { key: "kd_promo", label: "Kode Promo" },
   { key: "divisi", label: "Divisi" },
@@ -18,22 +24,40 @@ const columns = [
   { key: "tanggal_akhir", label: "Tanggal Akhir", format: "date" },
   { key: "status", label: "Status" },
 ];
+
+const summaryItems = computed(() => {
+  const s = props.report?.summary || {};
+  const nf = new Intl.NumberFormat("id-ID");
+  return [
+    { label: "Jumlah Baris", value: nf.format(s.jml_baris || 0) },
+    { label: "Jumlah Barang", value: nf.format(s.jml_barang || 0) },
+  ];
+});
 </script>
 
 <template>
   <AdminLayout title="Promo & Diskon">
-    <Deferred data="data">
-      <template #fallback><LoadingCard message="Mengambil data…" /></template>
-      <ReportView
-        title="Promo & Diskon"
-        :columns="columns"
-        :rows="rows"
-        row-key="kd_promo"
-        :search-keys="['kd_promo','barang']"
-        export-name="promo-diskon"
-        sheet-name="Promo"
-        :conn-error="data && data.conn_error"
-      />
-    </Deferred>
+    <ReportPage
+      title="Promo & Diskon"
+      deferred-key="report"
+      :data="report"
+      :columns="columns"
+      row-key="kd_promo"
+      :page="Number(form.page)"
+      :per-page="Number(form.per_page)"
+      :sort-key="form.sort"
+      :sort-dir="form.sort_dir"
+      :export-href="exportHref"
+      :summary-items="summaryItems"
+      @page-change="onPage"
+      @sort-change="onSort"
+    >
+      <template #filters>
+        <FilterPanel @submit="apply({ page: 1 })" @reset="reset">
+          <DateRangeField v-model:from="form.date_from" v-model:to="form.date_to" />
+          <Input v-model="form.search" label="Cari" placeholder="kode promo / barang" />
+        </FilterPanel>
+      </template>
+    </ReportPage>
   </AdminLayout>
 </template>

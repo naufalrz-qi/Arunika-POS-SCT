@@ -37,9 +37,9 @@ watch(
         >
           <div
             v-if="show"
-            :class="['relative w-full rounded-card bg-surface shadow-xl', sizes[size]]"
+            :class="['relative flex max-h-[85vh] w-full flex-col rounded-card bg-surface shadow-xl', sizes[size]]"
           >
-            <div class="flex items-center justify-between border-b border-border-default px-5 py-3.5">
+            <div class="flex shrink-0 items-center justify-between border-b border-border-default px-5 py-3.5">
               <h3 class="text-base font-semibold text-ink">{{ title }}</h3>
               <button class="rounded p-1 text-ink-muted hover:bg-surface-3 hover:text-ink" @click="emit('close')">
                 <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -47,10 +47,10 @@ watch(
                 </svg>
               </button>
             </div>
-            <div class="px-5 py-4">
+            <div class="min-h-0 overflow-y-auto px-5 py-4">
               <slot />
             </div>
-            <div v-if="$slots.footer" class="flex justify-end gap-2 border-t border-border-default px-5 py-3.5">
+            <div v-if="$slots.footer" class="flex shrink-0 justify-end gap-2 border-t border-border-default px-5 py-3.5">
               <slot name="footer" />
             </div>
           </div>

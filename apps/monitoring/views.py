@@ -659,7 +659,7 @@ _PENJUALAN_CUSTOMER = {
     "filter_keys": ["kd_divisi"],
     "options": lambda p: {"divisi": _opt_divisi(p)},
     "filename": "penjualan-customer",
-    "columns": [{"key": "customer", "label": "Customer"}, {"key": "kota", "label": "Kota"}, {"key": "jml_nota", "label": "Jml Nota"}, {"key": "total", "label": "Total"}],
+    "columns": [{"key": "customer", "label": "Customer"}, {"key": "jml_nota", "label": "Jml Nota"}, {"key": "total", "label": "Total"}],
 }
 penjualan_customer = _report_view(_PENJUALAN_CUSTOMER)
 penjualan_customer_export = _report_export(_PENJUALAN_CUSTOMER)
@@ -809,7 +809,7 @@ _OPNAME = {
     "filter_keys": ["kd_divisi"],
     "options": lambda p: {"divisi": _opt_divisi(p)},
     "filename": "opname",
-    "columns": [{"key": "kd_barang", "label": "Kd. Barang"}, {"key": "barang", "label": "Barang"}, {"key": "qty_sistem", "label": "Qty Sistem", "format": "number"}, {"key": "qty_fisik", "label": "Qty Fisik", "format": "number"}, {"key": "diferensi", "label": "Diferensi", "format": "number"}, {"key": "tanggal", "label": "Tanggal", "format": "date"}],
+    "columns": [{"key": "no_transaksi", "label": "No. Opname"}, {"key": "tanggal", "label": "Tanggal", "format": "date"}, {"key": "divisi", "label": "Divisi"}, {"key": "kd_barang", "label": "Kd. Barang"}, {"key": "barang", "label": "Barang"}, {"key": "qty_sistem", "label": "Qty Sistem", "format": "number"}, {"key": "qty_fisik", "label": "Qty Fisik", "format": "number"}, {"key": "diferensi", "label": "Diferensi", "format": "number"}],
 }
 opname = _report_view(_OPNAME)
 opname_export = _report_export(_OPNAME)
@@ -871,7 +871,7 @@ _FMI_STOK = {
     "filter_keys": ["kd_divisi"],
     "options": lambda p: {"divisi": _opt_divisi(p)},
     "filename": "fmi-stok",
-    "columns": [{"key": "kd_barang", "label": "Kode"}, {"key": "barang", "label": "Barang"}, {"key": "kategori", "label": "Kategori"}, {"key": "qty_stok", "label": "Qty Stok", "align": "right", "format": "number"}, {"key": "nilai_stok", "label": "Nilai Stok", "align": "right", "format": "rupiah"}, {"key": "turnover_rate", "label": "Turnover"}],
+    "columns": [{"key": "kd_barang", "label": "Kode"}, {"key": "barang", "label": "Barang"}, {"key": "kategori", "label": "Kategori"}, {"key": "qty_stok", "label": "Qty Stok", "align": "right", "format": "number"}, {"key": "nilai_stok", "label": "Nilai Stok", "align": "right", "format": "rupiah"}, {"key": "terjual", "label": "Terjual", "align": "right", "format": "number"}, {"key": "rasio", "label": "Rasio", "align": "right", "format": "number"}, {"key": "status", "label": "Status"}],
 }
 fmi_stok = _report_view(_FMI_STOK)
 fmi_stok_export = _report_export(_FMI_STOK)

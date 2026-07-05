@@ -91,7 +91,9 @@ def penjualan_detail(f):
 
 SORTS_PENJUALAN_NOTA = {"no_transaksi": "no_transaksi", "tanggal": "tanggal", "total_bersih": "total_bersih"}
 SUMMARY_PENJUALAN_NOTA = (
-    "COUNT(*) AS jml_baris, 0 AS total_qty, COALESCE(SUM(q.total_bersih), 0) AS total_nilai"
+    "COUNT(*) AS jml_baris, COALESCE(SUM(q.total_kotor), 0) AS total_kotor, "
+    "COALESCE(SUM(q.potongan), 0) AS total_potongan, COALESCE(SUM(q.pajak), 0) AS total_pajak, "
+    "COALESCE(SUM(q.total_bersih), 0) AS total_bersih"
 )
 
 def penjualan_nota(f):
@@ -116,7 +118,8 @@ def penjualan_nota(f):
 
 SORTS_PENJUALAN_CUSTOMER = {"customer": "customer", "jml_nota": "jml_nota", "total": "total"}
 SUMMARY_PENJUALAN_CUSTOMER = (
-    "COUNT(DISTINCT q.kd_customer) AS jml_baris, 0 AS total_qty, COALESCE(SUM(q.total_bersih), 0) AS total_nilai"
+    "COUNT(DISTINCT q.kd_customer) AS jml_customer, COALESCE(SUM(q.jml_nota), 0) AS total_nota, "
+    "COALESCE(SUM(q.total), 0) AS total_nilai"
 )
 
 def penjualan_customer(f):
@@ -138,7 +141,8 @@ def penjualan_customer(f):
 
 SORTS_PENJUALAN_USER = {"user": "[user]", "jml_nota": "jml_nota", "total": "total"}
 SUMMARY_PENJUALAN_USER = (
-    "COUNT(DISTINCT q.kd_user) AS jml_baris, 0 AS total_qty, COALESCE(SUM(q.total), 0) AS total_nilai"
+    "COUNT(DISTINCT q.kd_user) AS jml_user, COALESCE(SUM(q.jml_nota), 0) AS total_nota, "
+    "COALESCE(SUM(q.total), 0) AS total_nilai"
 )
 
 def penjualan_user(f):
@@ -159,7 +163,8 @@ def penjualan_user(f):
 
 SORTS_PENJUALAN_PERIODE = {"periode": "periode", "total": "total"}
 SUMMARY_PENJUALAN_PERIODE = (
-    "COUNT(DISTINCT q.periode) AS jml_baris, 0 AS total_qty, COALESCE(SUM(q.total), 0) AS total_nilai"
+    "COUNT(DISTINCT q.periode) AS jml_periode, COALESCE(SUM(q.jml_nota), 0) AS total_nota, "
+    "COALESCE(SUM(q.total), 0) AS total_nilai"
 )
 
 def penjualan_periode(f):
@@ -182,7 +187,7 @@ def penjualan_periode(f):
 
 SORTS_RETUR_PENJUALAN = {"no_retur": "no_retur", "tanggal": "tanggal", "nilai": "nilai"}
 SUMMARY_RETUR_PENJUALAN = (
-    "COUNT(*) AS jml_baris, COALESCE(SUM(q.qty), 0) AS total_qty, COALESCE(SUM(q.nilai), 0) AS total_nilai"
+    "COUNT(*) AS jml_retur, COALESCE(SUM(q.qty), 0) AS total_qty, COALESCE(SUM(q.nilai), 0) AS total_nilai"
 )
 
 def retur_penjualan(f):
@@ -231,7 +236,7 @@ def pembelian(f):
 
 SORTS_RETUR_PEMBELIAN = {"no_retur": "no_retur", "tanggal": "tanggal", "nilai": "nilai"}
 SUMMARY_RETUR_PEMBELIAN = (
-    "COUNT(*) AS jml_baris, COALESCE(SUM(q.qty), 0) AS total_qty, COALESCE(SUM(q.nilai), 0) AS total_nilai"
+    "COUNT(*) AS jml_retur, COALESCE(SUM(q.qty), 0) AS total_qty, COALESCE(SUM(q.nilai), 0) AS total_nilai"
 )
 
 def retur_pembelian(f):
@@ -261,12 +266,13 @@ def opname(f):
     where, params = _base_where(f)
     _search(where, params, f, ["b.kd_barang", "b.nama"])
     inner = (
-        "SELECT h.kd_barang, b.nama AS barang, "
+        "SELECT h.no_transaksi, h.tanggal, COALESCE(dv.nama, '') AS divisi, h.kd_barang, b.nama AS barang, "
         "CASE WHEN h.status=2 THEN 0 ELSE h.qty END AS qty_sistem, "
         "CASE WHEN h.status=2 THEN h.qty ELSE 0 END AS qty_fisik, "
-        "CASE WHEN h.status=2 THEN h.qty ELSE -h.qty END AS diferensi, h.tanggal "
+        "CASE WHEN h.status=2 THEN h.qty ELSE -h.qty END AS diferensi "
         "FROM t_opname_stok h "
         "INNER JOIN m_barang b ON h.kd_barang = b.kd_barang "
+        "LEFT JOIN m_divisi dv ON h.kd_divisi = dv.kd_divisi "
         f"WHERE {' AND '.join(where)}"
     )
     return inner, params
@@ -481,14 +487,15 @@ SUMMARY_FMI_PENJUALAN = (
 def fmi_penjualan(f):
     where, params = _base_where(f)
     inner = (
-        "SELECT b.kd_barang, b.nama AS barang, b.kd_kategori AS kategori, "
+        "SELECT b.kd_barang, b.nama AS barang, COALESCE(k.nama, '') AS kategori, "
         "COALESCE(SUM(d.qty), 0) AS qty_terjual, COALESCE(SUM(d.qty * d.harga_jual * (1-COALESCE(d.diskon1,0)/100.0)), 0) AS nilai, "
         "CASE WHEN COALESCE(SUM(d.qty), 0) > 100 THEN 'A' WHEN COALESCE(SUM(d.qty), 0) > 50 THEN 'B' ELSE 'C' END AS kelas "
         "FROM m_barang b "
+        "LEFT JOIN m_kategori k ON b.kd_kategori = k.kd_kategori "
         "LEFT JOIN t_penjualan_detail d ON b.kd_barang = d.kd_barang "
         "LEFT JOIN t_penjualan h ON d.no_transaksi = h.no_transaksi "
         f"WHERE 1=1 {' AND ' + ' AND '.join(where) if where else ''} "
-        "GROUP BY b.kd_barang, b.nama, b.kd_kategori"
+        "GROUP BY b.kd_barang, b.nama, k.nama"
     )
     return inner, params
 
@@ -497,12 +504,18 @@ def fmi_penjualan(f):
 # t_stok doesn't exist and m_barang has no harga_beli column. Real live stock
 # snapshot is m_barang_stok_akhir (kd_divisi, kd_barang, stok_akhir); cost
 # price comes from m_barang_divisi.harga_beli_awal (same fallback used by
-# apps/inventory/services.py's _purchase_prices). This is a point-in-time
-# snapshot, not date-ranged — no tanggal column to filter on.
+# apps/inventory/services.py's _purchase_prices). The stock snapshot itself
+# is point-in-time (no tanggal column), but "terjual"/"rasio"/"status" are
+# computed against how much sold in the requested date_from-date_to window,
+# to give an actual velocity read instead of a bare in-stock/out-of-stock flag.
 
-SORTS_FMI_STOK = {"qty_stok": "qty_stok", "nilai_stok": "nilai_stok", "turnover_rate": "turnover_rate"}
+_FMI_STOK_KRITIS_HARI = 7      # < this many days of stock left at current pace -> Kritis
+_FMI_STOK_OVERSTOCK_HARI = 90  # > this many days of stock left (or never sold) -> Overstock
+
+SORTS_FMI_STOK = {"qty_stok": "qty_stok", "nilai_stok": "nilai_stok", "terjual": "terjual", "rasio": "rasio"}
 SUMMARY_FMI_STOK = (
-    "COUNT(DISTINCT kd_barang) AS jml_barang, COALESCE(SUM(qty_stok), 0) AS total_qty, COALESCE(SUM(nilai_stok), 0) AS total_nilai"
+    "COUNT(DISTINCT kd_barang) AS jml_barang, COALESCE(SUM(qty_stok), 0) AS total_qty, "
+    "COALESCE(SUM(nilai_stok), 0) AS total_nilai, COALESCE(SUM(terjual), 0) AS total_terjual"
 )
 
 def fmi_stok(f):
@@ -511,15 +524,32 @@ def fmi_stok(f):
         where.append("s.kd_divisi = ?")
         params.append(f["kd_divisi"])
     _search(where, params, f, ["b.kd_barang", "b.nama"])
-    inner = (
-        "SELECT b.kd_barang, b.nama AS barang, b.kd_kategori AS kategori, "
+
+    days = max((f["date_to"].date() - f["date_from"].date()).days + 1, 1)
+    sold_params = [f["date_from"], f["date_to"]]
+
+    base = (
+        "SELECT b.kd_barang, b.nama AS barang, COALESCE(k.nama, '') AS kategori, "
         "COALESCE(SUM(s.stok_akhir), 0) AS qty_stok, "
         "COALESCE(SUM(s.stok_akhir * bd.harga_beli_awal), 0) AS nilai_stok, "
-        "CASE WHEN COALESCE(SUM(s.stok_akhir), 0) > 0 THEN 1 ELSE 0 END AS turnover_rate "
+        "COALESCE(MAX(sold.terjual), 0) AS terjual "
         "FROM m_barang b "
+        "LEFT JOIN m_kategori k ON b.kd_kategori = k.kd_kategori "
         "LEFT JOIN m_barang_stok_akhir s ON b.kd_barang = s.kd_barang "
         "LEFT JOIN m_barang_divisi bd ON s.kd_barang = bd.kd_barang AND s.kd_divisi = bd.kd_divisi "
+        "LEFT JOIN (SELECT d.kd_barang, SUM(d.qty) AS terjual FROM t_penjualan_detail d "
+        "INNER JOIN t_penjualan h ON d.no_transaksi = h.no_transaksi "
+        "WHERE h.tanggal >= ? AND h.tanggal <= ? GROUP BY d.kd_barang) sold ON b.kd_barang = sold.kd_barang "
         f"WHERE {' AND '.join(where)} "
-        "GROUP BY b.kd_barang, b.nama, b.kd_kategori"
+        "GROUP BY b.kd_barang, b.nama, k.nama"
     )
-    return inner, params
+    inner = (
+        "SELECT x.*, ROUND(x.terjual / NULLIF(x.qty_stok, 0), 2) AS rasio, "
+        "CASE "
+        "WHEN x.terjual = 0 AND x.qty_stok > 0 THEN 'Overstock' "
+        f"WHEN x.terjual > 0 AND x.qty_stok / (x.terjual / {days}.0) < {_FMI_STOK_KRITIS_HARI} THEN 'Kritis' "
+        f"WHEN x.terjual > 0 AND x.qty_stok / (x.terjual / {days}.0) > {_FMI_STOK_OVERSTOCK_HARI} THEN 'Overstock' "
+        "ELSE 'Sehat' END AS status "
+        f"FROM ({base}) x"
+    )
+    return inner, sold_params + params

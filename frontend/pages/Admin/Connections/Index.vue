@@ -135,16 +135,26 @@ function confirmDelete() {
         </template>
 
         <template #cell-test="{ row }">
-          <div class="flex items-center justify-center gap-2">
-            <Button variant="secondary" size="sm" :loading="testState[row.id]?.loading" @click="testConnection(row)">
-              Test
-            </Button>
-            <Badge
-              v-if="testState[row.id] && !testState[row.id].loading"
-              :variant="testState[row.id].ok ? 'success' : 'danger'"
+          <div class="flex flex-col items-center justify-center gap-1">
+            <div class="flex items-center justify-center gap-2">
+              <Button variant="secondary" size="sm" :loading="testState[row.id]?.loading" @click="testConnection(row)">
+                Test
+              </Button>
+              <Badge
+                v-if="testState[row.id] && !testState[row.id].loading"
+                :variant="testState[row.id].ok ? 'success' : 'danger'"
+                :title="testState[row.id].message"
+              >
+                {{ testState[row.id].ok ? "OK" : "Gagal" }}
+              </Badge>
+            </div>
+            <p
+              v-if="testState[row.id] && !testState[row.id].loading && testState[row.id].message"
+              class="max-w-xs text-center text-xs"
+              :class="testState[row.id].ok ? 'text-ink-subtle' : 'text-danger-fg'"
             >
-              {{ testState[row.id].ok ? "OK" : "Gagal" }}
-            </Badge>
+              {{ testState[row.id].message }}
+            </p>
           </div>
         </template>
 

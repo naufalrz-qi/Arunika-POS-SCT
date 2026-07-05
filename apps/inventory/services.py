@@ -307,6 +307,14 @@ def stock_levels(profile, kd_divisi=None, date_from=None, date_to=None, search="
         divisi = {_k(r["kd_divisi"]): r["nama"] for r in _div_rows(cur)}
         # kd_barang -> {nama, kategori, kd_kategori, jenis, supplier, status}
         meta = _cached(profile, "meta", lambda: _barang_meta(cur))
+        stok_min = _cached(profile, "stok_min", lambda: _stok_min_map(cur))
+
+    # stok_min is per (divisi, barang) in the legacy schema; when aggregating
+    # across all divisions there is no single threshold, so sum it — a
+    # combined "org-wide" minimum makes more sense than dropping the badge.
+    stok_min_by_kb: dict = {}
+    for (_d, _kb), _v in stok_min.items():
+        stok_min_by_kb[_kb] = stok_min_by_kb.get(_kb, 0.0) + _v
 
     # group key: per barang, or per (divisi, barang) when a specific divisi is chosen
     per_divisi = bool(kd_divisi)
@@ -344,6 +352,7 @@ def stock_levels(profile, kd_divisi=None, date_from=None, date_to=None, search="
                 "masuk": round(a["masuk"], 3),
                 "keluar": round(a["keluar"], 3),
                 "stok_akhir": round(stok_akhir, 3),
+                "stok_min": round(stok_min.get((kdiv, kb), 0.0) if per_divisi else stok_min_by_kb.get(kb, 0.0), 3),
             }
         )
     # Return ALL items with stock or movement (no cap — client filters/searches).
@@ -410,6 +419,12 @@ def _harga_jual_map(cur) -> dict:
     """kd_barang -> harga_jual (satuan terkecil, jumlah=1)."""
     cur.execute("SELECT kd_barang, harga_jual FROM m_barang_satuan WHERE jumlah = 1")
     return {_k(r["kd_barang"]): _f(r["harga_jual"]) for r in _dictify(cur)}
+
+
+def _stok_min_map(cur) -> dict:
+    """(kd_divisi, kd_barang) -> stok_min, from m_barang_divisi."""
+    cur.execute("SELECT kd_divisi, kd_barang, stok_min FROM m_barang_divisi")
+    return {(_k(r["kd_divisi"]), _k(r["kd_barang"])): _f(r["stok_min"]) for r in _dictify(cur)}
 
 
 def _purchase_prices(cur, tanggal) -> tuple[dict, dict, dict]:

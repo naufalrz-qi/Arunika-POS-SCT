@@ -22,7 +22,7 @@ const columns = [
   { key: "supplier", label: "Supplier" },
   { key: "barang", label: "Barang" },
   { key: "qty", label: "Qty", align: "right", format: "number" },
-  { key: "harga_beli", label: "Harga Beli", align: "right", format: "rupiah" },
+  { key: "harga", label: "Harga Beli", align: "right", format: "rupiah" },
   { key: "subtotal", label: "Subtotal", align: "right", format: "rupiah", sortable: true },
 ];
 

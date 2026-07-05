@@ -15,6 +15,12 @@ class EncryptionKeyMissing(RuntimeError):
     pass
 
 
+class PasswordDecryptError(RuntimeError):
+    """A stored token exists but can't be decrypted with the active POS_FERNET_KEY."""
+
+    pass
+
+
 @lru_cache(maxsize=1)
 def _fernet() -> Fernet:
     key = os.environ.get("POS_FERNET_KEY")
@@ -44,3 +50,20 @@ def safe_decrypt(token: str, default: str = "") -> str:
         return decrypt(token)
     except (InvalidToken, ValueError):
         return default
+
+
+def decrypt_checked(token: str) -> str:
+    """Decrypt a stored token, raising `PasswordDecryptError` on a corrupt/mismatched key.
+
+    Unlike `safe_decrypt`, a token that exists but fails to decrypt is never
+    disguised as a blank password — use this wherever a silent blank password
+    would otherwise surface as a confusing downstream auth error.
+    """
+    if not token:
+        return ""
+    try:
+        return decrypt(token)
+    except (InvalidToken, ValueError) as exc:
+        raise PasswordDecryptError(
+            "Password tersimpan tidak bisa dibaca — kemungkinan POS_FERNET_KEY di .env berubah."
+        ) from exc

@@ -5,7 +5,12 @@ calculations happen in Python. Connections are opened per active ServerProfile s
 install can talk to many servers/branches (gudang / grosir / retail).
 
 Security: passwords are stored Fernet-encrypted and only decrypted here, in-process,
-to build the connection string. Connections use Encrypt=yes;TrustServerCertificate=yes.
+to build the connection string. Modern drivers (17/18) connect with
+Encrypt=yes;TrustServerCertificate=yes. The legacy "SQL Server" driver (the one
+built into Windows when no separate ODBC driver is installed) honors Encrypt=yes
+literally and fails the TLS handshake against most SQL Server setups, so it
+connects unencrypted instead — acceptable here since MS SQL traffic stays on
+the same trusted LAN as the app server.
 """
 from __future__ import annotations
 
@@ -14,10 +19,30 @@ from contextlib import contextmanager
 
 import pyodbc
 
-from core.encryption import safe_decrypt
+from core.encryption import EncryptionKeyMissing, PasswordDecryptError, decrypt_checked, safe_decrypt
 
-# Installed driver on this machine is "ODBC Driver 17 for SQL Server".
-ODBC_DRIVER = "ODBC Driver 17 for SQL Server"
+# Preferred newest-first; picks whichever is actually registered on this
+# machine instead of hard-failing when only an older/legacy driver is present.
+_DRIVER_PREFERENCE = (
+    "ODBC Driver 18 for SQL Server",
+    "ODBC Driver 17 for SQL Server",
+    "SQL Server Native Client 11.0",
+    "SQL Server",
+)
+
+
+def _detect_driver() -> str:
+    installed = set(pyodbc.drivers())
+    for name in _DRIVER_PREFERENCE:
+        if name in installed:
+            return name
+    # None registered — keep the documented default so the resulting pyodbc
+    # error still names a real, googleable driver to install.
+    return _DRIVER_PREFERENCE[1]
+
+
+ODBC_DRIVER = _detect_driver()
+_MODERN_DRIVERS = {"ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server"}
 CONNECT_TIMEOUT = 5  # seconds
 
 # Enable driver-manager connection pooling (reuses handles across requests).
@@ -25,14 +50,16 @@ pyodbc.pooling = True
 
 
 def build_conn_str(host, port, db_name, username, password) -> str:
+    # Only the 17/18 drivers implement TrustServerCertificate correctly; older
+    # drivers either fail the TLS handshake outright or silently ignore it.
+    encrypt_clause = "Encrypt=yes;TrustServerCertificate=yes;" if ODBC_DRIVER in _MODERN_DRIVERS else "Encrypt=no;"
     return (
         f"DRIVER={{{ODBC_DRIVER}}};"
         f"SERVER={host},{port};"
         f"DATABASE={db_name};"
         f"UID={username};"
         f"PWD={password};"
-        f"Encrypt=yes;"
-        f"TrustServerCertificate=yes;"
+        f"{encrypt_clause}"
         f"Connection Timeout={CONNECT_TIMEOUT}"
     )
 
@@ -59,14 +86,19 @@ def test_connection(host, port, db_name, username, password) -> dict:
 
 
 def test_profile(profile) -> dict:
-    """Test a saved ServerProfile (decrypts its password)."""
-    return test_connection(
-        profile.host,
-        profile.port,
-        profile.db_name,
-        profile.username,
-        safe_decrypt(profile.password_encrypted),
-    )
+    """Test a saved ServerProfile (decrypts its password).
+
+    Decryption is checked explicitly first: a corrupt/mismatched
+    POS_FERNET_KEY would otherwise silently degrade to a blank password and
+    surface as a confusing SQL Server login error instead of the real cause.
+    """
+    try:
+        password = decrypt_checked(profile.password_encrypted)
+    except PasswordDecryptError as exc:
+        return {"ok": False, "message": str(exc), "latency_ms": None}
+    except EncryptionKeyMissing as exc:
+        return {"ok": False, "message": str(exc), "latency_ms": None}
+    return test_connection(profile.host, profile.port, profile.db_name, profile.username, password)
 
 
 @contextmanager

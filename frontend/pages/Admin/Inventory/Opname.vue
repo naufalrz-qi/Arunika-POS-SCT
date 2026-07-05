@@ -23,7 +23,7 @@ const columns = [
   { key: "barang", label: "Barang" },
   { key: "qty_sistem", label: "Qty Sistem", align: "right", format: "number" },
   { key: "qty_fisik", label: "Qty Fisik", align: "right", format: "number" },
-  { key: "selisih", label: "Selisih", align: "right", format: "number", sortable: true },
+  { key: "diferensi", label: "Diferensi", align: "right", format: "number", sortable: true },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);
@@ -31,8 +31,8 @@ const summaryItems = computed(() => {
   const s = props.report?.summary || {};
   const nf = new Intl.NumberFormat("id-ID");
   return [
-    { label: "Jumlah Opname", value: nf.format(s.jml_opname || 0) },
-    { label: "Total Selisih", value: nf.format(s.total_selisih || 0) },
+    { label: "Jumlah Opname", value: nf.format(s.jml_baris || 0) },
+    { label: "Total Selisih", value: nf.format(s.total_diferensi || 0) },
   ];
 });
 </script>
