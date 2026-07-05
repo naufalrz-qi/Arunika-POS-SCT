@@ -1,5 +1,6 @@
 """Admin panel views — wired to real data (MS SQL via services, SQLite via models)."""
 import datetime as dt
+import json
 
 import pyodbc
 from django.contrib.auth import update_session_auth_hash
@@ -11,7 +12,7 @@ from apps.auth_app.models import Role, User
 from apps.connections.models import ServerProfile
 from apps.core.http import get_data
 from apps.core.menus import assignable_menus
-from apps.core.models import ActivityLog, log_activity
+from apps.core.models import ActivityLog, SyncLog, log_activity, log_sync
 from apps.inventory import services as inv
 from apps.master_data import services as master
 from apps.transactions import services as tx
@@ -201,8 +202,12 @@ def suppliers_index(request):
     if profile:
         try:
             with mssql.cursor(profile) as cur:
+                # kota/flag_aktif don't exist on m_supplier (verified live via
+                # INFORMATION_SCHEMA) — real columns are kd_kota/jenis; aliased
+                # to keep Supplier.vue's existing prop contract unchanged.
                 cur.execute(
-                    "SELECT kd_supplier, nama, alamat, kota, telepon, flag_aktif FROM m_supplier ORDER BY nama"
+                    "SELECT kd_supplier, nama, alamat, kd_kota AS kota, telepon, jenis AS flag_aktif "
+                    "FROM m_supplier ORDER BY nama"
                 )
                 suppliers = reporting.dictify(cur)
                 suppliers = reporting.clean_rows(suppliers)
@@ -219,28 +224,24 @@ def suppliers_index(request):
 
 def sync_history_index(request):
     def load_sync():
-        # Query ActivityLog for sync operations
-        syncs = []
-        conn_error = None
-        try:
-            logs = ActivityLog.objects.filter(action="sync").order_by("-timestamp")[:100]
-            syncs = [
-                {
-                    "id": a.id,
-                    "created_at": a.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-                    "user": a.username or "—",
-                    "src": "source",  # placeholder
-                    "dst": "target",  # placeholder
-                    "mode": "full",  # placeholder
-                    "total_items": 0,  # placeholder
-                    "status": "ok",  # placeholder
-                    "detail": a.detail or "",
-                }
-                for a in logs
-            ]
-        except Exception as exc:
-            conn_error = f"Gagal membaca riwayat sync: {str(exc)}"
-        return {"rows": syncs, "conn_error": conn_error}
+        # SQLite-only (SyncLog), no MS SQL involved — conn_error stays None,
+        # kept in the payload shape only because SyncHistory.vue expects the key.
+        syncs = [
+            {
+                "id": s.id,
+                "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "user": s.username or "—",
+                "feature": s.feature,
+                "mode": s.mode,
+                "src": s.src_name or "—",
+                "dst": s.dst_name or "—",
+                "total_items": s.applied_count,
+                "status": s.status,
+                "detail": {"items": s.items()},
+            }
+            for s in SyncLog.objects.all()[:200]
+        ]
+        return {"rows": syncs, "conn_error": None}
 
     return render(
         request,
@@ -354,12 +355,108 @@ def sync_harga_apply(request):
     with_margin = bool(data.get("with_margin"))
     mode = data.get("mode", "gudang_grosir")
     try:
+        # Built from the already-cached harga maps (no extra query) so the sync
+        # history modal can show per-item before/after without changing
+        # sync_harga_jual's return type (still a plain rowcount int). Read dst's
+        # map BEFORE syncing (sync_harga_jual invalidates it after committing).
+        src_map, dst_map = master._harga_map(src), master._harga_map(dst)
+        items = []
+        for k in keys:
+            kb, ks = master._st(k.get("kd_barang")), master._st(k.get("kd_satuan"))
+            s = src_map.get((kb, ks))
+            if s:
+                before = dst_map.get((kb, ks))
+                items.append({
+                    "label": kb,
+                    "kode": ks,
+                    "changes": [{"field": "harga_jual", "before": before["harga_jual"] if before else None, "after": s["harga_jual"]}],
+                })
+
         n = master.sync_harga_jual(src, dst, keys, with_margin=with_margin)
         log_activity(request, "sync_harga", f"Sync harga {src.name} -> {dst.name}: {n} baris")
+        log_sync(request, feature="harga", mode=mode, src=src, dst=dst, compared=len(keys), applied=n, items=items)
         request.session["flash_success"] = f"Sinkronisasi selesai: {n} baris diperbarui."
     except pyodbc.Error as exc:
         request.session["flash_error"] = f"Gagal sinkron: {exc.args[-1] if exc.args else exc}"
+        log_sync(request, feature="harga", mode=mode, src=src, dst=dst, compared=len(keys), applied=0,
+                  status="failed", error=str(exc.args[-1] if exc.args else exc))
     return redirect(f"/admin-panel/master/sync-harga?mode={mode}&src={src.id}&dst={dst.id}")
+
+
+# --- Sinkronisasi Master Data (m_barang/m_customer/m_supplier) -------------
+# Arah tetap: gudang = sumber data master, tujuan = server aktif/dipilih
+# (grosir/retail) — beda dari sync-harga yang punya 2 mode simetris.
+
+_SYNC_MASTER_ENTITIES = [
+    {"value": k, "label": v["label"]} for k, v in master._SYNC_ENTITIES.items()
+]
+
+
+def sync_master_index(request):
+    profiles = [p.as_dict() for p in ServerProfile.objects.all()]
+    entity = request.GET.get("entity", "m_barang")
+    src = ServerProfile.objects.filter(pk=request.GET.get("src")).first() if request.GET.get("src") else None
+    dst = ServerProfile.objects.filter(pk=request.GET.get("dst")).first() if request.GET.get("dst") else None
+
+    diff, conn_error = [], None
+    if src and dst and entity in master._SYNC_ENTITIES:
+        try:
+            diff = master.compare_entity(entity, src, dst)
+        except pyodbc.Error as exc:
+            conn_error = f"Gagal membandingkan data: {exc.args[-1] if exc.args else exc}"
+
+    return render(
+        request,
+        "Admin/MasterData/SyncMaster",
+        props={
+            "profiles": profiles,
+            "entities": _SYNC_MASTER_ENTITIES,
+            "entity": entity,
+            "src": src.id if src else None,
+            "dst": dst.id if dst else None,
+            "diff": diff,
+            "conn_error": conn_error,
+        },
+    )
+
+
+def sync_master_apply(request):
+    data = get_data(request)
+    entity = data.get("entity")
+    if entity not in master._SYNC_ENTITIES:
+        request.session["flash_error"] = "Entitas tidak valid."
+        return redirect("/admin-panel/master/sync-master")
+    src = get_object_or_404(ServerProfile, pk=data.get("src"))
+    dst = get_object_or_404(ServerProfile, pk=data.get("dst"))
+    keys = data.get("keys") or []
+    try:
+        # Items dibangun sebelum apply (map dst masih pra-sync di cache),
+        # sama seperti sync_harga_apply, untuk detail before/after di riwayat.
+        cfg = master._SYNC_ENTITIES[entity]
+        src_map = master._entity_row_map(src, entity)
+        dst_map = master._entity_row_map(dst, entity)
+        items = []
+        for k in keys:
+            pk = tuple(master._st(k.get(c)) for c in cfg["pk_cols"])
+            s = src_map.get(pk)
+            if not s:
+                continue
+            d = dst_map.get(pk)
+            changes = [
+                {"field": c, "before": d[c] if d else None, "after": s[c]}
+                for c in cfg["cols"] if not d or master._st(d[c]) != master._st(s[c])
+            ]
+            items.append({"label": master._st(s.get("nama")), "kode": "/".join(pk), "changes": changes})
+
+        n = master.sync_entity(entity, src, dst, keys)
+        log_activity(request, "sync_master", f"Sync {entity} {src.name} -> {dst.name}: {n} baris")
+        log_sync(request, feature=entity, mode="whole_row", src=src, dst=dst, compared=len(keys), applied=n, items=items)
+        request.session["flash_success"] = f"Sinkronisasi selesai: {n} baris diperbarui."
+    except pyodbc.Error as exc:
+        request.session["flash_error"] = f"Gagal sinkron: {exc.args[-1] if exc.args else exc}"
+        log_sync(request, feature=entity, mode="whole_row", src=src, dst=dst, compared=len(keys), applied=0,
+                  status="failed", error=str(exc.args[-1] if exc.args else exc))
+    return redirect(f"/admin-panel/master/sync-master?entity={entity}&src={src.id}&dst={dst.id}")
 
 
 # --- Logs ------------------------------------------------------------------
@@ -542,6 +639,22 @@ def _opt_kas(profile):
     return _opt_master(profile, "SELECT kd_kas, keterangan FROM m_kas WHERE status <> 0 ORDER BY keterangan")
 
 
+_KATEGORI_BIAYA_LABEL = {
+    1: "Operasional (Penjualan)", 2: "Operasional (Adm. dan Umum)",
+    3: "Produksi (Biaya Langsung)", 4: "Produksi (Biaya Tak Langsung)",
+}
+
+
+def _opt_kategori_biaya(profile):
+    # Only status values actually assigned to a m_biaya row are offered — this
+    # business (retail/toys) only uses 1/2; 3/4 (produksi) exist in the label
+    # mapping but would otherwise be a dead filter option.
+    with mssql.cursor(profile) as cur:
+        cur.execute("SELECT DISTINCT status FROM m_biaya WHERE status <> 0 ORDER BY status")
+        statuses = [r[0] for r in cur.fetchall()]
+    return [{"value": str(s), "label": _KATEGORI_BIAYA_LABEL.get(s, str(s))} for s in statuses]
+
+
 def _spec_params(request, spec):
     f = reporting.parse_report_params(request, spec["sorts"], spec["default_sort"])
     for k in spec.get("filter_keys", []):
@@ -709,6 +822,30 @@ _RETUR_PENJUALAN = {
 retur_penjualan = _report_view(_RETUR_PENJUALAN)
 retur_penjualan_export = _report_export(_RETUR_PENJUALAN)
 
+_PIUTANG = {
+    "component": "Admin/Reports/Piutang",
+    "url": "/admin-panel/laporan/piutang",
+    "inner": rpt.piutang,
+    "sorts": rpt.SORTS_PIUTANG,
+    "default_sort": "sisa_piutang",
+    "summary": rpt.SUMMARY_PIUTANG,
+    "filter_keys": ["kd_divisi", "kd_customer"],
+    "options": lambda p: {"divisi": _opt_divisi(p), "customer": _opt_customer(p)},
+    "filename": "piutang",
+    "columns": [
+        {"key": "no_transaksi", "label": "No. Nota"},
+        {"key": "tanggal", "label": "Tanggal"},
+        {"key": "customer", "label": "Customer"},
+        {"key": "jatuh_tempo", "label": "Jatuh Tempo"},
+        {"key": "total_penjualan", "label": "Total Penjualan"},
+        {"key": "total_cicilan", "label": "Total Cicilan"},
+        {"key": "sisa_piutang", "label": "Sisa Piutang"},
+        {"key": "hari_terlambat", "label": "Hari Terlambat"},
+    ],
+}
+piutang = _report_view(_PIUTANG)
+piutang_export = _report_export(_PIUTANG)
+
 # Pembelian
 _PEMBELIAN = {
     "component": "Admin/Reports/Pembelian",
@@ -724,6 +861,36 @@ _PEMBELIAN = {
 }
 pembelian = _report_view(_PEMBELIAN)
 pembelian_export = _report_export(_PEMBELIAN)
+
+_PEMBELIAN_SUPPLIER = {
+    "component": "Admin/Reports/PembelianSupplier",
+    "url": "/admin-panel/laporan/pembelian-supplier",
+    "inner": rpt.pembelian_supplier,
+    "sorts": rpt.SORTS_PEMBELIAN_SUPPLIER,
+    "default_sort": "total",
+    "summary": rpt.SUMMARY_PEMBELIAN_SUPPLIER,
+    "filter_keys": ["kd_divisi"],
+    "options": lambda p: {"divisi": _opt_divisi(p)},
+    "filename": "pembelian-supplier",
+    "columns": [{"key": "supplier", "label": "Supplier"}, {"key": "jml_nota", "label": "Jml Nota"}, {"key": "total", "label": "Total"}],
+}
+pembelian_supplier = _report_view(_PEMBELIAN_SUPPLIER)
+pembelian_supplier_export = _report_export(_PEMBELIAN_SUPPLIER)
+
+_PEMBELIAN_PERIODE = {
+    "component": "Admin/Reports/PembelianPeriode",
+    "url": "/admin-panel/laporan/pembelian-periode",
+    "inner": rpt.pembelian_periode,
+    "sorts": rpt.SORTS_PEMBELIAN_PERIODE,
+    "default_sort": "total",
+    "summary": rpt.SUMMARY_PEMBELIAN_PERIODE,
+    "filter_keys": ["kd_divisi", "granularitas"],
+    "options": lambda p: {"divisi": _opt_divisi(p)},
+    "filename": "pembelian-periode",
+    "columns": [{"key": "periode", "label": "Periode"}, {"key": "jml_nota", "label": "Jml Nota"}, {"key": "total", "label": "Total"}],
+}
+pembelian_periode = _report_view(_PEMBELIAN_PERIODE)
+pembelian_periode_export = _report_export(_PEMBELIAN_PERIODE)
 
 _RETUR_PEMBELIAN = {
     "component": "Admin/Reports/ReturPembelian",
@@ -952,6 +1119,44 @@ _SHIFT = {
 }
 shift = _report_view(_SHIFT)
 shift_export = _report_export(_SHIFT)
+
+_BIAYA = {
+    "component": "Admin/Reports/BiayaOperasional",
+    "url": "/admin-panel/laporan/biaya-operasional",
+    "inner": rpt.biaya_operasional,
+    "sorts": rpt.SORTS_BIAYA,
+    "default_sort": "tanggal",
+    "summary": rpt.SUMMARY_BIAYA,
+    "filter_keys": ["kd_divisi", "kategori"],
+    "options": lambda p: {"divisi": _opt_divisi(p), "kategori": _opt_kategori_biaya(p)},
+    "filename": "biaya-operasional",
+    "columns": [
+        {"key": "no_transaksi", "label": "No. Transaksi"},
+        {"key": "tanggal", "label": "Tanggal"},
+        {"key": "divisi", "label": "Divisi"},
+        {"key": "biaya", "label": "Biaya"},
+        {"key": "kategori", "label": "Kategori"},
+        {"key": "nominal", "label": "Nominal"},
+        {"key": "keterangan", "label": "Keterangan"},
+    ],
+}
+biaya_operasional = _report_view(_BIAYA)
+biaya_operasional_export = _report_export(_BIAYA)
+
+_BIAYA_KATEGORI = {
+    "component": "Admin/Reports/BiayaKategori",
+    "url": "/admin-panel/laporan/biaya-kategori",
+    "inner": rpt.biaya_kategori,
+    "sorts": rpt.SORTS_BIAYA_KATEGORI,
+    "default_sort": "total",
+    "summary": rpt.SUMMARY_BIAYA_KATEGORI,
+    "filter_keys": ["kd_divisi"],
+    "options": lambda p: {"divisi": _opt_divisi(p)},
+    "filename": "biaya-kategori",
+    "columns": [{"key": "kategori", "label": "Kategori"}, {"key": "jml_baris", "label": "Jml Baris"}, {"key": "total", "label": "Total"}],
+}
+biaya_kategori = _report_view(_BIAYA_KATEGORI)
+biaya_kategori_export = _report_export(_BIAYA_KATEGORI)
 
 
 # --- Profil Saya (edit own account) ----------------------------------------

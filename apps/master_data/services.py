@@ -359,6 +359,121 @@ def sync_harga_jual(src_profile, dst_profile, keys: list, with_margin: bool = Fa
     return n
 
 
+# --- Sinkronisasi master data antar-server (m_barang/m_customer/m_supplier) -
+
+# Kolom diverifikasi live via INFORMATION_SCHEMA.COLUMNS (bukan dari dump statis
+# scripts/output/schema.json — dump itu sempat keliru untuk m_supplier).
+# Dikecualikan dari sinkronisasi: m_barang.tanggal_daftar (timestamp lokal
+# server, auto-default GETDATE(), tak boleh ditimpa) dan m_customer.point
+# (saldo poin loyalitas — data transaksional, bukan identitas master).
+_SYNC_ENTITIES = {
+    "m_barang": {
+        "table": "m_barang",
+        "pk_cols": ["kd_barang"],
+        "cols": ["kd_kategori", "kd_jenis_bahan", "kd_model", "kd_merk", "kd_warna",
+                 "ukuran", "nama", "keterangan", "status", "status_pinjam", "pabrik"],
+        "label": "Produk",
+    },
+    "m_customer": {
+        "table": "m_customer",
+        "pk_cols": ["kd_customer"],
+        "cols": ["kd_kota", "nama", "alamat", "telepon", "fax", "kontak", "hp", "email",
+                 "limit_kredit", "disc", "status", "parent", "keterangan",
+                 "npwp_no", "nppkp_no", "npwp_nama", "npwp_alamat"],
+        "label": "Pelanggan",
+    },
+    "m_supplier": {
+        "table": "m_supplier",
+        "pk_cols": ["kd_supplier"],
+        "cols": ["kd_kota", "nama", "alamat", "telepon", "fax", "kontak", "hp", "email",
+                 "kd_bank", "rekening", "jenis", "keterangan"],
+        "label": "Supplier",
+    },
+}
+
+
+def _entity_row_map(profile, entity: str) -> dict:
+    """pk_tuple -> row dict (kolom pk + cols), untuk satu server. Cache seperti _harga_map."""
+    cfg = _SYNC_ENTITIES[entity]
+    cols = cfg["pk_cols"] + cfg["cols"]
+
+    def build():
+        with mssql.cursor(profile) as cur:
+            cur.execute(f"SELECT {', '.join(cols)} FROM {cfg['table']}")
+            out = {}
+            for r in _dictify(cur):
+                pk = tuple(_st(r[c]) for c in cfg["pk_cols"])
+                out[pk] = r
+            return out
+
+    return _cached(profile, f"sync_entity_{entity}", build)
+
+
+def compare_entity(entity: str, src_profile, dst_profile) -> list[dict]:
+    """Baris m_barang/m_customer/m_supplier yang berbeda (atau belum ada di dst).
+
+    Diff per-baris penuh: kembalikan baris bila ADA kolom yang beda, atau baris
+    itu belum ada di dst sama sekali. `fields_changed` hanya untuk tampilan —
+    apply tetap whole-row (semua kolom ter-set sekaligus), bukan per-kolom.
+    """
+    cfg = _SYNC_ENTITIES[entity]
+    src = _entity_row_map(src_profile, entity)
+    dst = _entity_row_map(dst_profile, entity)
+
+    out = []
+    for pk, s in src.items():
+        d = dst.get(pk)
+        fields_changed = []
+        if d is not None:
+            for c in cfg["cols"]:
+                if _st(s[c]) != _st(d[c]):
+                    fields_changed.append(c)
+            if not fields_changed:
+                continue  # sama persis, lewati
+        row = {pk_col: _st(s[pk_col]) for pk_col in cfg["pk_cols"]}
+        row["label"] = _st(s.get("nama"))
+        row["fields_changed"] = fields_changed
+        row["ada_di_dst"] = d is not None
+        out.append(row)
+    out.sort(key=lambda r: r["label"])
+    return out
+
+
+def sync_entity(entity: str, src_profile, dst_profile, keys: list[dict]) -> int:
+    """Terapkan sinkronisasi whole-row untuk kunci (pk) terpilih.
+
+    UPDATE bila baris sudah ada di dst; INSERT bila belum (identitas saja —
+    trigger DB di server sudah menyediakan baris turunan seperti
+    m_barang_satuan untuk m_barang baru, jangan buat manual di sini).
+    """
+    cfg = _SYNC_ENTITIES[entity]
+    src = _entity_row_map(src_profile, entity)
+    dst_existing = _entity_row_map(dst_profile, entity)
+    n = 0
+    with mssql.cursor(dst_profile, autocommit=False) as cur:
+        for k in keys:
+            pk = tuple(_st(k.get(c)) for c in cfg["pk_cols"])
+            s = src.get(pk)
+            if not s:
+                continue
+            if pk in dst_existing:
+                set_clause = ", ".join(f"{c} = ?" for c in cfg["cols"])
+                where_clause = " AND ".join(f"{c} = ?" for c in cfg["pk_cols"])
+                params = [s[c] for c in cfg["cols"]] + [s[c] for c in cfg["pk_cols"]]
+                cur.execute(f"UPDATE {cfg['table']} SET {set_clause} WHERE {where_clause}", params)
+            else:
+                insert_cols = cfg["pk_cols"] + cfg["cols"]
+                placeholders = ", ".join(["?"] * len(insert_cols))
+                params = [s[c] for c in insert_cols]
+                cur.execute(
+                    f"INSERT INTO {cfg['table']} ({', '.join(insert_cols)}) VALUES ({placeholders})", params
+                )
+            n += cur.rowcount
+        cur.connection.commit()
+    _invalidate_inventory_cache(dst_profile)
+    return n
+
+
 # --- helpers ---------------------------------------------------------------
 
 

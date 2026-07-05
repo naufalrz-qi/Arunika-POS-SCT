@@ -47,7 +47,7 @@ def _nota_net(where_sql: str) -> str:
     net = f"SUM({_line_net('harga_jual')}) - {HDR_DISKON} - COALESCE(h.diskon_uang, 0)"
     return (
         "SELECT h.no_transaksi, MIN(h.tanggal) AS tanggal, MIN(h.kd_customer) AS kd_customer, "
-        "MIN(h.kd_user) AS kd_user, MIN(h.kd_kas) AS kd_kas, "
+        "MIN(h.kd_user) AS kd_user, MIN(h.kd_kas) AS kd_kas, MIN(h.tanggal_jatuh_tempo) AS tanggal_jatuh_tempo, "
         "SUM(d.qty * d.harga_jual) AS total_kotor, "
         f"({net}) * COALESCE(MIN(h.pajak), 0) / 100.0 AS pajak, "
         f"({net}) * (1 + COALESCE(MIN(h.pajak), 0) / 100.0) AS total_bersih "
@@ -129,18 +129,26 @@ SUMMARY_PENJUALAN_CUSTOMER = (
 )
 
 def penjualan_customer(f):
+    # search filters c.nama, which only exists AFTER the LEFT JOIN below — it
+    # must not be embedded into _nota_net()'s where_sql (that subquery's FROM
+    # is t_penjualan/t_penjualan_detail only, no m_customer alias in scope;
+    # doing so throws "multi-part identifier 'c.nama' could not be bound"
+    # every time a search term is given — a pre-existing bug, fixed here).
     where, params = _base_where(f)
+    nota_sql = _nota_net(" AND ".join(where))
+    where_outer, params_outer = [], []
     if f["search"]:
-        where.append("c.nama LIKE ?")
-        params.append(f"%{f['search']}%")
+        where_outer.append("c.nama LIKE ?")
+        params_outer.append(f"%{f['search']}%")
     inner = (
         "SELECT n.kd_customer, COALESCE(c.nama, '') AS customer, "
         "COUNT(n.no_transaksi) AS jml_nota, COALESCE(SUM(n.total_bersih), 0) AS total "
-        f"FROM ({_nota_net(' AND '.join(where))}) n "
+        f"FROM ({nota_sql}) n "
         "LEFT JOIN m_customer c ON n.kd_customer = c.kd_customer "
-        "GROUP BY n.kd_customer, c.nama"
+        + (f"WHERE {' AND '.join(where_outer)} " if where_outer else "")
+        + "GROUP BY n.kd_customer, c.nama"
     )
-    return inner, params
+    return inner, params + params_outer
 
 
 # --- Penjualan per User (B10) --
@@ -223,17 +231,80 @@ SUMMARY_PEMBELIAN = (
 )
 
 def pembelian(f):
+    # subtotal applies diskon1-4 (flat Rupiah, per _line_net()'s docstring) —
+    # t_pembelian_detail has the same diskon1-4 shape as t_penjualan_detail
+    # (confirmed live); previously computed as a flat qty*harga_beli, silently
+    # ignoring any per-line discount.
     where, params = _base_where(f)
     _search(where, params, f, ["h.no_transaksi", "b.nama", "s.nama"])
     inner = (
         "SELECT h.no_transaksi, h.tanggal, COALESCE(s.nama, '') AS supplier, "
         "b.nama AS barang, d.qty, d.harga_beli AS harga, "
-        f"(d.qty * d.harga_beli) AS subtotal "
+        f"{_line_net('harga_beli')} AS subtotal "
         "FROM t_pembelian h "
         "INNER JOIN t_pembelian_detail d ON h.no_transaksi = d.no_transaksi "
         "INNER JOIN m_barang b ON d.kd_barang = b.kd_barang "
         "LEFT JOIN m_supplier s ON h.kd_supplier = s.kd_supplier "
         f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
+
+
+def _pembelian_nota(where_sql: str) -> str:
+    """Per-nota subquery pembelian, mirrors _nota_net(): total bersih setelah
+    diskon1-4 per baris (_line_net) + diskon header + pajak/ppnbm (persen,
+    sama seperti t_penjualan). Tidak menjumlahkan t_pembelian_biaya_angkut di
+    sini — itu tabel header (1 baris/no_transaksi); breakdown ongkos kirim
+    per supplier/periode disisihkan sebagai fitur terpisah nanti."""
+    net = f"SUM({_line_net('harga_beli')}) - {HDR_DISKON}"
+    return (
+        "SELECT h.no_transaksi, MIN(h.tanggal) AS tanggal, MIN(h.kd_supplier) AS kd_supplier, "
+        "SUM(d.qty * d.harga_beli) AS total_kotor, "
+        f"({net}) * (1 + COALESCE(MIN(h.pajak), 0) / 100.0 + COALESCE(MIN(h.ppnbm), 0) / 100.0) AS total_bersih "
+        "FROM t_pembelian h "
+        "INNER JOIN t_pembelian_detail d ON h.no_transaksi = d.no_transaksi "
+        f"WHERE {where_sql} "
+        "GROUP BY h.no_transaksi, h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.pajak, h.ppnbm"
+    )
+
+
+# --- Pembelian per Supplier --
+
+SORTS_PEMBELIAN_SUPPLIER = {"supplier": "supplier", "jml_nota": "jml_nota", "total": "total"}
+SUMMARY_PEMBELIAN_SUPPLIER = (
+    "COUNT(DISTINCT q.kd_supplier) AS jml_supplier, COALESCE(SUM(q.jml_nota), 0) AS total_nota, "
+    "COALESCE(SUM(q.total), 0) AS total_nilai"
+)
+
+def pembelian_supplier(f):
+    where, params = _base_where(f)
+    inner = (
+        "SELECT n.kd_supplier, COALESCE(s.nama, '') AS supplier, "
+        "COUNT(n.no_transaksi) AS jml_nota, COALESCE(SUM(n.total_bersih), 0) AS total "
+        f"FROM ({_pembelian_nota(' AND '.join(where))}) n "
+        "LEFT JOIN m_supplier s ON n.kd_supplier = s.kd_supplier "
+        "GROUP BY n.kd_supplier, s.nama"
+    )
+    return inner, params
+
+
+# --- Pembelian per Periode --
+
+SORTS_PEMBELIAN_PERIODE = {"periode": "periode", "total": "total"}
+SUMMARY_PEMBELIAN_PERIODE = (
+    "COUNT(DISTINCT q.periode) AS jml_periode, COALESCE(SUM(q.jml_nota), 0) AS total_nota, "
+    "COALESCE(SUM(q.total), 0) AS total_nilai"
+)
+
+def pembelian_periode(f):
+    where, params = _base_where(f)
+    granul = f.get("granularitas", "harian")
+    periode = "FORMAT(n.tanggal, 'yyyy-MM')" if granul == "bulanan" else "FORMAT(n.tanggal, 'yyyy-MM-dd')"
+    inner = (
+        f"SELECT {periode} AS periode, COUNT(n.no_transaksi) AS jml_nota, "
+        "COALESCE(SUM(n.total_bersih), 0) AS total "
+        f"FROM ({_pembelian_nota(' AND '.join(where))}) n "
+        f"GROUP BY {periode}"
     )
     return inner, params
 
@@ -246,17 +317,125 @@ SUMMARY_RETUR_PEMBELIAN = (
 )
 
 def retur_pembelian(f):
+    # nilai applies diskon1-4 like pembelian(f) above — t_pembelian_retur_detail
+    # has the same diskon1-4 columns (confirmed live), currently all-zero in
+    # this dataset's history but not guaranteed to stay that way.
     where, params = _base_where(f)
     _search(where, params, f, ["h.no_retur", "b.nama", "s.nama"])
     inner = (
         "SELECT h.no_retur, h.tanggal, COALESCE(s.nama, '') AS supplier, "
         "b.nama AS barang, d.qty, "
-        f"(d.qty * d.harga) AS nilai "
+        f"{_line_net('harga', 'd')} AS nilai "
         "FROM t_pembelian_retur h "
         "INNER JOIN t_pembelian_retur_detail d ON h.no_retur = d.no_retur "
         "INNER JOIN m_barang b ON d.kd_barang = b.kd_barang "
         "LEFT JOIN m_supplier s ON h.kd_supplier = s.kd_supplier "
         f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
+
+
+# --- Piutang (receivables) --
+# Reimplements mon_t_piutang_aktif's logic against base tables (view/UDF not
+# called directly, per project convention). t_penjualan.status=0 marks a
+# credit-sale nota still open (rare — 7 of ~438k rows live — the reference
+# view confirms this filter; most sales are status=1/settled and never touch
+# t_piutang_cicilan at all). total_penjualan reuses _nota_net() as-is so this
+# report's numbers reconcile with penjualan_nota/penjualan_customer/dst — the
+# legacy GetTotalPenjualan() also subtracts voucher nominal, which _nota_net()
+# does not; left unchanged here to stay consistent with the already-shipped
+# penjualan reports rather than silently diverging just for this one page.
+
+SORTS_PIUTANG = {"customer": "customer", "tanggal": "tanggal", "jatuh_tempo": "jatuh_tempo", "sisa_piutang": "sisa_piutang"}
+SUMMARY_PIUTANG = (
+    "COUNT(*) AS jml_nota, COALESCE(SUM(q.total_penjualan), 0) AS total_penjualan, "
+    "COALESCE(SUM(q.total_cicilan), 0) AS total_cicilan, COALESCE(SUM(q.sisa_piutang), 0) AS total_sisa_piutang"
+)
+
+def piutang(f):
+    """Saldo piutang per nota, as-of f['date_to'] (snapshot: cicilan dihitung
+    s.d. date_to, bukan agregasi transaksi dalam rentang seperti laporan lain).
+    date_from/date_to tetap memfilter tanggal nota (h.tanggal) seperti laporan
+    lain — lebar-kan rentang untuk melihat piutang yang lebih lama."""
+    where, params = _base_where(f)
+    where.append("h.status = 0")
+    if f.get("kd_customer"):
+        where.append("h.kd_customer = ?")
+        params.append(f["kd_customer"])
+    if f["search"]:
+        where.append("h.no_transaksi LIKE ?")
+        params.append(f"%{f['search']}%")
+
+    nota_sql = _nota_net(" AND ".join(where))
+    inner = (
+        "SELECT n.no_transaksi, n.tanggal, COALESCE(c.nama, '') AS customer, "
+        "n.tanggal_jatuh_tempo AS jatuh_tempo, n.total_bersih AS total_penjualan, "
+        "COALESCE(cic.total_cicilan, 0) AS total_cicilan, "
+        "n.total_bersih - COALESCE(cic.total_cicilan, 0) AS sisa_piutang, "
+        "CASE WHEN DATEDIFF(day, n.tanggal_jatuh_tempo, ?) > 0 "
+        "THEN DATEDIFF(day, n.tanggal_jatuh_tempo, ?) ELSE 0 END AS hari_terlambat "
+        f"FROM ({nota_sql}) n "
+        "LEFT JOIN m_customer c ON n.kd_customer = c.kd_customer "
+        "LEFT JOIN (SELECT no_transaksi, SUM(nominal) AS total_cicilan FROM t_piutang_cicilan "
+        "WHERE tanggal <= ? GROUP BY no_transaksi) cic ON cic.no_transaksi = n.no_transaksi "
+        "WHERE n.total_bersih - COALESCE(cic.total_cicilan, 0) > 0"
+    )
+    # Param order must match the ?'s left-to-right position in `inner`, NOT the
+    # order they were built in: the two DATEDIFF placeholders sit in the outer
+    # SELECT list, which renders BEFORE the FROM (nota_sql) clause that embeds
+    # `params` — so date_to/date_to come first, then `params`, then the cic
+    # subquery's cutoff.
+    return inner, [f["date_to"], f["date_to"]] + params + [f["date_to"]]
+
+
+# --- Pengeluaran / Biaya Operasional --
+# t_biaya_operasional today only feeds kas_harian_rows()'s UNION (Biaya: arm);
+# this adds a standalone detail + per-kategori rollup. Label mapping verified
+# directly against the mon_m_biaya view definition (not called — reimplemented
+# as a CASE, per project convention); live data only has status 1/2 in use
+# (retail/toys, no production), 3/4 exist in the mapping but are currently unused.
+_BIAYA_KATEGORI_CASE = (
+    "CASE b.status WHEN 1 THEN 'Operasional (Penjualan)' WHEN 2 THEN 'Operasional (Adm. dan Umum)' "
+    "WHEN 3 THEN 'Produksi (Biaya Langsung)' WHEN 4 THEN 'Produksi (Biaya Tak Langsung)' ELSE '' END"
+)
+
+SORTS_BIAYA = {"tanggal": "tanggal", "biaya": "biaya", "nominal": "nominal"}
+SUMMARY_BIAYA = "COUNT(*) AS jml_baris, COALESCE(SUM(q.nominal), 0) AS total_nominal"
+
+def biaya_operasional(f):
+    where, params = _base_where(f)
+    if f.get("kategori"):
+        where.append("b.status = ?")
+        params.append(f["kategori"])
+    _search(where, params, f, ["b.nama", "h.keterangan"])
+    inner = (
+        "SELECT h.no_transaksi, h.tanggal, COALESCE(dv.nama, '') AS divisi, "
+        "b.nama AS biaya, "
+        f"{_BIAYA_KATEGORI_CASE} AS kategori, "
+        "h.nominal, COALESCE(h.keterangan, '') AS keterangan "
+        "FROM t_biaya_operasional h "
+        "INNER JOIN m_biaya b ON h.kd_biaya = b.kd_biaya "
+        "LEFT JOIN m_divisi dv ON h.kd_divisi = dv.kd_divisi "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
+
+
+SORTS_BIAYA_KATEGORI = {"kategori": "kategori", "total": "total"}
+SUMMARY_BIAYA_KATEGORI = (
+    "COUNT(DISTINCT q.kategori) AS jml_kategori, COALESCE(SUM(q.jml_baris), 0) AS total_baris, "
+    "COALESCE(SUM(q.total), 0) AS total_nilai"
+)
+
+def biaya_kategori(f):
+    """Rollup per kategori (m_biaya.status) — mirrors penjualan_periode's rollup shape."""
+    where, params = _base_where(f)
+    inner = (
+        f"SELECT {_BIAYA_KATEGORI_CASE} AS kategori, COUNT(*) AS jml_baris, SUM(h.nominal) AS total "
+        "FROM t_biaya_operasional h "
+        "INNER JOIN m_biaya b ON h.kd_biaya = b.kd_biaya "
+        f"WHERE {' AND '.join(where)} "
+        "GROUP BY b.status"
     )
     return inner, params
 
