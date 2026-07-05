@@ -10,21 +10,27 @@ from apps.core import reporting
 
 
 def _line_net(price_col: str, alias: str = "d") -> str:
-    """R4.1 — qty * price * (1-d1%)(1-d2%)(1-d3%)(1-d4%), NULL-safe."""
+    """qty * (price - d1 - d2 - d3 - d4), NULL-safe.
+
+    diskon1-4 are flat Rupiah-per-unit amounts, not percentages — verified
+    against t_penjualan_detail.total on the legacy schema (e.g. harga_jual
+    39902.85, diskon1 2.85 -> total 39900; harga_jual 168000, diskon1 26250
+    -> total 141750). Treating them as a "1 - d/100" percent factor is wrong
+    even for small values, and goes catastrophically negative once diskon1
+    exceeds 100 (which happens for ~1% of real rows).
+    """
     return (
-        f"({alias}.qty * {alias}.{price_col}"
-        f" * (1 - COALESCE({alias}.diskon1, 0) / 100.0)"
-        f" * (1 - COALESCE({alias}.diskon2, 0) / 100.0)"
-        f" * (1 - COALESCE({alias}.diskon3, 0) / 100.0)"
-        f" * (1 - COALESCE({alias}.diskon4, 0) / 100.0))"
+        f"({alias}.qty * ({alias}.{price_col}"
+        f" - COALESCE({alias}.diskon1, 0)"
+        f" - COALESCE({alias}.diskon2, 0)"
+        f" - COALESCE({alias}.diskon3, 0)"
+        f" - COALESCE({alias}.diskon4, 0)))"
     )
 
 
-HDR_FACTOR = (
-    "(1 - COALESCE(h.diskon1, 0) / 100.0)"
-    " * (1 - COALESCE(h.diskon2, 0) / 100.0)"
-    " * (1 - COALESCE(h.diskon3, 0) / 100.0)"
-    " * (1 - COALESCE(h.diskon4, 0) / 100.0)"
+HDR_DISKON = (
+    "(COALESCE(h.diskon1, 0) + COALESCE(h.diskon2, 0)"
+    " + COALESCE(h.diskon3, 0) + COALESCE(h.diskon4, 0))"
 )
 
 
@@ -38,7 +44,7 @@ def _search(where: list, params: list, f: dict, cols: list) -> None:
 
 def _nota_net(where_sql: str) -> str:
     """Per-nota subquery: header net total per R4.1."""
-    net = f"SUM({_line_net('harga_jual')}) * {HDR_FACTOR} - COALESCE(h.diskon_uang, 0)"
+    net = f"SUM({_line_net('harga_jual')}) - {HDR_DISKON} - COALESCE(h.diskon_uang, 0)"
     return (
         "SELECT h.no_transaksi, MIN(h.tanggal) AS tanggal, MIN(h.kd_customer) AS kd_customer, "
         "MIN(h.kd_user) AS kd_user, MIN(h.kd_kas) AS kd_kas, "
@@ -488,7 +494,7 @@ def fmi_penjualan(f):
     where, params = _base_where(f)
     inner = (
         "SELECT b.kd_barang, b.nama AS barang, COALESCE(k.nama, '') AS kategori, "
-        "COALESCE(SUM(d.qty), 0) AS qty_terjual, COALESCE(SUM(d.qty * d.harga_jual * (1-COALESCE(d.diskon1,0)/100.0)), 0) AS nilai, "
+        f"COALESCE(SUM(d.qty), 0) AS qty_terjual, COALESCE(SUM({_line_net('harga_jual')}), 0) AS nilai, "
         "CASE WHEN COALESCE(SUM(d.qty), 0) > 100 THEN 'A' WHEN COALESCE(SUM(d.qty), 0) > 50 THEN 'B' ELSE 'C' END AS kelas "
         "FROM m_barang b "
         "LEFT JOIN m_kategori k ON b.kd_kategori = k.kd_kategori "
