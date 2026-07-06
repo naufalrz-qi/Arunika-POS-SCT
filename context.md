@@ -8,6 +8,7 @@ Ringkasan arsitektur + status untuk planning lanjutan. Django + Inertia.js + Vue
 - Frontend: Vue 3.5 + `@inertiajs/vue3` 2.0 (punya komponen `<Deferred>`), Pinia, Tailwind 4, Vite 6. Build: `npm run build` → `frontend/dist/`.
 - DB Django (auth/config/log/session): SQLite `db.sqlite3` (WAL aktif).
 - 1 koneksi MS SQL aktif global (bukan per-tipe), switcher di navbar. `core/mssql.get_active_profile()`.
+- Opsional: tiap `ServerProfile` bisa punya `report_source` (server replica untuk laporan, disinkron via CDC — lihat bagian "Reporting replica" di bawah). `core/mssql.get_report_source(profile)`.
 
 ### Mode serving (PENTING — lintas device)
 - **Dev/HMR (lokal saja)**: `.env` `DJANGO_VITE_DEV=1`, jalankan `npm run dev` + runserver, akses `localhost:8000`. Vite hardcode `localhost:5173` → TIDAK bisa dari device lain.
@@ -36,6 +37,16 @@ Catatan: route `master/suppliers` dan `master/sync-history` (`apps/monitoring/ur
 - Public: `list_divisi`, `search_barang`, `stock_card`, `stock_levels(profile,kd_divisi,date_from,date_to,search,kd_kategori)`, `stok_akhir_per_tanggal(profile,tanggal,kd_divisi)`, `barang_histori(...)`.
 
 `apps/master_data/services.py`: `list_products`, `list_categories`, `list_customers`, `list_barang_edit`, `update_harga`(write), `update_status`(write), `compare_harga_jual`, `sync_harga_jual`(write). Semua cap TOP 500.
+
+## Reporting replica (CDC, opsional)
+
+Laporan berat (`penjualan_detail` dkk, join ke `t_penjualan_detail` 3M+ baris) tadinya SELECT langsung ke server legacy — bersaing lock dengan transaksi kasir live, dan lambat (~1 menit). Solusi opsional: `ServerProfile.report_source` menunjuk ke server SQL Server kedua yang disinkron dari legacy via **Change Data Capture** (bukan transactional replication biasa — `t_penjualan_detail` adalah heap tanpa primary key karena computed column `total` dibuat dengan ANSI_NULLS/QUOTED_IDENTIFIER salah; CDC `fn_cdc_get_all_changes_*` tidak butuh PK, replication butuh).
+
+- `apps/transactions/cdc_sync.py`: `CDC_TABLE_SPECS` (tabel → capture instance + key), `backfill_table()` (copy penuh awal), `sync_table()`/`sync_all()` (incremental by LSN, resumable via `apps/core/models.CdcSyncCursor`). Tabel header (`t_penjualan`, `m_barang`, dst.) di-upsert per baris by key asli; tabel detail tanpa key andal (`t_penjualan_detail`, dst.) disinkron dengan re-fetch seluruh baris current milik parent (`no_transaksi`/`no_retur`) yang berubah — bukan cocokkan baris satu-satu.
+- `manage.py sync_cdc [--profile ID] [--backfill]` — jalankan `--backfill` sekali (atau saat rebuild replica), lalu jadwalkan tanpa `--backfill` tiap 1-2 menit (Task Scheduler di Windows; tidak ada Celery/task queue di stack ini).
+- `apps/monitoring/views.py` `_report_view`/`_report_export`: baca via `mssql.get_report_source(profile) or profile` — otomatis pakai replica kalau `report_source` diset, fallback ke legacy kalau belum. Jalur WRITE (`update_harga`, `sync_entity`, dst.) TIDAK pernah pakai `report_source` — selalu ke `profile` langsung.
+- **Prasyarat di server legacy (kerjaan DBA, bukan kode)**: `EXEC sys.sp_cdc_enable_db;` lalu `sys.sp_cdc_enable_table` per tabel di `CDC_TABLE_SPECS` (nama capture instance default `dbo_<table>`, sesuaikan dict kalau DBA pakai nama custom). Replica butuh skema tabel yang sama, disiapkan manual di server kedua.
+- Staleness: laporan dari replica bisa lag ~1-2 menit dari transaksi terbaru (tergantung jadwal `sync_cdc`) — trade-off sadar demi tidak membebani legacy server, bukan bug.
 
 ## Tabel legacy tersedia (sudah dicek di server aktif)
 
@@ -72,6 +83,7 @@ View: bungkus kerja berat dalam fungsi, `props={"key": defer(fn)}`. Frontend: `<
 - ✅ Fase 0–6: semua 28 menu real (`frontend/mock/*` sudah dihapus), pagination server-side + export XLSX di laporan, indexing diperluas (~30 index) + audit trail `ActivityLog`, redesign UI ("mecha" theme, token warna `rx-red`/`rx-yellow` di `frontend/css/main.css`).
 - ⬜ Fase 7: verifikasi + load test — commit terakhir sebelum sesi ini ("Frontend, backend, masih error mwahaha") mengindikasikan masih ada bug runtime belum diselesaikan setelah redesign UI; belum diverifikasi `npm run build` bersih di kondisi terbaru.
 - ⬜ Menu key `supplier`/`sync_history` belum ditambahkan ke `apps/core/menus.py` walau view/route sudah ada.
+- 🔶 Fase 8 (opsional, performa — lihat "Reporting replica" di atas): kode sisi app (`report_source`, `cdc_sync.py`, `sync_cdc`, wiring `_report_view`) sudah ada di branch `feature/cdc-reporting-replica`, teruji lewat Django check + smoke test lokal (fungsi CDC SQL Server-nya sendiri tidak bisa diuji tanpa server asli). Belum dikerjakan: enable CDC di server legacy (DBA), siapkan skema di server kedua, `--backfill` awal, dan verifikasi end-to-end (load test, cocokkan angka replica vs legacy).
 
 ## Di luar scope
 

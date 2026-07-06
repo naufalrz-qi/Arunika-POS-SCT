@@ -101,6 +101,7 @@ waitress-serve --threads=32 --listen=0.0.0.0:8000 config.wsgi:application
 | `seed_dev` | Seed user admin + profil koneksi grosir dev |
 | `ensure_indexes` | Buat index report/stok di MS SQL (idempoten; juga auto per koneksi) |
 | `check_stock_agg` | Self-check: agregasi stok SQL vs Python (koneksi aktif) |
+| `sync_cdc` | Sync replica laporan (`report_source`) via CDC — `--backfill` untuk copy penuh awal, opsional (lihat `context.md` § Reporting replica) |
 
 ## Struktur
 

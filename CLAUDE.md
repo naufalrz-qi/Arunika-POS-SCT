@@ -44,6 +44,7 @@ python manage.py generate_key    # generate POS_FERNET_KEY (encrypts connection 
 python manage.py seed_dev        # seed admin user + dev connection profile
 python manage.py ensure_indexes  # create report/stock indexes on MS SQL (idempotent)
 python manage.py check_stock_agg # self-check: SQL aggregation vs Python aggregation
+python manage.py sync_cdc        # sync report_source replica via CDC (--backfill for initial full copy)
 ```
 
 ## Architecture
@@ -58,6 +59,7 @@ python manage.py check_stock_agg # self-check: SQL aggregation vs Python aggrega
 - `apps/inventory/services.py` — stock/movement engine (multi-way UNION of penjualan/pembelian/retur/opname/mutasi), master-data cache (~10 min TTL).
 - `apps/transactions/services.py` — dashboard KPIs, report aggregation, index helpers.
 - `apps/master_data/services.py` — products/customers, price update/compare.
+- `apps/transactions/cdc_sync.py` — optional reporting-replica sync via SQL Server CDC (see `context.md` § Reporting replica). `ServerProfile.report_source` + `core/mssql.get_report_source()` route report reads to the replica when configured; write paths always target the primary profile.
 
 **MS SQL gotcha — key normalization.** SQL Server collation is case-insensitive and ignores trailing spaces; Python dict keys are not. When joining SQL result sets on `kd_*` keys in Python, normalize both sides with the `_k()` helper (see `apps/inventory/services.py`). Mismatched joins silently drop rows otherwise.
 
