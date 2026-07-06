@@ -143,3 +143,14 @@ def get_active_profile(db_type: str | None = None):
 def get_cost_source(retail_profile):
     """Server grosir/gudang acuan modal untuk sebuah profil retail, atau None."""
     return getattr(retail_profile, "cost_source", None)
+
+
+def get_report_source(profile):
+    """Replica server (disinkron via CDC) untuk baca laporan, atau None.
+
+    Dipakai di jalur baca laporan berat (apps/monitoring/views.py _report_view)
+    supaya SELECT laporan mengenai replica ini, bukan server legacy yang juga
+    melayani transaksi kasir live. Jalur WRITE (update_harga, sync_entity, dst.)
+    TIDAK boleh pakai ini — selalu tulis ke `profile` (server legacy) langsung.
+    """
+    return getattr(profile, "report_source", None)

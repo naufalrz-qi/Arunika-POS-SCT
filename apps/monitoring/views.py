@@ -691,9 +691,15 @@ def _report_view(spec):
             profile = _active()
             if profile:
                 try:
+                    # Reads only: hit the report_source replica when one is
+                    # configured (synced via apps/transactions/cdc_sync.py),
+                    # so this heavy query never competes for locks with live
+                    # POS transactions on the legacy server. Falls back to the
+                    # legacy server itself when no replica is set up.
+                    read_profile = mssql.get_report_source(profile) or profile
                     inner, params = spec["inner"](f)
                     inner, params = reporting.apply_column_filters(inner, params, f)
-                    with mssql.cursor(profile) as cur:
+                    with mssql.cursor(read_profile) as cur:
                         if f["recent"]:
                             rows, total, summary_sql = reporting.run_recent(cur, inner, params, f)
                         else:
@@ -702,7 +708,7 @@ def _report_view(spec):
                         cur.execute(f"SELECT {spec['summary']} FROM ({summary_sql}) AS q", params)
                         summary = reporting.clean_rows(reporting.dictify(cur))[0]
                     if spec.get("options"):
-                        options = spec["options"](profile)
+                        options = spec["options"](read_profile)
                 except pyodbc.Error as exc:
                     conn_error = f"Gagal membaca laporan: {exc.args[-1] if exc.args else exc}"
             else:
@@ -726,9 +732,10 @@ def _report_export(spec):
             request.session["flash_error"] = CONN_ERROR
             return redirect(spec["url"])
         try:
+            read_profile = mssql.get_report_source(profile) or profile
             inner, params = spec["inner"](f)
             inner, params = reporting.apply_column_filters(inner, params, f)
-            with mssql.cursor(profile) as cur:
+            with mssql.cursor(read_profile) as cur:
                 rows = reporting.run_all(cur, inner, params, f)
         except pyodbc.Error as exc:
             request.session["flash_error"] = f"Gagal export: {exc.args[-1] if exc.args else exc}"

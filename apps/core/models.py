@@ -88,6 +88,35 @@ class SyncLog(models.Model):
         return json.loads(self.detail) if self.detail else []
 
 
+class CdcSyncCursor(models.Model):
+    """Resume point for one CDC-synced table (apps/transactions/cdc_sync.py).
+
+    `last_lsn` is the SQL Server LSN (varbinary(10)) up to which changes for
+    this table have already been applied to the report_source replica, stored
+    as a hex string (bytes.hex()) since Django/SQLite has no native varbinary.
+    One row per (profile, table_name) — the sync job reads it to know where to
+    resume, and writes it after each successful batch.
+    """
+
+    profile = models.ForeignKey(
+        "connections.ServerProfile", on_delete=models.CASCADE, related_name="cdc_cursors"
+    )
+    table_name = models.CharField(max_length=64)
+    last_lsn = models.CharField(max_length=20, blank=True)  # hex(varbinary(10)) = 20 chars
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    last_rows_applied = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=10, default="ok")  # "ok" | "failed"
+    error_message = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["profile", "table_name"], name="unique_cdc_cursor_per_table")
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.profile_id}:{self.table_name} @ {self.last_lsn or '(belum sync)'}"
+
+
 def log_sync(request, feature, mode, src, dst, compared, applied, status="ok", items=None, error=""):
     """Catat satu proses sinkronisasi (harga atau master data) untuk halaman Riwayat Sinkronisasi."""
     user = getattr(request, "user", None)
