@@ -121,6 +121,16 @@ def cursor(profile, autocommit=True):
         conn.close()
 
 
+@contextmanager
+def report_cursor(profile):
+    """Cursor READ-ONLY untuk report: READ UNCOMMITTED (NOLOCK) supaya SELECT
+    berat tak mengambil shared lock yang memblok tulis POS live. Aman untuk
+    laporan (data historis tak sedang ditulis); JANGAN dipakai jalur write."""
+    with cursor(profile) as cur:
+        cur.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
+        yield cur
+
+
 def get_active_profile(db_type: str | None = None):
     """Return the single active ServerProfile (global), or None.
 

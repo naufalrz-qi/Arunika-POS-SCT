@@ -168,7 +168,9 @@ def run_recent(cur, inner_sql, params, f):
     (rows, total, capped_sql) — `capped_sql` lets the caller compute a summary
     aggregate over the same capped set rather than the full history.
     """
-    capped_sql = f"SELECT TOP {f['per_page']} * FROM ({inner_sql}) AS q0 ORDER BY {f['order_by']}"
+    # Alias `q` (not q0) so f["order_by"] — built with a `q.` prefix in
+    # parse_report_params, matching run_paged/run_all — binds here too.
+    capped_sql = f"SELECT TOP {f['per_page']} * FROM ({inner_sql}) AS q ORDER BY {f['order_by']}"
     cur.execute(capped_sql, params)
     rows = clean_rows(dictify(cur))
     for i, r in enumerate(rows):

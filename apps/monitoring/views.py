@@ -482,7 +482,7 @@ def logs_index(request):
     )
 
 
-# --- Monitoring Stok (computed from movement card, table-level) ------------
+# --- Stok Akhir (computed from movement card, table-level) -----------------
 
 def stock_index(request):
     kd_divisi = request.GET.get("kd_divisi", "")
@@ -701,7 +701,7 @@ def _report_view(spec):
                 for read_profile in mssql.report_read_profiles(profile):
                     rows, total, summary, options = [], 0, {}, {}  # reset per attempt
                     try:
-                        with mssql.cursor(read_profile) as cur:
+                        with mssql.report_cursor(read_profile) as cur:
                             if f["recent"]:
                                 rows, total, summary_sql = reporting.run_recent(cur, inner, params, f)
                             else:
@@ -742,7 +742,7 @@ def _report_export(spec):
         # (same read-offload-with-fallback policy as _report_view).
         for read_profile in mssql.report_read_profiles(profile):
             try:
-                with mssql.cursor(read_profile) as cur:
+                with mssql.report_cursor(read_profile) as cur:
                     rows = reporting.run_all(cur, inner, params, f)
                 break
             except pyodbc.Error as exc:
@@ -1123,29 +1123,201 @@ def stok_divisi(request):
         },
     )
 
-def stok_akhir(request):
-    tanggal = _parse_date(request.GET.get("tanggal")) or dt.datetime.now()
+def mutasi_stok(request):
+    """Mutasi stok per barang untuk sebuah periode (stok awal diasumsikan 0)."""
+    kd_divisi = request.GET.get("kd_divisi", "")
+    date_from = _parse_date(request.GET.get("date_from"))
+    date_to = _parse_date(request.GET.get("date_to"))
+    # Default: sejak 1 Januari tahun berjalan supaya seed/saldo lama (tanggal
+    # tutup buku) selalu di bawah date_from dan tidak ikut terhitung.
+    if not date_from:
+        date_from = dt.datetime(dt.datetime.now().year, 1, 1)
+
+    def load():
+        profile = _active()
+        rows, divisi_list, conn_error = [], [], None
+        if profile:
+            try:
+                divisi_list = inv.list_divisi(profile)
+                rows = inv.mutasi_stok(
+                    profile,
+                    date_from=date_from,
+                    date_to=_eod(date_to) if date_to else None,
+                    kd_divisi=kd_divisi or None,
+                )
+            except pyodbc.Error as exc:
+                conn_error = f"Gagal membaca mutasi stok: {exc.args[-1] if exc.args else exc}"
+        else:
+            conn_error = CONN_ERROR
+        return {"rows": rows, "divisi_list": divisi_list, "conn_error": conn_error}
+
+    return render(
+        request,
+        "Admin/Inventory/MutasiStok",
+        props={
+            "data": defer(load),
+            "filters": {
+                "kd_divisi": kd_divisi,
+                "date_from": request.GET.get("date_from", ""),
+                "date_to": request.GET.get("date_to", ""),
+            },
+        },
+    )
+
+
+def stok_awal_barang(request):
+    tanggal = _parse_date(request.GET.get("tanggal"))
+    tahun_raw = (request.GET.get("tahun") or "").strip()
+    cutoff = None
+    if tanggal:
+        cutoff = tanggal  # date_from 00:00 -> saldo sebelum hari itu
+    elif tahun_raw.isdigit() and 2000 <= int(tahun_raw) <= 2999:
+        cutoff = dt.datetime(int(tahun_raw), 1, 1)
 
     def load():
         profile = _active()
         rows, conn_error = [], None
         if profile:
             try:
-                rows = inv.stok_akhir_per_tanggal(profile, tanggal=_eod(tanggal))
+                rows = inv.stok_awal_barang(profile, cutoff=cutoff)
             except pyodbc.Error as exc:
-                conn_error = f"Gagal membaca stok akhir: {exc.args[-1] if exc.args else exc}"
+                conn_error = f"Gagal membaca stok awal: {exc.args[-1] if exc.args else exc}"
         else:
             conn_error = CONN_ERROR
         return {"rows": rows, "conn_error": conn_error}
 
     return render(
         request,
-        "Admin/Inventory/StokAkhir",
+        "Admin/Inventory/StokAwalBarang",
         props={
             "data": defer(load),
-            "filters": {"tanggal": request.GET.get("tanggal", "")},
+            "filters": {"tanggal": request.GET.get("tanggal", ""), "tahun": tahun_raw},
         },
     )
+
+
+# --- Transaksi Barang (laporan transaksi seluruh barang) -------------------
+_TRANSAKSI_COLUMNS = [
+    {"key": "tanggal", "label": "Tanggal"},
+    {"key": "transaksi", "label": "Jenis"},
+    {"key": "no_transaksi", "label": "No. Transaksi"},
+    {"key": "divisi", "label": "Divisi"},
+    {"key": "kd_barang", "label": "Kode"},
+    {"key": "barang", "label": "Barang"},
+    {"key": "masuk", "label": "Masuk"},
+    {"key": "keluar", "label": "Keluar"},
+    {"key": "satuan", "label": "Satuan"},
+    {"key": "harga", "label": "Harga"},
+]
+
+
+def _transaksi_params(request):
+    """Parse param laporan transaksi barang (semantik tanggal/closing custom)."""
+    g = request.GET
+    jenis = [j.strip() for j in (g.get("jenis") or "").split(",") if j.strip()]
+    date_from = _parse_date(g.get("date_from"))
+    date_to = _parse_date(g.get("date_to"))
+    search = (g.get("search") or "").strip()
+    kd_divisi = (g.get("kd_divisi") or "").strip()
+    sort = g.get("sort") if g.get("sort") in rpt.SORTS_TRANSAKSI_BARANG else "tanggal"
+    sort_dir = "asc" if (g.get("sort_dir") or "desc").lower() == "asc" else "desc"
+    try:
+        page = max(1, int(g.get("page") or 1))
+    except ValueError:
+        page = 1
+    try:
+        per_page = min(reporting.MAX_PER_PAGE, max(10, int(g.get("per_page") or reporting.DEFAULT_PER_PAGE)))
+    except ValueError:
+        per_page = reporting.DEFAULT_PER_PAGE
+    recent = not (date_from or date_to or jenis or search) and page == 1
+    if recent:
+        per_page = reporting.RECENT_LIMIT  # first load: tampilkan N terbaru (sesuai banner)
+    return {
+        "jenis": jenis,
+        "date_from": date_from,
+        "date_to": _eod(date_to) if date_to else None,
+        "search": search,
+        "kd_divisi": kd_divisi,
+        "sort": sort,
+        "sort_dir": sort_dir,
+        "page": page,
+        "per_page": per_page,
+        "recent": recent,
+        "order_by": f"q.{rpt.SORTS_TRANSAKSI_BARANG[sort]} {sort_dir.upper()}",
+        "date_from_s": g.get("date_from", ""),
+        "date_to_s": g.get("date_to", ""),
+    }
+
+
+def _transaksi_inner(p):
+    return rpt.transaksi_barang(
+        jenis=p["jenis"],
+        date_from=p["date_from"],
+        date_to=p["date_to"],
+        kd_divisi=p["kd_divisi"] or None,
+        search=p["search"],
+    )
+
+
+def transaksi_barang(request):
+    p = _transaksi_params(request)
+
+    def load():
+        rows, total, summary, options, conn_error = [], 0, {}, {}, None
+        profile = _active()
+        if profile:
+            inner, params = _transaksi_inner(p)
+            for read_profile in mssql.report_read_profiles(profile):
+                rows, total, summary, options = [], 0, {}, {}
+                try:
+                    with mssql.report_cursor(read_profile) as cur:
+                        if p["recent"]:
+                            rows, total, summary_sql = reporting.run_recent(cur, inner, params, p)
+                        else:
+                            rows, total = reporting.run_paged(cur, inner, params, p)
+                            summary_sql = inner
+                        cur.execute(f"SELECT {rpt.SUMMARY_TRANSAKSI_BARANG} FROM ({summary_sql}) AS q", params)
+                        summary = reporting.clean_rows(reporting.dictify(cur))[0]
+                    options = {"divisi": _opt_divisi(read_profile)}
+                    conn_error = None
+                    break
+                except pyodbc.Error as exc:
+                    conn_error = f"Gagal membaca transaksi: {exc.args[-1] if exc.args else exc}"
+        else:
+            conn_error = CONN_ERROR
+        return {"rows": rows, "total": total, "summary": summary, "options": options, "conn_error": conn_error}
+
+    return render(
+        request,
+        "Admin/Inventory/TransaksiBarang",
+        props={
+            "report": defer(load),
+            "filters": {
+                "date_from": p["date_from_s"], "date_to": p["date_to_s"], "date_mode": "range",
+                "search": p["search"], "sort": p["sort"], "sort_dir": p["sort_dir"],
+                "page": p["page"], "per_page": p["per_page"], "recent": p["recent"],
+                "kd_divisi": p["kd_divisi"], "jenis": ",".join(p["jenis"]),
+            },
+        },
+    )
+
+
+def transaksi_barang_export(request):
+    p = _transaksi_params(request)
+    rows = []
+    profile = _active()
+    if profile:
+        inner, params = _transaksi_inner(p)
+        for read_profile in mssql.report_read_profiles(profile):
+            try:
+                with mssql.report_cursor(read_profile) as cur:
+                    rows = reporting.run_all(cur, inner, params, p)
+                break
+            except pyodbc.Error:
+                continue
+    return reporting.xlsx_response("transaksi-barang", _TRANSAKSI_COLUMNS, rows)
+
+
 _OPNAME = {
     "component": "Admin/Inventory/Opname",
     "url": "/admin-panel/inventory/opname",
