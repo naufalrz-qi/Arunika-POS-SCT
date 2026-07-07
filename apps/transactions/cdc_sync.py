@@ -33,9 +33,8 @@ Two apply strategies, per table shape:
 """
 from __future__ import annotations
 
-import datetime as dt
-
 import pyodbc
+from django.utils import timezone
 
 from apps.core.models import CdcSyncCursor
 from core import mssql
@@ -126,6 +125,25 @@ def _insertable_columns(cur, table: str) -> list[str]:
     return [r[0] for r in cur.fetchall()]
 
 
+def _has_lob_columns(cur, table: str) -> bool:
+    """True if `table` has any large-object column: a MAX type (max_length = -1)
+    or the legacy LOB types image/text/ntext/xml (system_type_id 34/35/99/241).
+
+    Matters for fast_executemany: pyodbc pre-allocates a per-cell buffer sized
+    to the column's *maximum* width for the whole batch, so a single image /
+    varbinary(max) column blows memory up to GBs (e.g. m_pegawai.foto). We keep
+    fast_executemany only for LOB-free tables and fall back to the plain (slow
+    but bounded) path otherwise.
+    """
+    cur.execute(
+        "SELECT COUNT(*) FROM sys.columns "
+        "WHERE object_id = OBJECT_ID(?) "
+        "AND (max_length = -1 OR system_type_id IN (34, 35, 99, 241))",
+        [table],
+    )
+    return cur.fetchone()[0] > 0
+
+
 def _delete_by_key(cur, table: str, key_columns: list[str], row: dict) -> None:
     where = " AND ".join(f"{c} = ?" for c in key_columns)
     cur.execute(f"DELETE FROM {table} WHERE {where}", [row[c] for c in key_columns])
@@ -173,11 +191,16 @@ def backfill_table(profile, table_name: str, target=None, chunk_size: int = 2000
         insert_sql = f"INSERT INTO {table_name} ({cols_sql}) VALUES ({placeholders})"
         # fast_executemany batches all params into one round-trip instead of a
         # per-row prepared exec — the difference between minutes and hours on a
-        # 3M-row table. Commit per chunk so the replica's transaction log stays
-        # bounded rather than holding one giant transaction open for the copy.
-        tgt_cur.fast_executemany = True
+        # 3M-row table. But it pre-allocates a per-cell buffer at each column's
+        # MAX width, so a LOB column (image/varbinary(max)/...) would blow up
+        # memory (MemoryError on m_pegawai.foto). Use it only for LOB-free
+        # tables; LOB tables take the plain path with a small batch. Commit per
+        # chunk so the replica's transaction log stays bounded.
+        has_lob = _has_lob_columns(tgt_cur, table_name)
+        tgt_cur.fast_executemany = not has_lob
+        batch_size = 50 if has_lob else chunk_size
         while True:
-            batch = src_cur.fetchmany(chunk_size)
+            batch = src_cur.fetchmany(batch_size)
             if not batch:
                 break
             tgt_cur.executemany(insert_sql, [list(row) for row in batch])
@@ -186,7 +209,7 @@ def backfill_table(profile, table_name: str, target=None, chunk_size: int = 2000
 
     cursor_row = _get_or_create_cursor(profile, table_name)
     cursor_row.last_lsn = pre_copy_lsn.hex() if pre_copy_lsn else ""
-    cursor_row.last_synced_at = dt.datetime.now()
+    cursor_row.last_synced_at = timezone.now()
     cursor_row.last_rows_applied = n
     cursor_row.status = "ok"
     cursor_row.error_message = ""
@@ -272,7 +295,7 @@ def sync_table(profile, table_name: str) -> dict:
                 tgt_cur.connection.commit()
 
         cursor_row.last_lsn = to_lsn.hex()
-        cursor_row.last_synced_at = dt.datetime.now()
+        cursor_row.last_synced_at = timezone.now()
         cursor_row.last_rows_applied = applied
         cursor_row.status = "ok"
         cursor_row.error_message = ""
