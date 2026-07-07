@@ -50,7 +50,12 @@ class Command(BaseCommand):
         if opts["backfill"]:
             for table_name in SYNC_ORDER:
                 self.stdout.write(f"  backfill {table_name}...")
-                n = backfill_table(profile, table_name)
+                try:
+                    n = backfill_table(profile, table_name)
+                except RuntimeError as exc:
+                    # e.g. a table not yet provisioned on the replica — show the
+                    # actionable message, not a traceback.
+                    raise CommandError(str(exc))
                 self.stdout.write(f"    {n} baris disalin.")
 
         results = sync_all(profile)

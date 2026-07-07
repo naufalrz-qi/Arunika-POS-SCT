@@ -104,7 +104,19 @@ def _insertable_columns(cur, table: str) -> list[str]:
     mirror the source's computed/identity flags, so ask the target it's being
     written to, not the source. Returned names always exist as plain columns on
     the source too (same names), so a `SELECT`/`row.get()` by them is safe.
+
+    Raises RuntimeError if `table` doesn't exist on this connection — otherwise
+    OBJECT_ID returns NULL, the query yields zero columns, and we'd silently
+    build a malformed INSERT. The common cause is the replica not being
+    provisioned yet (Phase A), so name that explicitly.
     """
+    cur.execute("SELECT OBJECT_ID(?)", [table])
+    if cur.fetchone()[0] is None:
+        raise RuntimeError(
+            f"Tabel '{table}' tidak ada di server tujuan (replica). Buat dulu "
+            f"skema tabelnya di replica sebelum backfill/sync — lihat prasyarat "
+            f"Phase A di docstring apps/transactions/cdc_sync.py."
+        )
     cur.execute(
         "SELECT name FROM sys.columns "
         "WHERE object_id = OBJECT_ID(?) AND is_computed = 0 AND is_identity = 0 "
@@ -265,7 +277,10 @@ def sync_table(profile, table_name: str) -> dict:
         cursor_row.status = "ok"
         cursor_row.error_message = ""
         result["applied"] = applied
-    except pyodbc.Error as exc:
+    except (pyodbc.Error, RuntimeError) as exc:
+        # RuntimeError = missing replica table (see _insertable_columns) — record
+        # it as this table's failure so sync_all keeps going for the rest,
+        # rather than aborting the whole run on one unprovisioned table.
         msg = str(exc.args[-1] if exc.args else exc)
         cursor_row.status = "failed"
         cursor_row.error_message = msg[:255]
