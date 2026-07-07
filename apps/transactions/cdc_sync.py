@@ -95,9 +95,23 @@ def _dictify(cur) -> list[dict]:
     return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
-def _target_columns(spec_table: str, target_cur) -> list[str]:
-    target_cur.execute(f"SELECT TOP 0 * FROM {spec_table}")
-    return [c[0] for c in target_cur.description]
+def _insertable_columns(cur, table: str) -> list[str]:
+    """Column names of `table` that can be INSERTed into, in column order.
+
+    Excludes computed and identity columns — SQL Server rejects an explicit
+    INSERT into either (e.g. t_penjualan_detail's computed `total`). The
+    replica schema is hand-provisioned (Phase A) and isn't guaranteed to
+    mirror the source's computed/identity flags, so ask the target it's being
+    written to, not the source. Returned names always exist as plain columns on
+    the source too (same names), so a `SELECT`/`row.get()` by them is safe.
+    """
+    cur.execute(
+        "SELECT name FROM sys.columns "
+        "WHERE object_id = OBJECT_ID(?) AND is_computed = 0 AND is_identity = 0 "
+        "ORDER BY column_id",
+        [table],
+    )
+    return [r[0] for r in cur.fetchall()]
 
 
 def _delete_by_key(cur, table: str, key_columns: list[str], row: dict) -> None:
@@ -136,19 +150,27 @@ def backfill_table(profile, table_name: str, target=None, chunk_size: int = 2000
 
     n = 0
     with mssql.cursor(profile) as src_cur, mssql.cursor(target, autocommit=False) as tgt_cur:
+        # Copy only insertable columns (skip computed/identity), and select the
+        # same explicit column set from the source so INSERT positions line up.
+        columns = _insertable_columns(tgt_cur, table_name)
         tgt_cur.execute(f"DELETE FROM {table_name}")
-        src_cur.execute(f"SELECT * FROM {table_name}")
-        columns = [c[0] for c in src_cur.description]
+        tgt_cur.connection.commit()  # persist the clear even if the table is empty (no batches below)
         cols_sql = ", ".join(columns)
+        src_cur.execute(f"SELECT {cols_sql} FROM {table_name}")
         placeholders = ", ".join("?" * len(columns))
         insert_sql = f"INSERT INTO {table_name} ({cols_sql}) VALUES ({placeholders})"
+        # fast_executemany batches all params into one round-trip instead of a
+        # per-row prepared exec — the difference between minutes and hours on a
+        # 3M-row table. Commit per chunk so the replica's transaction log stays
+        # bounded rather than holding one giant transaction open for the copy.
+        tgt_cur.fast_executemany = True
         while True:
             batch = src_cur.fetchmany(chunk_size)
             if not batch:
                 break
             tgt_cur.executemany(insert_sql, [list(row) for row in batch])
+            tgt_cur.connection.commit()
             n += len(batch)
-        tgt_cur.connection.commit()
 
     cursor_row = _get_or_create_cursor(profile, table_name)
     cursor_row.last_lsn = pre_copy_lsn.hex() if pre_copy_lsn else ""
@@ -161,7 +183,7 @@ def backfill_table(profile, table_name: str, target=None, chunk_size: int = 2000
 
 
 def _sync_keyed_table(tgt_cur, table_name: str, key_columns: list[str], changes: list[dict]) -> int:
-    columns = _target_columns(table_name, tgt_cur)
+    columns = _insertable_columns(tgt_cur, table_name)
     applied = 0
     for row in changes:
         op = row["__$operation"]
@@ -178,7 +200,7 @@ def _sync_child_table(src_cur, tgt_cur, table_name: str, parent_key: str, change
     parent_values = {row[parent_key] for row in changes}
     if not parent_values:
         return 0
-    columns = _target_columns(table_name, tgt_cur)
+    columns = _insertable_columns(tgt_cur, table_name)
     placeholders = ", ".join("?" * len(parent_values))
     for value in parent_values:
         tgt_cur.execute(f"DELETE FROM {table_name} WHERE {parent_key} = ?", [value])

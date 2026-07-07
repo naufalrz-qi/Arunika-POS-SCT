@@ -154,3 +154,14 @@ def get_report_source(profile):
     TIDAK boleh pakai ini — selalu tulis ke `profile` (server legacy) langsung.
     """
     return getattr(profile, "report_source", None)
+
+
+def report_read_profiles(profile) -> list:
+    """Ordered candidate profiles for report READS: the CDC replica first (so
+    heavy SELECTs offload off the live POS server), then the primary `profile`
+    as a fallback. Callers try each in order until one connects — a replica
+    outage then degrades to slower direct reads instead of breaking every
+    report page. READS ONLY; write paths must always target `profile` directly.
+    """
+    replica = get_report_source(profile)
+    return [replica, profile] if replica else [profile]

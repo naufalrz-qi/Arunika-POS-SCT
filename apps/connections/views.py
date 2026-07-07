@@ -47,6 +47,12 @@ def connections_save(request):
     if profile.db_type == DbType.RETAIL and not profile.cost_source_id:
         request.session["flash_error"] = "Server retail wajib memilih Sumber Modal (grosir/gudang)."
         return redirect("/admin-panel/connections")
+    # The UI already hides self from the replica picker, but a crafted POST can
+    # still send it — a profile whose report_source is itself is meaningless
+    # (reports would read the same live server they're meant to offload from).
+    if profile.report_source_id and conn_id and str(profile.report_source_id) == str(conn_id):
+        request.session["flash_error"] = "Replica laporan tidak boleh server itu sendiri."
+        return redirect("/admin-panel/connections")
     profile.save()
     from apps.transactions.indexes import ensure_indexes_async
     ensure_indexes_async(profile)  # PRD §9 — build registry indexes on registration

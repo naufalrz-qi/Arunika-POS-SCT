@@ -690,27 +690,31 @@ def _report_view(spec):
             rows, total, summary, options, conn_error = [], 0, {}, {}, None
             profile = _active()
             if profile:
-                try:
-                    # Reads only: hit the report_source replica when one is
-                    # configured (synced via apps/transactions/cdc_sync.py),
-                    # so this heavy query never competes for locks with live
-                    # POS transactions on the legacy server. Falls back to the
-                    # legacy server itself when no replica is set up.
-                    read_profile = mssql.get_report_source(profile) or profile
-                    inner, params = spec["inner"](f)
-                    inner, params = reporting.apply_column_filters(inner, params, f)
-                    with mssql.cursor(read_profile) as cur:
-                        if f["recent"]:
-                            rows, total, summary_sql = reporting.run_recent(cur, inner, params, f)
-                        else:
-                            rows, total = reporting.run_paged(cur, inner, params, f)
-                            summary_sql = inner
-                        cur.execute(f"SELECT {spec['summary']} FROM ({summary_sql}) AS q", params)
-                        summary = reporting.clean_rows(reporting.dictify(cur))[0]
-                    if spec.get("options"):
-                        options = spec["options"](read_profile)
-                except pyodbc.Error as exc:
-                    conn_error = f"Gagal membaca laporan: {exc.args[-1] if exc.args else exc}"
+                # Reads only: prefer the report_source replica (synced via
+                # apps/transactions/cdc_sync.py) so this heavy query never
+                # competes for locks with live POS transactions, but fall back
+                # to the legacy server itself if no replica is set up OR the
+                # replica is unreachable — a replica outage shouldn't break
+                # every report when the primary can still serve them.
+                inner, params = spec["inner"](f)
+                inner, params = reporting.apply_column_filters(inner, params, f)
+                for read_profile in mssql.report_read_profiles(profile):
+                    rows, total, summary, options = [], 0, {}, {}  # reset per attempt
+                    try:
+                        with mssql.cursor(read_profile) as cur:
+                            if f["recent"]:
+                                rows, total, summary_sql = reporting.run_recent(cur, inner, params, f)
+                            else:
+                                rows, total = reporting.run_paged(cur, inner, params, f)
+                                summary_sql = inner
+                            cur.execute(f"SELECT {spec['summary']} FROM ({summary_sql}) AS q", params)
+                            summary = reporting.clean_rows(reporting.dictify(cur))[0]
+                        if spec.get("options"):
+                            options = spec["options"](read_profile)
+                        conn_error = None
+                        break
+                    except pyodbc.Error as exc:
+                        conn_error = f"Gagal membaca laporan: {exc.args[-1] if exc.args else exc}"
             else:
                 conn_error = CONN_ERROR
             if f["warning"]:
@@ -731,14 +735,20 @@ def _report_export(spec):
         if not profile:
             request.session["flash_error"] = CONN_ERROR
             return redirect(spec["url"])
-        try:
-            read_profile = mssql.get_report_source(profile) or profile
-            inner, params = spec["inner"](f)
-            inner, params = reporting.apply_column_filters(inner, params, f)
-            with mssql.cursor(read_profile) as cur:
-                rows = reporting.run_all(cur, inner, params, f)
-        except pyodbc.Error as exc:
-            request.session["flash_error"] = f"Gagal export: {exc.args[-1] if exc.args else exc}"
+        inner, params = spec["inner"](f)
+        inner, params = reporting.apply_column_filters(inner, params, f)
+        rows, last_exc = None, None
+        # Prefer the replica, fall back to the primary if it's unreachable
+        # (same read-offload-with-fallback policy as _report_view).
+        for read_profile in mssql.report_read_profiles(profile):
+            try:
+                with mssql.cursor(read_profile) as cur:
+                    rows = reporting.run_all(cur, inner, params, f)
+                break
+            except pyodbc.Error as exc:
+                last_exc = exc
+        if rows is None:
+            request.session["flash_error"] = f"Gagal export: {last_exc.args[-1] if last_exc.args else last_exc}"
             return redirect(spec["url"])
         log_activity(request, "export", f"Export {spec['filename']}: {len(rows)} baris")
         return reporting.xlsx_response(spec["filename"], spec["columns"], rows)

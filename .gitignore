@@ -4,6 +4,8 @@ __pycache__/
 .venv/
 venv/
 db.sqlite3
+db.sqlite3-shm
+db.sqlite3-wal
 .claude/
 .impeccable/
 
@@ -20,4 +22,9 @@ DESIGN.md
 strukturdatabase_GrosirPusat.txt
 
 .viewandfunction/
+
+# Generated DB schema dumps (regenerate with scripts/*.py; keep the scripts,
+# not their bulky output — mirrors why strukturdatabase_GrosirPusat.txt is ignored)
+scripts/output/
+temp_schema.py
 
