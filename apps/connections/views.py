@@ -31,6 +31,9 @@ def _apply_form(profile, data):
     profile.username = (data.get("username") or "").strip()
     # Retail: acuan modal (server grosir/gudang). Non-retail: selalu kosong.
     profile.cost_source_id = (data.get("cost_source") or None) if profile.db_type == DbType.RETAIL else None
+    # Replica opsional untuk baca laporan (disinkron via CDC, apps/transactions/cdc_sync.py).
+    # Berlaku untuk semua tipe db, bukan cuma retail.
+    profile.report_source_id = data.get("report_source") or None
     password = data.get("password") or ""
     if password:  # keep existing password if left blank on edit
         profile.set_password(password)
