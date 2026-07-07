@@ -95,9 +95,23 @@ def _dictify(cur) -> list[dict]:
     return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
-def _target_columns(spec_table: str, target_cur) -> list[str]:
-    target_cur.execute(f"SELECT TOP 0 * FROM {spec_table}")
-    return [c[0] for c in target_cur.description]
+def _insertable_columns(cur, table: str) -> list[str]:
+    """Column names of `table` that can be INSERTed into, in column order.
+
+    Excludes computed and identity columns — SQL Server rejects an explicit
+    INSERT into either (e.g. t_penjualan_detail's computed `total`). The
+    replica schema is hand-provisioned (Phase A) and isn't guaranteed to
+    mirror the source's computed/identity flags, so ask the target it's being
+    written to, not the source. Returned names always exist as plain columns on
+    the source too (same names), so a `SELECT`/`row.get()` by them is safe.
+    """
+    cur.execute(
+        "SELECT name FROM sys.columns "
+        "WHERE object_id = OBJECT_ID(?) AND is_computed = 0 AND is_identity = 0 "
+        "ORDER BY column_id",
+        [table],
+    )
+    return [r[0] for r in cur.fetchall()]
 
 
 def _delete_by_key(cur, table: str, key_columns: list[str], row: dict) -> None:
@@ -140,8 +154,7 @@ def backfill_table(profile, table_name: str, target=None, chunk_size: int = 2000
         # same explicit column set from the source so INSERT positions line up.
         columns = _insertable_columns(tgt_cur, table_name)
         tgt_cur.execute(f"DELETE FROM {table_name}")
-        src_cur.execute(f"SELECT * FROM {table_name}")
-        columns = [c[0] for c in src_cur.description]
+        tgt_cur.connection.commit()  # persist the clear even if the table is empty (no batches below)
         cols_sql = ", ".join(columns)
         src_cur.execute(f"SELECT {cols_sql} FROM {table_name}")
         placeholders = ", ".join("?" * len(columns))
