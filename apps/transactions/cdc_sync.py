@@ -96,8 +96,18 @@ def _dictify(cur) -> list[dict]:
 
 
 def _target_columns(spec_table: str, target_cur) -> list[str]:
-    target_cur.execute(f"SELECT TOP 0 * FROM {spec_table}")
-    return [c[0] for c in target_cur.description]
+    """Insertable column names for `spec_table`, in column order.
+
+    Excludes computed columns (e.g. t_penjualan_detail.total) — SQL Server
+    rejects an explicit INSERT value for those, and since the replica's copy
+    of the table has the identical computed-column definition, the value is
+    recomputed automatically on insert anyway.
+    """
+    target_cur.execute(
+        "SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(?) AND is_computed = 0 ORDER BY column_id",
+        [spec_table],
+    )
+    return [r[0] for r in target_cur.fetchall()]
 
 
 def _delete_by_key(cur, table: str, key_columns: list[str], row: dict) -> None:
@@ -137,11 +147,15 @@ def backfill_table(profile, table_name: str, target=None, chunk_size: int = 2000
     n = 0
     with mssql.cursor(profile) as src_cur, mssql.cursor(target, autocommit=False) as tgt_cur:
         tgt_cur.execute(f"DELETE FROM {table_name}")
-        src_cur.execute(f"SELECT * FROM {table_name}")
-        columns = [c[0] for c in src_cur.description]
+        # Column list comes from the TARGET (excludes computed columns like
+        # t_penjualan_detail.total — see _target_columns), then the source
+        # SELECT names those same columns explicitly instead of `SELECT *`,
+        # so the two lists can never drift apart.
+        columns = _target_columns(table_name, tgt_cur)
         cols_sql = ", ".join(columns)
         placeholders = ", ".join("?" * len(columns))
         insert_sql = f"INSERT INTO {table_name} ({cols_sql}) VALUES ({placeholders})"
+        src_cur.execute(f"SELECT {cols_sql} FROM {table_name}")
         while True:
             batch = src_cur.fetchmany(chunk_size)
             if not batch:
