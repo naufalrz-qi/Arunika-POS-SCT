@@ -14,7 +14,7 @@ const props = defineProps({
 });
 
 const URL = "/admin-panel/inventory/opname";
-const { form, apply, onPage, onSort, reset, exportHref } = useServerReport(URL, props.filters);
+const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerReport(URL, props.filters);
 
 const columns = [
   { key: "no_transaksi", label: "No. Opname", sortable: true },
@@ -53,6 +53,7 @@ const summaryItems = computed(() => {
       :summary-items="summaryItems"
       @page-change="onPage"
       @sort-change="onSort"
+      @per-page-change="onPerPage"
     >
       <template #filters>
         <FilterPanel @submit="apply({ page: 1 })" @reset="reset">

@@ -13,7 +13,7 @@ const props = defineProps({
 });
 
 const URL = "/admin-panel/promo/diskon";
-const { form, apply, onPage, onSort, reset, exportHref } = useServerReport(URL, props.filters);
+const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerReport(URL, props.filters);
 
 const columns = [
   { key: "kd_promo", label: "Kode Promo" },
@@ -51,6 +51,7 @@ const summaryItems = computed(() => {
       :summary-items="summaryItems"
       @page-change="onPage"
       @sort-change="onSort"
+      @per-page-change="onPerPage"
     >
       <template #filters>
         <FilterPanel @submit="apply({ page: 1 })" @reset="reset">

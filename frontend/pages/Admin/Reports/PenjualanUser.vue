@@ -33,7 +33,7 @@ const filterDefs = [
   { key: "nominal", label: "Nominal", type: "number_range" },
 ];
 
-const { form, apply, onPage, onSort, reset, exportHref } = useServerReport(
+const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerReport(
   URL, props.filters, paramNamesFor(filterDefs),
 );
 
@@ -79,6 +79,7 @@ const summaryItems = computed(() => {
       :recent="!!filters.recent"
       @page-change="onPage"
       @sort-change="onSort"
+      @per-page-change="onPerPage"
     >
       <template #filters>
         <FilterPanel @submit="apply({ page: 1 })" @reset="reset">

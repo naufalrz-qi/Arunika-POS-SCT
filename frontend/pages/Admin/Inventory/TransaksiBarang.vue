@@ -26,7 +26,7 @@ const JENIS_OPTIONS = [
   { value: "mutasi_keluar", label: "Mutasi Keluar" },
 ];
 
-const { form, apply, onPage, onSort, reset, exportHref } = useServerReport(URL, props.filters, []);
+const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerReport(URL, props.filters, []);
 
 // jenis dikelola sebagai array checkbox, disinkron ke form.jenis (CSV) saat submit.
 const jenisSel = ref((props.filters.jenis || "").split(",").filter(Boolean));
@@ -83,6 +83,7 @@ const summaryItems = computed(() => {
       :recent="!!filters.recent"
       @page-change="onPage"
       @sort-change="onSort"
+      @per-page-change="onPerPage"
     >
       <template #filters>
         <FilterPanel @submit="submit" @reset="onReset">

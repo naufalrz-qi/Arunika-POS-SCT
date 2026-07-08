@@ -44,6 +44,9 @@ export function useServerReport(url, initial = {}, filterKeys = []) {
   function onSort(s) {
     apply({ sort: s.key, sort_dir: s.dir, page: 1 });
   }
+  function onPerPage(n) {
+    apply({ per_page: n, page: 1 });
+  }
   function reset() {
     for (const k of Object.keys(form)) {
       if (k === "page") form[k] = 1;
@@ -61,5 +64,5 @@ export function useServerReport(url, initial = {}, filterKeys = []) {
 
   const exportHref = computed(() => `${url}/export?` + new URLSearchParams(cleanParams()).toString());
 
-  return { form, apply, onPage, onSort, reset, exportHref };
+  return { form, apply, onPage, onSort, onPerPage, reset, exportHref };
 }

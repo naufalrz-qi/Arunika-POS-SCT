@@ -20,7 +20,7 @@ const props = defineProps({
   summaryItems: { type: Array, default: () => [] },
   recent: { type: Boolean, default: false }, // showing the "100 terbaru" first-load snapshot
 });
-const emit = defineEmits(["page-change", "sort-change"]);
+const emit = defineEmits(["page-change", "sort-change", "per-page-change"]);
 </script>
 
 <template>
@@ -54,6 +54,7 @@ const emit = defineEmits(["page-change", "sort-change"]);
         :sort-dir="sortDir"
         @page-change="emit('page-change', $event)"
         @sort-change="emit('sort-change', $event)"
+        @per-page-change="emit('per-page-change', $event)"
       >
         <template v-for="(_, name) in $slots" #[name]="slotProps">
           <slot :name="name" v-bind="slotProps" />
