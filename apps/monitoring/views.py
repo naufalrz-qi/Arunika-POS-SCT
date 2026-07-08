@@ -4,6 +4,8 @@ import json
 
 import pyodbc
 from django.contrib.auth import update_session_auth_hash
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect
 from inertia import defer, render
@@ -110,28 +112,46 @@ def users_index(request):
     return render(request, "Admin/Users/Index", props={"users": [_user_dict(u) for u in users]})
 
 
+# PRD §4 — this page manages operational accounts only. Admin/superadmin
+# accounts are out of scope here, so the save/delete endpoints must never
+# accept them as role values nor touch them as targets (privilege escalation).
+_MANAGED_ROLES = [Role.KASIR, Role.SUPERVISOR]
+
+
 def users_save(request):
     data = get_data(request)
     user_id = data.get("id")
     name = (data.get("name") or "").strip()
     first, _, last = name.partition(" ")
+
+    role = data.get("role") or Role.KASIR
+    if role not in _MANAGED_ROLES:
+        request.session["flash_error"] = "Role tidak valid untuk halaman ini."
+        return redirect("/admin-panel/users")
+
     fields = {
         "first_name": first,
         "last_name": last,
-        "role": data.get("role") or Role.KASIR,
+        "role": role,
     }
     if user_id:
-        user = get_object_or_404(User, pk=user_id)
+        user = get_object_or_404(User, pk=user_id, role__in=_MANAGED_ROLES)
         for k, v in fields.items():
             setattr(user, k, v)
     else:
         user = User(username=(data.get("username") or "").strip(), **fields)
 
     password = data.get("password")
+    if not password and not user_id:
+        request.session["flash_error"] = "Password wajib diisi untuk user baru."
+        return redirect("/admin-panel/users")
     if password:
+        try:
+            validate_password(password, user)
+        except ValidationError as exc:
+            request.session["flash_error"] = " ".join(exc.messages)
+            return redirect("/admin-panel/users")
         user.set_password(password)
-    elif not user_id:
-        user.set_password("kasir123")  # default for new accounts
     user.save()
 
     log_activity(request, "user", f"Simpan user {user.username}")
@@ -140,7 +160,7 @@ def users_save(request):
 
 
 def users_delete(request, user_id):
-    user = get_object_or_404(User, pk=user_id)
+    user = get_object_or_404(User, pk=user_id, role__in=_MANAGED_ROLES)
     user.is_active = False
     user.save(update_fields=["is_active"])
     log_activity(request, "user", f"Nonaktifkan user {user.username}")
@@ -1529,6 +1549,11 @@ def profile_save(request):
     u.first_name, _, u.last_name = name.partition(" ")
     password = data.get("password")
     if password:
+        try:
+            validate_password(password, u)
+        except ValidationError as exc:
+            request.session["flash_error"] = " ".join(exc.messages)
+            return redirect("/admin-panel/profile")
         u.set_password(password)
     u.save()
     if password:

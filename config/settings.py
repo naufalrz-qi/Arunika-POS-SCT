@@ -14,12 +14,18 @@ def _env_bool(name, default=False):
     return os.environ.get(name, str(int(default))).lower() in ("1", "true", "yes", "on")
 
 # SECURITY: production must set via env var (no default in prod).
-SECRET_KEY = os.environ.get(
-    "SECRET_KEY",
-    "django-insecure-dev-key-frontend-phase-change-me"
-)
+_DEV_SECRET_KEY = "django-insecure-dev-key-frontend-phase-change-me"
+SECRET_KEY = os.environ.get("SECRET_KEY", _DEV_SECRET_KEY)
 
 DEBUG = _env_bool("DEBUG", default=True)
+
+if not DEBUG and SECRET_KEY == _DEV_SECRET_KEY:
+    from django.core.exceptions import ImproperlyConfigured
+
+    raise ImproperlyConfigured(
+        "SECRET_KEY masih memakai nilai default dev. Set SECRET_KEY di .env "
+        "sebelum menjalankan dengan DEBUG=0."
+    )
 
 # PRD §3.3 — dual access (LAN lokal + Tailscale). Set real hosts in .env
 # (ALLOWED_HOSTS=host1,host2,...). Default is loopback-only for a fresh clone.
@@ -99,7 +105,14 @@ PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.PBKDF2PasswordHasher",
 ]
 
-AUTH_PASSWORD_VALIDATORS = []
+# Minimal hardening for a flat trusted LAN: block trivially guessable passwords.
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        "OPTIONS": {"min_length": 8},
+    },
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
 
 # Idle session expiry (PRD §8.1) — do NOT save every request (kills SQLite concurrency).
 SESSION_COOKIE_AGE = int(os.environ.get("SESSION_IDLE_SECONDS", 60 * 60 * 4))  # 4h

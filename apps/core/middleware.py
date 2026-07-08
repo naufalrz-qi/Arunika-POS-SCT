@@ -1,16 +1,22 @@
 """Inertia shared props + app-level access control."""
 import ipaddress
+import re
 
 from inertia import share
 from django.conf import settings
 from django.http import HttpResponseForbidden
 from django.shortcuts import redirect
 
-from apps.core.menus import menus_for
+from apps.core.menus import menu_key_for_path, menus_for
 
 # Paths reachable without authentication.
 PUBLIC_PREFIXES = ("/login", "/static", "/@vite", "/favicon")
 ADMIN_PREFIX = "/admin-panel"
+
+# Admin-panel paths every admin-tier user may hit regardless of menu grants:
+# the navbar connection switcher lives on every page, so it must keep working
+# even when the "Koneksi Server" management menu itself is revoked.
+_MENU_EXEMPT_RE = re.compile(r"^/admin-panel/connections/\d+/set-default$")
 
 
 def _auth_user_dict(user):
@@ -82,7 +88,9 @@ def _ip_allowed(ip: str) -> bool:
 
 def admin_network_guard(get_response):
     """PRD §3.4/§7.6 — /admin-panel/* requires Admin-tier role and (optionally)
-    a Tailscale-range source IP."""
+    a Tailscale-range source IP. PRD §4.3 — per-menu grants (allowed_menu_keys)
+    are enforced here too, not just in the sidebar, so a restricted admin can't
+    reach revoked menus by typing the URL."""
 
     def middleware(request):
         if request.path.startswith(ADMIN_PREFIX):
@@ -95,6 +103,19 @@ def admin_network_guard(get_response):
                     return HttpResponseForbidden(
                         "403 Forbidden — akses Admin hanya via jaringan Tailscale."
                     )
+            if not _menu_allowed(user, request.path):
+                return HttpResponseForbidden(
+                    "403 Forbidden — menu ini tidak diberikan untuk akun Anda."
+                )
         return get_response(request)
 
     return middleware
+
+
+def _menu_allowed(user, path: str) -> bool:
+    if _MENU_EXEMPT_RE.match(path):
+        return True
+    key = menu_key_for_path(path)
+    if key is None:  # pages outside the menu registry, e.g. /admin-panel/profile
+        return True
+    return key in {m["key"] for m in menus_for(user)}

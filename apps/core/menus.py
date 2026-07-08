@@ -85,3 +85,18 @@ def menus_for(user):
         return [m for m in ALL_MENUS if not m.get("superadmin_only") and m["key"] in allowed]
     # Kasir / supervisor don't use the admin panel in this phase.
     return []
+
+
+# Longest href first so /laporan/penjualan-nota resolves before /laporan/penjualan.
+_MENUS_BY_HREF = sorted(ALL_MENUS, key=lambda m: len(m["href"]), reverse=True)
+
+
+def menu_key_for_path(path: str):
+    """Resolve a request path to the menu key that owns it, or None for pages
+    outside the menu registry (e.g. /admin-panel/profile). Sub-paths such as
+    /export or /save belong to their menu's key."""
+    for m in _MENUS_BY_HREF:
+        href = m["href"]
+        if path == href or path.startswith(href + "/"):
+            return m["key"]
+    return None
