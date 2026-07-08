@@ -1324,17 +1324,25 @@ def transaksi_barang(request):
 
 def transaksi_barang_export(request):
     p = _transaksi_params(request)
-    rows = []
     profile = _active()
-    if profile:
-        inner, params = _transaksi_inner(p)
-        for read_profile in mssql.report_read_profiles(profile):
-            try:
-                with mssql.report_cursor(read_profile) as cur:
-                    rows = reporting.run_all(cur, inner, params, p)
-                break
-            except pyodbc.Error:
-                continue
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect("/admin-panel/inventory/transaksi")
+    inner, params = _transaksi_inner(p)
+    rows, last_exc = None, None
+    for read_profile in mssql.report_read_profiles(profile):
+        try:
+            with mssql.report_cursor(read_profile) as cur:
+                rows = reporting.run_all(cur, inner, params, p)
+            break
+        except pyodbc.Error as exc:
+            last_exc = exc
+    if rows is None:
+        # Same policy as _report_export: surface the failure instead of
+        # silently downloading an empty sheet.
+        request.session["flash_error"] = f"Gagal export: {last_exc.args[-1] if last_exc.args else last_exc}"
+        return redirect("/admin-panel/inventory/transaksi")
+    log_activity(request, "export", f"Export transaksi-barang: {len(rows)} baris")
     return reporting.xlsx_response("transaksi-barang", _TRANSAKSI_COLUMNS, rows)
 
 

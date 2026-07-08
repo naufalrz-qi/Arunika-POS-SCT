@@ -848,16 +848,23 @@ SUMMARY_FMI_PENJUALAN = (
 )
 
 def fmi_penjualan(f):
+    # The date/divisi filter must live INSIDE the joined sales subquery, not in
+    # the outer WHERE: a WHERE predicate on the nullable side of the LEFT JOIN
+    # would silently turn it into an inner join and drop items with no sales in
+    # the period — exactly the slow movers the ELSE 'C' class is meant to show.
     where, params = _base_where(f)
     inner = (
         "SELECT b.kd_barang, b.nama AS barang, COALESCE(k.nama, '') AS kategori, "
-        f"COALESCE(SUM(d.qty), 0) AS qty_terjual, COALESCE(SUM({_line_net('harga_jual')}), 0) AS nilai, "
-        "CASE WHEN COALESCE(SUM(d.qty), 0) > 100 THEN 'A' WHEN COALESCE(SUM(d.qty), 0) > 50 THEN 'B' ELSE 'C' END AS kelas "
+        "COALESCE(SUM(s.qty), 0) AS qty_terjual, COALESCE(SUM(s.nilai), 0) AS nilai, "
+        "CASE WHEN COALESCE(SUM(s.qty), 0) > 100 THEN 'A' WHEN COALESCE(SUM(s.qty), 0) > 50 THEN 'B' ELSE 'C' END AS kelas "
         "FROM m_barang b "
         "LEFT JOIN m_kategori k ON b.kd_kategori = k.kd_kategori "
-        "LEFT JOIN t_penjualan_detail d ON b.kd_barang = d.kd_barang "
-        "LEFT JOIN t_penjualan h ON d.no_transaksi = h.no_transaksi "
-        f"WHERE 1=1 {' AND ' + ' AND '.join(where) if where else ''} "
+        "LEFT JOIN ("
+        f"SELECT d.kd_barang, d.qty, {_line_net('harga_jual')} AS nilai "
+        "FROM t_penjualan_detail d "
+        "INNER JOIN t_penjualan h ON d.no_transaksi = h.no_transaksi "
+        f"WHERE {' AND '.join(where)}"
+        ") s ON b.kd_barang = s.kd_barang "
         "GROUP BY b.kd_barang, b.nama, k.nama"
     )
     return inner, params

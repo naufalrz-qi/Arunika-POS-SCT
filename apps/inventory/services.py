@@ -14,6 +14,7 @@ from decimal import Decimal
 
 from core import mssql
 from core.cache import _cached, invalidate_master_cache  # noqa: F401 (re-exported)
+from apps.core.reporting import dictify as _dictify
 
 
 def _f(v) -> float:
@@ -30,10 +31,6 @@ def _s(v) -> str:
         return ""
     return str(v).strip()
 
-
-def _dictify(cursor) -> list[dict]:
-    cols = [c[0] for c in cursor.description]
-    return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
 
 def _k(v):
