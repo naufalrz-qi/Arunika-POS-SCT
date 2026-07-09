@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from core import mssql
 from core.cache import _cached, invalidate_master_cache
+from apps.core.reporting import dictify as _dictify
 
 MAX_ROWS = 500
 
@@ -481,10 +482,6 @@ def _invalidate_inventory_cache(profile):
     """Master-data writes must bust the shared cache (core/cache.py) — this
     clears both inventory's and master_data's cached lookups for the profile."""
     invalidate_master_cache(profile.pk)
-
-def _dictify(cursor) -> list[dict]:
-    cols = [c[0] for c in cursor.description]
-    return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
 
 def _key_map(cursor, sql, key, val) -> dict:

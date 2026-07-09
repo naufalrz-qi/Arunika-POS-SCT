@@ -4,6 +4,8 @@ import json
 
 import pyodbc
 from django.contrib.auth import update_session_auth_hash
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect
 from inertia import defer, render
@@ -110,28 +112,46 @@ def users_index(request):
     return render(request, "Admin/Users/Index", props={"users": [_user_dict(u) for u in users]})
 
 
+# PRD §4 — this page manages operational accounts only. Admin/superadmin
+# accounts are out of scope here, so the save/delete endpoints must never
+# accept them as role values nor touch them as targets (privilege escalation).
+_MANAGED_ROLES = [Role.KASIR, Role.SUPERVISOR]
+
+
 def users_save(request):
     data = get_data(request)
     user_id = data.get("id")
     name = (data.get("name") or "").strip()
     first, _, last = name.partition(" ")
+
+    role = data.get("role") or Role.KASIR
+    if role not in _MANAGED_ROLES:
+        request.session["flash_error"] = "Role tidak valid untuk halaman ini."
+        return redirect("/admin-panel/users")
+
     fields = {
         "first_name": first,
         "last_name": last,
-        "role": data.get("role") or Role.KASIR,
+        "role": role,
     }
     if user_id:
-        user = get_object_or_404(User, pk=user_id)
+        user = get_object_or_404(User, pk=user_id, role__in=_MANAGED_ROLES)
         for k, v in fields.items():
             setattr(user, k, v)
     else:
         user = User(username=(data.get("username") or "").strip(), **fields)
 
     password = data.get("password")
+    if not password and not user_id:
+        request.session["flash_error"] = "Password wajib diisi untuk user baru."
+        return redirect("/admin-panel/users")
     if password:
+        try:
+            validate_password(password, user)
+        except ValidationError as exc:
+            request.session["flash_error"] = " ".join(exc.messages)
+            return redirect("/admin-panel/users")
         user.set_password(password)
-    elif not user_id:
-        user.set_password("kasir123")  # default for new accounts
     user.save()
 
     log_activity(request, "user", f"Simpan user {user.username}")
@@ -140,7 +160,7 @@ def users_save(request):
 
 
 def users_delete(request, user_id):
-    user = get_object_or_404(User, pk=user_id)
+    user = get_object_or_404(User, pk=user_id, role__in=_MANAGED_ROLES)
     user.is_active = False
     user.save(update_fields=["is_active"])
     log_activity(request, "user", f"Nonaktifkan user {user.username}")
@@ -482,7 +502,7 @@ def logs_index(request):
     )
 
 
-# --- Monitoring Stok (computed from movement card, table-level) ------------
+# --- Stok Akhir (computed from movement card, table-level) -----------------
 
 def stock_index(request):
     kd_divisi = request.GET.get("kd_divisi", "")
@@ -690,21 +710,31 @@ def _report_view(spec):
             rows, total, summary, options, conn_error = [], 0, {}, {}, None
             profile = _active()
             if profile:
-                try:
-                    inner, params = spec["inner"](f)
-                    inner, params = reporting.apply_column_filters(inner, params, f)
-                    with mssql.cursor(profile) as cur:
-                        if f["recent"]:
-                            rows, total, summary_sql = reporting.run_recent(cur, inner, params, f)
-                        else:
-                            rows, total = reporting.run_paged(cur, inner, params, f)
-                            summary_sql = inner
-                        cur.execute(f"SELECT {spec['summary']} FROM ({summary_sql}) AS q", params)
-                        summary = reporting.clean_rows(reporting.dictify(cur))[0]
-                    if spec.get("options"):
-                        options = spec["options"](profile)
-                except pyodbc.Error as exc:
-                    conn_error = f"Gagal membaca laporan: {exc.args[-1] if exc.args else exc}"
+                # Reads only: prefer the report_source replica (synced via
+                # apps/transactions/cdc_sync.py) so this heavy query never
+                # competes for locks with live POS transactions, but fall back
+                # to the legacy server itself if no replica is set up OR the
+                # replica is unreachable — a replica outage shouldn't break
+                # every report when the primary can still serve them.
+                inner, params = spec["inner"](f)
+                inner, params = reporting.apply_column_filters(inner, params, f)
+                for read_profile in mssql.report_read_profiles(profile):
+                    rows, total, summary, options = [], 0, {}, {}  # reset per attempt
+                    try:
+                        with mssql.report_cursor(read_profile) as cur:
+                            if f["recent"]:
+                                rows, total, summary_sql = reporting.run_recent(cur, inner, params, f)
+                            else:
+                                rows, total = reporting.run_paged(cur, inner, params, f)
+                                summary_sql = inner
+                            cur.execute(f"SELECT {spec['summary']} FROM ({summary_sql}) AS q", params)
+                            summary = reporting.clean_rows(reporting.dictify(cur))[0]
+                        if spec.get("options"):
+                            options = spec["options"](read_profile)
+                        conn_error = None
+                        break
+                    except pyodbc.Error as exc:
+                        conn_error = f"Gagal membaca laporan: {exc.args[-1] if exc.args else exc}"
             else:
                 conn_error = CONN_ERROR
             if f["warning"]:
@@ -725,13 +755,20 @@ def _report_export(spec):
         if not profile:
             request.session["flash_error"] = CONN_ERROR
             return redirect(spec["url"])
-        try:
-            inner, params = spec["inner"](f)
-            inner, params = reporting.apply_column_filters(inner, params, f)
-            with mssql.cursor(profile) as cur:
-                rows = reporting.run_all(cur, inner, params, f)
-        except pyodbc.Error as exc:
-            request.session["flash_error"] = f"Gagal export: {exc.args[-1] if exc.args else exc}"
+        inner, params = spec["inner"](f)
+        inner, params = reporting.apply_column_filters(inner, params, f)
+        rows, last_exc = None, None
+        # Prefer the replica, fall back to the primary if it's unreachable
+        # (same read-offload-with-fallback policy as _report_view).
+        for read_profile in mssql.report_read_profiles(profile):
+            try:
+                with mssql.report_cursor(read_profile) as cur:
+                    rows = reporting.run_all(cur, inner, params, f)
+                break
+            except pyodbc.Error as exc:
+                last_exc = exc
+        if rows is None:
+            request.session["flash_error"] = f"Gagal export: {last_exc.args[-1] if last_exc.args else last_exc}"
             return redirect(spec["url"])
         log_activity(request, "export", f"Export {spec['filename']}: {len(rows)} baris")
         return reporting.xlsx_response(spec["filename"], spec["columns"], rows)
@@ -1106,29 +1143,209 @@ def stok_divisi(request):
         },
     )
 
-def stok_akhir(request):
-    tanggal = _parse_date(request.GET.get("tanggal")) or dt.datetime.now()
+def mutasi_stok(request):
+    """Mutasi stok per barang untuk sebuah periode (stok awal diasumsikan 0)."""
+    kd_divisi = request.GET.get("kd_divisi", "")
+    date_from = _parse_date(request.GET.get("date_from"))
+    date_to = _parse_date(request.GET.get("date_to"))
+    # Default: sejak 1 Januari tahun berjalan supaya seed/saldo lama (tanggal
+    # tutup buku) selalu di bawah date_from dan tidak ikut terhitung.
+    if not date_from:
+        date_from = dt.datetime(dt.datetime.now().year, 1, 1)
+
+    def load():
+        profile = _active()
+        rows, divisi_list, conn_error = [], [], None
+        if profile:
+            try:
+                divisi_list = inv.list_divisi(profile)
+                rows = inv.mutasi_stok(
+                    profile,
+                    date_from=date_from,
+                    date_to=_eod(date_to) if date_to else None,
+                    kd_divisi=kd_divisi or None,
+                )
+            except pyodbc.Error as exc:
+                conn_error = f"Gagal membaca mutasi stok: {exc.args[-1] if exc.args else exc}"
+        else:
+            conn_error = CONN_ERROR
+        return {"rows": rows, "divisi_list": divisi_list, "conn_error": conn_error}
+
+    return render(
+        request,
+        "Admin/Inventory/MutasiStok",
+        props={
+            "data": defer(load),
+            "filters": {
+                "kd_divisi": kd_divisi,
+                "date_from": request.GET.get("date_from", ""),
+                "date_to": request.GET.get("date_to", ""),
+            },
+        },
+    )
+
+
+def stok_awal_barang(request):
+    tanggal = _parse_date(request.GET.get("tanggal"))
+    tahun_raw = (request.GET.get("tahun") or "").strip()
+    cutoff = None
+    if tanggal:
+        cutoff = tanggal  # date_from 00:00 -> saldo sebelum hari itu
+    elif tahun_raw.isdigit() and 2000 <= int(tahun_raw) <= 2999:
+        cutoff = dt.datetime(int(tahun_raw), 1, 1)
 
     def load():
         profile = _active()
         rows, conn_error = [], None
         if profile:
             try:
-                rows = inv.stok_akhir_per_tanggal(profile, tanggal=_eod(tanggal))
+                rows = inv.stok_awal_barang(profile, cutoff=cutoff)
             except pyodbc.Error as exc:
-                conn_error = f"Gagal membaca stok akhir: {exc.args[-1] if exc.args else exc}"
+                conn_error = f"Gagal membaca stok awal: {exc.args[-1] if exc.args else exc}"
         else:
             conn_error = CONN_ERROR
         return {"rows": rows, "conn_error": conn_error}
 
     return render(
         request,
-        "Admin/Inventory/StokAkhir",
+        "Admin/Inventory/StokAwalBarang",
         props={
             "data": defer(load),
-            "filters": {"tanggal": request.GET.get("tanggal", "")},
+            "filters": {"tanggal": request.GET.get("tanggal", ""), "tahun": tahun_raw},
         },
     )
+
+
+# --- Transaksi Barang (laporan transaksi seluruh barang) -------------------
+_TRANSAKSI_COLUMNS = [
+    {"key": "tanggal", "label": "Tanggal"},
+    {"key": "transaksi", "label": "Jenis"},
+    {"key": "no_transaksi", "label": "No. Transaksi"},
+    {"key": "divisi", "label": "Divisi"},
+    {"key": "kd_barang", "label": "Kode"},
+    {"key": "barang", "label": "Barang"},
+    {"key": "masuk", "label": "Masuk"},
+    {"key": "keluar", "label": "Keluar"},
+    {"key": "satuan", "label": "Satuan"},
+    {"key": "harga", "label": "Harga"},
+]
+
+
+def _transaksi_params(request):
+    """Parse param laporan transaksi barang (semantik tanggal/closing custom)."""
+    g = request.GET
+    jenis = [j.strip() for j in (g.get("jenis") or "").split(",") if j.strip()]
+    date_from = _parse_date(g.get("date_from"))
+    date_to = _parse_date(g.get("date_to"))
+    search = (g.get("search") or "").strip()
+    kd_divisi = (g.get("kd_divisi") or "").strip()
+    sort = g.get("sort") if g.get("sort") in rpt.SORTS_TRANSAKSI_BARANG else "tanggal"
+    sort_dir = "asc" if (g.get("sort_dir") or "desc").lower() == "asc" else "desc"
+    try:
+        page = max(1, int(g.get("page") or 1))
+    except ValueError:
+        page = 1
+    try:
+        per_page = min(reporting.MAX_PER_PAGE, max(10, int(g.get("per_page") or reporting.DEFAULT_PER_PAGE)))
+    except ValueError:
+        per_page = reporting.DEFAULT_PER_PAGE
+    recent = not (date_from or date_to or jenis or search) and page == 1
+    if recent:
+        per_page = reporting.RECENT_LIMIT  # first load: tampilkan N terbaru (sesuai banner)
+    return {
+        "jenis": jenis,
+        "date_from": date_from,
+        "date_to": _eod(date_to) if date_to else None,
+        "search": search,
+        "kd_divisi": kd_divisi,
+        "sort": sort,
+        "sort_dir": sort_dir,
+        "page": page,
+        "per_page": per_page,
+        "recent": recent,
+        "order_by": f"q.{rpt.SORTS_TRANSAKSI_BARANG[sort]} {sort_dir.upper()}",
+        "date_from_s": g.get("date_from", ""),
+        "date_to_s": g.get("date_to", ""),
+    }
+
+
+def _transaksi_inner(p):
+    return rpt.transaksi_barang(
+        jenis=p["jenis"],
+        date_from=p["date_from"],
+        date_to=p["date_to"],
+        kd_divisi=p["kd_divisi"] or None,
+        search=p["search"],
+    )
+
+
+def transaksi_barang(request):
+    p = _transaksi_params(request)
+
+    def load():
+        rows, total, summary, options, conn_error = [], 0, {}, {}, None
+        profile = _active()
+        if profile:
+            inner, params = _transaksi_inner(p)
+            for read_profile in mssql.report_read_profiles(profile):
+                rows, total, summary, options = [], 0, {}, {}
+                try:
+                    with mssql.report_cursor(read_profile) as cur:
+                        if p["recent"]:
+                            rows, total, summary_sql = reporting.run_recent(cur, inner, params, p)
+                        else:
+                            rows, total = reporting.run_paged(cur, inner, params, p)
+                            summary_sql = inner
+                        cur.execute(f"SELECT {rpt.SUMMARY_TRANSAKSI_BARANG} FROM ({summary_sql}) AS q", params)
+                        summary = reporting.clean_rows(reporting.dictify(cur))[0]
+                    options = {"divisi": _opt_divisi(read_profile)}
+                    conn_error = None
+                    break
+                except pyodbc.Error as exc:
+                    conn_error = f"Gagal membaca transaksi: {exc.args[-1] if exc.args else exc}"
+        else:
+            conn_error = CONN_ERROR
+        return {"rows": rows, "total": total, "summary": summary, "options": options, "conn_error": conn_error}
+
+    return render(
+        request,
+        "Admin/Inventory/TransaksiBarang",
+        props={
+            "report": defer(load),
+            "filters": {
+                "date_from": p["date_from_s"], "date_to": p["date_to_s"], "date_mode": "range",
+                "search": p["search"], "sort": p["sort"], "sort_dir": p["sort_dir"],
+                "page": p["page"], "per_page": p["per_page"], "recent": p["recent"],
+                "kd_divisi": p["kd_divisi"], "jenis": ",".join(p["jenis"]),
+            },
+        },
+    )
+
+
+def transaksi_barang_export(request):
+    p = _transaksi_params(request)
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect("/admin-panel/inventory/transaksi")
+    inner, params = _transaksi_inner(p)
+    rows, last_exc = None, None
+    for read_profile in mssql.report_read_profiles(profile):
+        try:
+            with mssql.report_cursor(read_profile) as cur:
+                rows = reporting.run_all(cur, inner, params, p)
+            break
+        except pyodbc.Error as exc:
+            last_exc = exc
+    if rows is None:
+        # Same policy as _report_export: surface the failure instead of
+        # silently downloading an empty sheet.
+        request.session["flash_error"] = f"Gagal export: {last_exc.args[-1] if last_exc.args else last_exc}"
+        return redirect("/admin-panel/inventory/transaksi")
+    log_activity(request, "export", f"Export transaksi-barang: {len(rows)} baris")
+    return reporting.xlsx_response("transaksi-barang", _TRANSAKSI_COLUMNS, rows)
+
+
 _OPNAME = {
     "component": "Admin/Inventory/Opname",
     "url": "/admin-panel/inventory/opname",
@@ -1340,6 +1557,11 @@ def profile_save(request):
     u.first_name, _, u.last_name = name.partition(" ")
     password = data.get("password")
     if password:
+        try:
+            validate_password(password, u)
+        except ValidationError as exc:
+            request.session["flash_error"] = " ".join(exc.messages)
+            return redirect("/admin-panel/profile")
         u.set_password(password)
     u.save()
     if password:

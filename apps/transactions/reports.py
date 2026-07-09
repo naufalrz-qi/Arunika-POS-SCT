@@ -848,16 +848,23 @@ SUMMARY_FMI_PENJUALAN = (
 )
 
 def fmi_penjualan(f):
+    # The date/divisi filter must live INSIDE the joined sales subquery, not in
+    # the outer WHERE: a WHERE predicate on the nullable side of the LEFT JOIN
+    # would silently turn it into an inner join and drop items with no sales in
+    # the period — exactly the slow movers the ELSE 'C' class is meant to show.
     where, params = _base_where(f)
     inner = (
         "SELECT b.kd_barang, b.nama AS barang, COALESCE(k.nama, '') AS kategori, "
-        f"COALESCE(SUM(d.qty), 0) AS qty_terjual, COALESCE(SUM({_line_net('harga_jual')}), 0) AS nilai, "
-        "CASE WHEN COALESCE(SUM(d.qty), 0) > 100 THEN 'A' WHEN COALESCE(SUM(d.qty), 0) > 50 THEN 'B' ELSE 'C' END AS kelas "
+        "COALESCE(SUM(s.qty), 0) AS qty_terjual, COALESCE(SUM(s.nilai), 0) AS nilai, "
+        "CASE WHEN COALESCE(SUM(s.qty), 0) > 100 THEN 'A' WHEN COALESCE(SUM(s.qty), 0) > 50 THEN 'B' ELSE 'C' END AS kelas "
         "FROM m_barang b "
         "LEFT JOIN m_kategori k ON b.kd_kategori = k.kd_kategori "
-        "LEFT JOIN t_penjualan_detail d ON b.kd_barang = d.kd_barang "
-        "LEFT JOIN t_penjualan h ON d.no_transaksi = h.no_transaksi "
-        f"WHERE 1=1 {' AND ' + ' AND '.join(where) if where else ''} "
+        "LEFT JOIN ("
+        f"SELECT d.kd_barang, d.qty, {_line_net('harga_jual')} AS nilai "
+        "FROM t_penjualan_detail d "
+        "INNER JOIN t_penjualan h ON d.no_transaksi = h.no_transaksi "
+        f"WHERE {' AND '.join(where)}"
+        ") s ON b.kd_barang = s.kd_barang "
         "GROUP BY b.kd_barang, b.nama, k.nama"
     )
     return inner, params
@@ -916,3 +923,123 @@ def fmi_stok(f):
         f"FROM ({base}) x"
     )
     return inner, sold_params + params
+
+
+# --- Transaksi Barang (transaksi seluruh barang, semua jenis) --------------
+SORTS_TRANSAKSI_BARANG = {
+    "tanggal": "tanggal", "no_transaksi": "no_transaksi",
+    "kd_barang": "kd_barang", "barang": "barang", "transaksi": "transaksi",
+}
+SUMMARY_TRANSAKSI_BARANG = (
+    "COUNT(*) AS jml_baris, COALESCE(SUM(q.masuk), 0) AS total_masuk, "
+    "COALESCE(SUM(q.keluar), 0) AS total_keluar"
+)
+
+# key -> potongan SELECT dengan placeholder {dp} (predikat tanggal). Kolom
+# seragam: kd_divisi, tanggal, transaksi, no_transaksi, kd_barang, masuk,
+# keluar, kd_satuan, harga. Id dibiarkan mentah — join master dilakukan sekali
+# di wrapper luar. Mengikuti sumber _movement_sql (inventory/services.py),
+# TANPA blok [0] Stok Awal (ini laporan transaksi nyata).
+_TX_BLOCKS = {
+    "pembelian": (
+        "SELECT t.kd_divisi, t.tanggal, 'Pembelian' AS transaksi, d.no_transaksi, "
+        "d.kd_barang, d.qty AS masuk, 0 AS keluar, d.kd_satuan, d.harga_beli AS harga "
+        "FROM t_pembelian_detail d INNER JOIN t_pembelian t ON d.no_transaksi = t.no_transaksi "
+        "WHERE {dp} AND t.status IN (0, 1)"
+    ),
+    "retur_pembelian": (
+        "SELECT t.kd_divisi, t.tanggal, 'Retur Pembelian' AS transaksi, d.no_retur AS no_transaksi, "
+        "d.kd_barang, 0 AS masuk, d.qty AS keluar, d.kd_satuan, d.harga AS harga "
+        "FROM t_pembelian_retur_detail d INNER JOIN t_pembelian_retur t ON d.no_retur = t.no_retur "
+        "WHERE {dp}"
+    ),
+    "penjualan": (
+        "SELECT t.kd_divisi, t.tanggal, 'Penjualan' AS transaksi, d.no_transaksi, "
+        "d.kd_barang, 0 AS masuk, d.qty AS keluar, d.kd_satuan, d.harga_jual AS harga "
+        "FROM t_penjualan_detail d INNER JOIN t_penjualan t ON d.no_transaksi = t.no_transaksi "
+        "WHERE {dp}"
+    ),
+    "retur_penjualan": (
+        "SELECT t.kd_divisi, t.tanggal, 'Retur Penjualan' AS transaksi, d.no_retur AS no_transaksi, "
+        "d.kd_barang, d.qty AS masuk, 0 AS keluar, d.kd_satuan, d.harga_jual AS harga "
+        "FROM t_penjualan_retur_detail d INNER JOIN t_penjualan_retur t ON d.no_retur = t.no_retur "
+        "WHERE {dp}"
+    ),
+    "opname_masuk": (
+        "SELECT kd_divisi, tanggal, 'Opname Masuk' AS transaksi, no_transaksi, "
+        "kd_barang, qty AS masuk, 0 AS keluar, kd_satuan, 0 AS harga "
+        "FROM t_opname_stok WHERE {dp} AND status = 2"
+    ),
+    "opname_keluar": (
+        "SELECT kd_divisi, tanggal, 'Opname Keluar' AS transaksi, no_transaksi, "
+        "kd_barang, 0 AS masuk, qty AS keluar, kd_satuan, 0 AS harga "
+        "FROM t_opname_stok WHERE {dp} AND status <> 2"
+    ),
+    "mutasi_masuk": (
+        "SELECT t.kd_divisi_tujuan AS kd_divisi, t.tanggal, 'Mutasi Masuk' AS transaksi, d.no_transaksi, "
+        "d.kd_barang, d.qty AS masuk, 0 AS keluar, d.kd_satuan, 0 AS harga "
+        "FROM t_mutasi_stok_detail d INNER JOIN t_mutasi_stok t ON d.no_transaksi = t.no_transaksi "
+        "WHERE {dp}"
+    ),
+    "mutasi_keluar": (
+        "SELECT t.kd_divisi_asal AS kd_divisi, t.tanggal, 'Mutasi Keluar' AS transaksi, d.no_transaksi, "
+        "d.kd_barang, 0 AS masuk, d.qty AS keluar, d.kd_satuan, 0 AS harga "
+        "FROM t_mutasi_stok_detail d INNER JOIN t_mutasi_stok t ON d.no_transaksi = t.no_transaksi "
+        "WHERE {dp}"
+    ),
+}
+TX_JENIS_ORDER = list(_TX_BLOCKS.keys())
+
+
+def transaksi_barang(*, jenis=None, date_from=None, date_to=None, kd_divisi=None, search=""):
+    """Inner SQL (tanpa ORDER BY) untuk laporan transaksi seluruh barang.
+
+    - Tanpa tanggal  -> transaksi SETELAH tutup buku (tanggal > MAX(g_tutup_buku)).
+    - Dengan tanggal -> BETWEEN (boleh menembus sebelum tutup buku).
+    `jenis` = list key (subset _TX_BLOCKS); kosong = semua. Join master (barang/
+    kategori/divisi/satuan) dilakukan sekali di wrapper luar biar ringan.
+    """
+    def date_pred(col):
+        if date_from or date_to:
+            parts, p = [], []
+            if date_from:
+                parts.append(f"{col} >= ?")
+                p.append(date_from)
+            if date_to:
+                parts.append(f"{col} <= ?")
+                p.append(date_to)
+            return " AND ".join(parts), p
+        return f"{col} > (SELECT COALESCE(MAX(tanggal), '19000101') FROM g_tutup_buku)", []
+
+    keys = [k for k in (jenis or []) if k in _TX_BLOCKS] or TX_JENIS_ORDER
+    blocks, params = [], []
+    for k in keys:
+        col = "tanggal" if k.startswith("opname_") else "t.tanggal"
+        dp, p = date_pred(col)
+        blocks.append(_TX_BLOCKS[k].format(dp=dp))
+        params += p
+
+    union = "\nUNION ALL\n".join(blocks)
+
+    outer_where, outer_params = [], []
+    if kd_divisi:
+        outer_where.append("mv.kd_divisi = ?")
+        outer_params.append(kd_divisi)
+    if search:
+        outer_where.append("(b.nama LIKE ? OR mv.no_transaksi LIKE ? OR mv.kd_barang LIKE ?)")
+        outer_params += [f"%{search}%"] * 3
+    where_sql = (" WHERE " + " AND ".join(outer_where)) if outer_where else ""
+
+    inner = (
+        "SELECT mv.kd_divisi, COALESCE(dv.nama, '') AS divisi, mv.tanggal, mv.transaksi, "
+        "mv.no_transaksi, mv.kd_barang, COALESCE(b.nama, '') AS barang, "
+        "COALESCE(k.nama, '') AS kategori, mv.masuk, mv.keluar, "
+        "mv.kd_satuan, COALESCE(st.nama, '') AS satuan, mv.harga "
+        f"FROM (\n{union}\n) mv "
+        "INNER JOIN m_barang b ON mv.kd_barang = b.kd_barang "
+        "LEFT JOIN m_kategori k ON b.kd_kategori = k.kd_kategori "
+        "LEFT JOIN m_divisi dv ON mv.kd_divisi = dv.kd_divisi "
+        "LEFT JOIN m_satuan st ON mv.kd_satuan = st.kd_satuan"
+        + where_sql
+    )
+    return inner, params + outer_params

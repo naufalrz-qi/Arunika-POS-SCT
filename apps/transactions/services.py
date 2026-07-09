@@ -12,6 +12,7 @@ import datetime as dt
 from decimal import Decimal
 
 from core import mssql
+from apps.core.reporting import dictify as _dictify
 
 
 def _f(value) -> float:
@@ -61,7 +62,3 @@ def dashboard_summary(profile, day: dt.date | None = None) -> dict:
         "hourly_transactions": hourly,
     }
 
-
-def _dictify(cursor) -> list[dict]:
-    cols = [c[0] for c in cursor.description]
-    return [dict(zip(cols, row)) for row in cursor.fetchall()]

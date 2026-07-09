@@ -1,15 +1,17 @@
 // Client-side XLSX export. Works over data already loaded in the browser.
 // Mirrors the old csv.js signature so call sites can swap drop-in.
-import * as XLSX from "xlsx";
 
 /**
  * Trigger an .xlsx download from in-memory rows.
+ * SheetJS is heavy (~1MB), so it is imported lazily here — only users who
+ * actually export pay for it, and it stays out of the entry chunk.
  * @param {string} filename  e.g. "monitoring-stok-2026-06-30.xlsx"
  * @param {Array<{key:string,label:string}>} columns
  * @param {Array<object>} rows
  * @param {string} sheetName  worksheet tab name (max 31 chars)
  */
-export function downloadXlsx(filename, columns, rows, sheetName = "Data") {
+export async function downloadXlsx(filename, columns, rows, sheetName = "Data") {
+  const XLSX = await import("xlsx");
   const header = columns.map((c) => c.label);
   const body = rows.map((r) =>
     columns.map((c) => {

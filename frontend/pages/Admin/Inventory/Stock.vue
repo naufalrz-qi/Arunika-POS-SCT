@@ -53,7 +53,7 @@ const rupiah = (n) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n || 0);
 
 function exportXlsx() {
-  downloadXlsx(`monitoring-stok-${stamp()}.xlsx`, columns, displayed.value, "Monitoring Stok");
+  downloadXlsx(`stok-akhir-${stamp()}.xlsx`, columns, displayed.value, "Stok Akhir");
 }
 
 const columns = [
@@ -75,7 +75,7 @@ const columns = [
 </script>
 
 <template>
-  <AdminLayout title="Monitoring Stok">
+  <AdminLayout title="Stok Akhir">
     <Banner v-if="connError" variant="warning" :message="connError" />
 
     <Card title="Tarik Data" subtitle="Pilih divisi & tanggal, lalu tarik dari server" class="mb-4">

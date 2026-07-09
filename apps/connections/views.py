@@ -31,6 +31,9 @@ def _apply_form(profile, data):
     profile.username = (data.get("username") or "").strip()
     # Retail: acuan modal (server grosir/gudang). Non-retail: selalu kosong.
     profile.cost_source_id = (data.get("cost_source") or None) if profile.db_type == DbType.RETAIL else None
+    # Replica opsional untuk baca laporan (disinkron via CDC, apps/transactions/cdc_sync.py).
+    # Berlaku untuk semua tipe db, bukan cuma retail.
+    profile.report_source_id = data.get("report_source") or None
     password = data.get("password") or ""
     if password:  # keep existing password if left blank on edit
         profile.set_password(password)
@@ -43,6 +46,12 @@ def connections_save(request):
     _apply_form(profile, data)
     if profile.db_type == DbType.RETAIL and not profile.cost_source_id:
         request.session["flash_error"] = "Server retail wajib memilih Sumber Modal (grosir/gudang)."
+        return redirect("/admin-panel/connections")
+    # The UI already hides self from the replica picker, but a crafted POST can
+    # still send it — a profile whose report_source is itself is meaningless
+    # (reports would read the same live server they're meant to offload from).
+    if profile.report_source_id and conn_id and str(profile.report_source_id) == str(conn_id):
+        request.session["flash_error"] = "Replica laporan tidak boleh server itu sendiri."
         return redirect("/admin-panel/connections")
     profile.save()
     from apps.transactions.indexes import ensure_indexes_async

@@ -32,6 +32,13 @@ class ServerProfile(models.Model):
     cost_source = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="retail_children"
     )
+    # Opsional: server kedua (replica laporan, disinkron via CDC — lihat
+    # apps/transactions/cdc_sync.py) yang dipakai untuk query laporan berat,
+    # supaya SELECT laporan tidak bersaing lock dengan transaksi kasir di
+    # server legacy ini. Kosong => laporan tetap baca langsung dari server ini.
+    report_source = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="report_children"
+    )
     is_default = models.BooleanField(default=False)
     last_status = models.CharField(max_length=10, choices=ConnStatus.choices, default=ConnStatus.UNKNOWN)
     last_checked = models.DateTimeField(null=True, blank=True)
@@ -65,6 +72,7 @@ class ServerProfile(models.Model):
             "db_name": self.db_name,
             "username": self.username,
             "cost_source": self.cost_source_id,
+            "report_source": self.report_source_id,
             "is_default": self.is_default,
             "status": self.last_status,
             "last_checked": self.last_checked.isoformat() if self.last_checked else None,

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 const props = defineProps({
   modelValue: { type: [String, Number, null], default: "" },
   options: { type: Array, default: () => [] }, // [{value,label}]
@@ -9,6 +9,13 @@ const props = defineProps({
 const emit = defineEmits(["update:modelValue"]);
 const open = ref(false);
 const q = ref("");
+const root = ref(null);
+
+function onClickOutside(e) {
+  if (open.value && root.value && !root.value.contains(e.target)) open.value = false;
+}
+onMounted(() => document.addEventListener("mousedown", onClickOutside));
+onBeforeUnmount(() => document.removeEventListener("mousedown", onClickOutside));
 const filtered = computed(() => {
   const t = q.value.toLowerCase().trim();
   if (!t) return props.options;
@@ -26,7 +33,7 @@ function pick(v) {
 </script>
 
 <template>
-  <div class="relative">
+  <div ref="root" class="relative">
     <span v-if="label" class="mb-1.5 block text-[10px] font-heading font-bold uppercase tracking-widest text-ink-muted">{{ label }}</span>
     <button
       type="button"
@@ -38,7 +45,7 @@ function pick(v) {
     </button>
     <div
       v-if="open"
-      class="absolute z-20 mt-1 w-full rounded border border-border-strong bg-surface shadow-[0_4_15px_rgba(0,0,0,0.15)] backdrop-blur-md"
+      class="absolute z-20 mt-1 w-full rounded border border-border-strong bg-surface shadow-[0_4px_15px_rgba(0,0,0,0.15)] backdrop-blur-md"
     >
       <input
         v-model="q"

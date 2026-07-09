@@ -119,5 +119,25 @@ Service di `apps/transactions/services.py` atau modul baru `apps/transactions/re
 - `frontend/pages/Admin/**` (17 page: drop mock, Pattern A/B), `frontend/components/ui/LoadingCard.vue` (sudah ada).
 - Hapus `frontend/mock/*.js` di akhir.
 
+## ============ Fase 8 — Reporting replica via CDC (opsional, performa) ============
+Latar belakang: laporan `penjualan_detail` dkk (join ke `t_penjualan_detail`, 3M+ baris) ~1 menit dan bersaing lock dengan transaksi kasir live di server legacy. Lihat "Reporting replica (CDC, opsional)" di `context.md` untuk detail arsitektur.
+
+Status: kode sisi app selesai di branch `feature/cdc-reporting-replica` (dibuat dari `dev-indexing`):
+- `apps/connections/models.py`: field `ServerProfile.report_source` (+ migrasi).
+- `core/mssql.py`: `get_report_source(profile)`.
+- `apps/core/models.py`: `CdcSyncCursor` (+ migrasi) — resume point per (profile, tabel).
+- `apps/transactions/cdc_sync.py`: engine sync generik (`CDC_TABLE_SPECS`, `backfill_table`, `sync_table`, `sync_all`).
+- `manage.py sync_cdc` (`--backfill` untuk copy penuh, lalu jadwalkan incremental tiap 1-2 menit).
+- `apps/monitoring/views.py` `_report_view`/`_report_export`: baca via replica kalau `report_source` diset, fallback ke legacy kalau belum — tidak breaking untuk profil yang belum setup replica.
+
+Diverifikasi: `manage.py check` + migrate bersih, smoke test logic apply (upsert keyed table, parent re-fetch untuk detail table) lulus terhadap SQLite pengganti. TIDAK bisa diverifikasi di sandbox dev: fungsi CDC SQL Server asli (`sys.fn_cdc_*`, `cdc.fn_cdc_get_all_changes_*`) butuh server nyata.
+
+Sisa kerjaan (di server asli, bukan kode):
+1. DBA: `EXEC sys.sp_cdc_enable_db;` + `sys.sp_cdc_enable_table` per tabel di `CDC_TABLE_SPECS` pada server legacy.
+2. Siapkan skema tabel yang sama di server kedua (replica).
+3. Set `report_source` di halaman Kelola Server, jalankan `manage.py sync_cdc --backfill` sekali.
+4. Jadwalkan `manage.py sync_cdc` (tanpa `--backfill`) tiap 1-2 menit (Task Scheduler).
+5. Verifikasi: cocokkan row count/agregat replica vs legacy, load test laporan+transaksi konkuren, ukur latency sebelum/sesudah.
+
 ## Commit per fase
 `git add -A; git commit -m "Fase N: <ringkas>"` (branch `main` OK; user commit manual bila mau). Co-author trailer sesuai konvensi.

@@ -25,7 +25,10 @@ urlpatterns = [
     path("inventory/stock", views.stock_index, name="stock"),
     path("inventory/histori", views.barang_histori_index, name="barang_histori"),
     path("inventory/stok-divisi", views.stok_divisi, name="stok_divisi"),
-    path("inventory/stok-akhir", views.stok_akhir, name="stok_akhir"),
+    path("inventory/mutasi-stok", views.mutasi_stok, name="mutasi_stok"),
+    path("inventory/stok-awal", views.stok_awal_barang, name="stok_awal_barang"),
+    path("inventory/transaksi", views.transaksi_barang, name="transaksi_barang"),
+    path("inventory/transaksi/export", views.transaksi_barang_export, name="transaksi_barang_export"),
     path("inventory/opname", views.opname, name="opname"),
     path("inventory/opname/export", views.opname_export, name="opname_export"),
     # Laporan penjualan / pembelian

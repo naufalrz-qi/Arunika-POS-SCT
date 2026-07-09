@@ -121,6 +121,16 @@ def cursor(profile, autocommit=True):
         conn.close()
 
 
+@contextmanager
+def report_cursor(profile):
+    """Cursor READ-ONLY untuk report: READ UNCOMMITTED (NOLOCK) supaya SELECT
+    berat tak mengambil shared lock yang memblok tulis POS live. Aman untuk
+    laporan (data historis tak sedang ditulis); JANGAN dipakai jalur write."""
+    with cursor(profile) as cur:
+        cur.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
+        yield cur
+
+
 def get_active_profile(db_type: str | None = None):
     """Return the single active ServerProfile (global), or None.
 
@@ -143,3 +153,25 @@ def get_active_profile(db_type: str | None = None):
 def get_cost_source(retail_profile):
     """Server grosir/gudang acuan modal untuk sebuah profil retail, atau None."""
     return getattr(retail_profile, "cost_source", None)
+
+
+def get_report_source(profile):
+    """Replica server (disinkron via CDC) untuk baca laporan, atau None.
+
+    Dipakai di jalur baca laporan berat (apps/monitoring/views.py _report_view)
+    supaya SELECT laporan mengenai replica ini, bukan server legacy yang juga
+    melayani transaksi kasir live. Jalur WRITE (update_harga, sync_entity, dst.)
+    TIDAK boleh pakai ini — selalu tulis ke `profile` (server legacy) langsung.
+    """
+    return getattr(profile, "report_source", None)
+
+
+def report_read_profiles(profile) -> list:
+    """Ordered candidate profiles for report READS: the CDC replica first (so
+    heavy SELECTs offload off the live POS server), then the primary `profile`
+    as a fallback. Callers try each in order until one connects — a replica
+    outage then degrades to slower direct reads instead of breaking every
+    report page. READS ONLY; write paths must always target `profile` directly.
+    """
+    replica = get_report_source(profile)
+    return [replica, profile] if replica else [profile]

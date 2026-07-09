@@ -14,6 +14,7 @@ from decimal import Decimal
 
 from core import mssql
 from core.cache import _cached, invalidate_master_cache  # noqa: F401 (re-exported)
+from apps.core.reporting import dictify as _dictify
 
 
 def _f(v) -> float:
@@ -30,10 +31,6 @@ def _s(v) -> str:
         return ""
     return str(v).strip()
 
-
-def _dictify(cursor) -> list[dict]:
-    cols = [c[0] for c in cursor.description]
-    return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
 
 def _k(v):
@@ -226,7 +223,7 @@ def _movement_sums(cur, *, kd_divisi=None, date_from=None, date_to=None) -> list
 # --- Public services -------------------------------------------------------
 
 def list_divisi(profile) -> list[dict]:
-    with mssql.cursor(profile) as cur:
+    with mssql.report_cursor(profile) as cur:
         cur.execute("SELECT kd_divisi, nama FROM m_divisi WHERE status <> 0 ORDER BY nama")
         return [
             {"kd_divisi": (r["kd_divisi"] or "").strip(), "nama": (r["nama"] or "").strip()}
@@ -239,7 +236,7 @@ def search_barang(profile, search="", limit=50) -> list[dict]:
     if search:
         where.append("(nama LIKE ? OR kd_barang LIKE ?)")
         params += [f"%{search}%", f"%{search}%"]
-    with mssql.cursor(profile) as cur:
+    with mssql.report_cursor(profile) as cur:
         cur.execute(
             f"SELECT TOP {limit} kd_barang, nama FROM m_barang WHERE {' AND '.join(where)} ORDER BY nama",
             params,
@@ -252,7 +249,7 @@ def search_barang(profile, search="", limit=50) -> list[dict]:
 
 def stock_card(profile, kd_barang, kd_divisi=None, date_from=None, date_to=None) -> dict:
     """Kartu stok for one product: movements + running base-unit saldo."""
-    with mssql.cursor(profile) as cur:
+    with mssql.report_cursor(profile) as cur:
         factors = _cached(profile, "factors", lambda: _unit_factors(cur))
         moves = _fetch_movements(cur, kd_barang=kd_barang, kd_divisi=kd_divisi or None, date_to=date_to)
         divisi = {_k(r["kd_divisi"]): r["nama"] for r in _div_rows(cur)}
@@ -294,6 +291,90 @@ def stock_card(profile, kd_barang, kd_divisi=None, date_from=None, date_to=None)
     }
 
 
+def stok_awal_barang(profile, cutoff=None) -> list[dict]:
+    """Stok awal per barang, ditotal lintas divisi.
+
+    - cutoff None       -> saldo awal seed tersimpan (m_barang_divisi.stok_awal),
+                           yaitu baris 'Stok Awal' [0] di kartu stok.
+    - cutoff (datetime) -> saldo berjalan tepat SEBELUM cutoff, identik dengan
+                           kolom 'Stok Awal' di Barang Histori (_movement_sums
+                           date_from=cutoff).
+    """
+    with mssql.report_cursor(profile) as cur:
+        meta = _cached(profile, "meta", lambda: _barang_meta(cur))
+        if cutoff is None:
+            # Mirror blok [0] _movement_sql: base-unit (jumlah=1), kategori non-jasa.
+            cur.execute(
+                "SELECT bd.kd_barang, SUM(bd.stok_awal) AS stok_awal "
+                "FROM m_barang_divisi bd "
+                "INNER JOIN m_barang b ON bd.kd_barang = b.kd_barang "
+                "INNER JOIN m_kategori k ON b.kd_kategori = k.kd_kategori AND k.status <> 2 "
+                "INNER JOIN m_barang_satuan bs ON bd.kd_barang = bs.kd_barang AND bs.jumlah = 1 "
+                "GROUP BY bd.kd_barang"
+            )
+            agg = {_k(r["kd_barang"]): _f(r["stok_awal"]) for r in _dictify(cur)}
+        else:
+            sums = _movement_sums(cur, date_from=cutoff)  # stok_awal = saldo < cutoff
+            agg = {}
+            for m in sums:
+                kb = _k(m["kd_barang"])
+                agg[kb] = agg.get(kb, 0.0) + _f(m["stok_awal"])
+
+    out = []
+    for kb, stok in agg.items():
+        if not stok:  # buang barang stok awal 0 (sama seperti app)
+            continue
+        info = meta.get(kb, {})
+        out.append({
+            "kd_barang": kb.strip() if isinstance(kb, str) else kb,
+            "barang": info.get("nama", ""),
+            "kategori": info.get("kategori", ""),
+            "stok_awal": round(stok, 3),
+        })
+    out.sort(key=lambda r: r["barang"])
+    return out
+
+
+def mutasi_stok(profile, date_from=None, date_to=None, kd_divisi=None) -> list[dict]:
+    """Mutasi stok per barang untuk sebuah periode, dengan asumsi stok awal = 0.
+
+    'stok' = masuk - keluar dari transaksi dalam rentang [date_from, date_to];
+    saldo/seed sebelum date_from diabaikan (itulah asumsi stok awal 0). Ditotal
+    lintas divisi kecuali kd_divisi diberikan. Reuse _movement_sums biar konsisten
+    dengan Stok Akhir / Barang Histori.
+    """
+    date_to = date_to or dt.datetime.now()
+    with mssql.report_cursor(profile) as cur:
+        sums = _movement_sums(cur, kd_divisi=kd_divisi or None, date_from=date_from, date_to=date_to)
+        meta = _cached(profile, "meta", lambda: _barang_meta(cur))
+        divisi = {_k(r["kd_divisi"]): r["nama"] for r in _div_rows(cur)}
+
+    per_divisi = bool(kd_divisi)
+    agg: dict = {}
+    for m in sums:
+        key = (_k(m["kd_divisi"]), _k(m["kd_barang"])) if per_divisi else (None, _k(m["kd_barang"]))
+        a = agg.setdefault(key, {"masuk": 0.0, "keluar": 0.0})
+        a["masuk"] += _f(m["masuk"])
+        a["keluar"] += _f(m["keluar"])
+
+    out = []
+    for (kdiv, kb), a in agg.items():
+        if not (a["masuk"] or a["keluar"]):  # hanya barang yang bergerak dalam periode
+            continue
+        info = meta.get(kb, {})
+        out.append({
+            "kd_barang": kb.strip() if isinstance(kb, str) else kb,
+            "barang": info.get("nama", ""),
+            "kategori": info.get("kategori", ""),
+            "divisi": divisi.get(kdiv, "Semua Divisi") if per_divisi else "Semua Divisi",
+            "masuk": round(a["masuk"], 3),
+            "keluar": round(a["keluar"], 3),
+            "stok": round(a["masuk"] - a["keluar"], 3),
+        })
+    out.sort(key=lambda r: r["barang"])
+    return out
+
+
 def stock_levels(profile, kd_divisi=None, date_from=None, date_to=None, search="", kd_kategori="") -> list[dict]:
     """Stok akhir per barang (and per divisi unless 'all'), computed from movements.
 
@@ -302,7 +383,7 @@ def stock_levels(profile, kd_divisi=None, date_from=None, date_to=None, search="
     - date_from set   -> period: stok_awal (before), masuk/keluar (within), stok_akhir
     """
     date_to = date_to or dt.datetime.now()
-    with mssql.cursor(profile) as cur:
+    with mssql.report_cursor(profile) as cur:
         sums = _movement_sums(cur, kd_divisi=kd_divisi or None, date_from=date_from, date_to=date_to)
         divisi = {_k(r["kd_divisi"]): r["nama"] for r in _div_rows(cur)}
         # kd_barang -> {nama, kategori, kd_kategori, jenis, supplier, status}
@@ -475,7 +556,7 @@ def stok_akhir_per_tanggal(profile, tanggal, kd_divisi=None) -> list[dict]:
     if isinstance(tanggal, dt.date) and not isinstance(tanggal, dt.datetime):
         tanggal = dt.datetime(tanggal.year, tanggal.month, tanggal.day, 23, 59, 59)
 
-    with mssql.cursor(profile) as cur:
+    with mssql.report_cursor(profile) as cur:
         sums = _movement_sums(cur, kd_divisi=kd_divisi or None, date_to=tanggal)
         divisi = {_k(r["kd_divisi"]): r for r in _div_rows_full(cur)}
         meta = _cached(profile, "meta", lambda: _barang_meta(cur))
@@ -520,7 +601,7 @@ def barang_histori(profile, kd_barang=None, kd_divisi=None, date_from=None, date
     if not any([kd_barang, kd_divisi, date_from, date_to]):
         return []
 
-    with mssql.cursor(profile) as cur:
+    with mssql.report_cursor(profile) as cur:
         moves = _fetch_movements(
             cur,
             kd_barang=kd_barang or None,

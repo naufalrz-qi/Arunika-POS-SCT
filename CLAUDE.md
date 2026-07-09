@@ -44,6 +44,7 @@ python manage.py generate_key    # generate POS_FERNET_KEY (encrypts connection 
 python manage.py seed_dev        # seed admin user + dev connection profile
 python manage.py ensure_indexes  # create report/stock indexes on MS SQL (idempotent)
 python manage.py check_stock_agg # self-check: SQL aggregation vs Python aggregation
+python manage.py sync_cdc        # sync report_source replica via CDC (--backfill for initial full copy)
 ```
 
 ## Architecture
@@ -58,6 +59,7 @@ python manage.py check_stock_agg # self-check: SQL aggregation vs Python aggrega
 - `apps/inventory/services.py` — stock/movement engine (multi-way UNION of penjualan/pembelian/retur/opname/mutasi), master-data cache (~10 min TTL).
 - `apps/transactions/services.py` — dashboard KPIs, report aggregation, index helpers.
 - `apps/master_data/services.py` — products/customers, price update/compare.
+- `apps/transactions/cdc_sync.py` — optional reporting-replica sync via SQL Server CDC (see `context.md` § Reporting replica). `ServerProfile.report_source` + `core/mssql.get_report_source()` route report reads to the replica when configured; write paths always target the primary profile.
 
 **MS SQL gotcha — key normalization.** SQL Server collation is case-insensitive and ignores trailing spaces; Python dict keys are not. When joining SQL result sets on `kd_*` keys in Python, normalize both sides with the `_k()` helper (see `apps/inventory/services.py`). Mismatched joins silently drop rows otherwise.
 
@@ -116,4 +118,4 @@ Project-specific config comes from `.env` (see `.env.example` for the full annot
 
 ## Project status
 
-Foundation + inventory histori/stock are live on real MS SQL data via the deferred pattern. Several report pages (penjualan/pembelian/fmi/promo/kas/shift) still render mock data from `frontend/mock/*.js`; converting them to real deferred loads is the ongoing work tracked in `implementation_plan.md`. Follow the deferred convention above when making one real.
+All admin menus render real MS SQL data — `frontend/mock/*` has been deleted. Report pages come in two stacks that should not be mixed: the server-side stack (`ReportPage.vue` + `ServerTable.vue` + `useServerReport.js`; server pagination/sort/filter, XLSX export via the backend `/export` routes) used by `Reports/*`, `Promo/*`, `Cash/*`, `Analytics/*`, Opname, and TransaksiBarang; and the client-side stack (`ReportView.vue` + `DataTable.vue` + `useReportFilters.js`; in-browser sort/paginate, lazy-loaded SheetJS export) used by the inventory pages. A CDC-based reporting replica (`apps/transactions/cdc_sync.py`, `report_source` on `ServerProfile`) exists but is parked — with `report_source` unset, reports read the primary directly. Follow the deferred convention above for any new page.

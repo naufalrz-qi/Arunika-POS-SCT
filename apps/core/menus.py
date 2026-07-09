@@ -30,10 +30,12 @@ ALL_MENUS = [
     {"key": "pembelian_periode", "label": "Pembelian per Periode", "icon": "calendar", "href": "/admin-panel/laporan/pembelian-periode", "section": "pembelian"},
     {"key": "retur_pembelian", "label": "Retur Pembelian", "icon": "refund", "href": "/admin-panel/laporan/retur-pembelian", "section": "pembelian"},
     # Inventori & Stok
-    {"key": "stock", "label": "Monitoring Stok", "icon": "box", "href": "/admin-panel/inventory/stock", "section": "stok"},
+    {"key": "stock", "label": "Stok Akhir", "icon": "box", "href": "/admin-panel/inventory/stock", "section": "stok"},
     {"key": "barang_histori", "label": "Barang Histori", "icon": "list", "href": "/admin-panel/inventory/histori", "section": "stok"},
     {"key": "stok_divisi", "label": "Stok per Divisi", "icon": "store", "href": "/admin-panel/inventory/stok-divisi", "section": "stok"},
-    {"key": "stok_akhir", "label": "Stok Akhir per Tanggal", "icon": "cash", "href": "/admin-panel/inventory/stok-akhir", "section": "stok"},
+    {"key": "stok_akhir", "label": "Mutasi Stok", "icon": "refresh", "href": "/admin-panel/inventory/mutasi-stok", "section": "stok"},
+    {"key": "stok_awal", "label": "Stok Awal Barang", "icon": "box", "href": "/admin-panel/inventory/stok-awal", "section": "stok"},
+    {"key": "transaksi_barang", "label": "Transaksi Barang", "icon": "list", "href": "/admin-panel/inventory/transaksi", "section": "stok"},
     {"key": "opname", "label": "Opname Stok", "icon": "clipboard", "href": "/admin-panel/inventory/opname", "section": "stok"},
     # Analitik (FMI)
     {"key": "fmi_penjualan", "label": "FMI Penjualan", "icon": "trending", "href": "/admin-panel/analitik/fmi-penjualan", "section": "analitik"},
@@ -83,3 +85,18 @@ def menus_for(user):
         return [m for m in ALL_MENUS if not m.get("superadmin_only") and m["key"] in allowed]
     # Kasir / supervisor don't use the admin panel in this phase.
     return []
+
+
+# Longest href first so /laporan/penjualan-nota resolves before /laporan/penjualan.
+_MENUS_BY_HREF = sorted(ALL_MENUS, key=lambda m: len(m["href"]), reverse=True)
+
+
+def menu_key_for_path(path: str):
+    """Resolve a request path to the menu key that owns it, or None for pages
+    outside the menu registry (e.g. /admin-panel/profile). Sub-paths such as
+    /export or /save belong to their menu's key."""
+    for m in _MENUS_BY_HREF:
+        href = m["href"]
+        if path == href or path.startswith(href + "/"):
+            return m["key"]
+    return None

@@ -19,7 +19,7 @@ quick_schema.py di folder yang sama): satu file .txt (ringkasan yang sama sepert
 di layar) dan satu file .json (terstruktur, gampang diproses lagi).
 
 Contoh pakai:
-    python scripts/inspect_view_function_columns.py --password "12qwaszxX"
+    python scripts/inspect_view_function_columns.py --password "<db-password>"
     python scripts/inspect_view_function_columns.py --password "..." --database lain_db
     python scripts/inspect_view_function_columns.py --password "..." --output-dir scripts/output
 """

@@ -30,6 +30,13 @@ const costSourceOptions = computed(() =>
     .map((c) => ({ value: c.id, label: `${c.name} — ${c.db_type === "gudang" ? "Gudang" : "Grosir"}` })),
 );
 
+// Replica laporan (CDC): boleh profil tipe apa saja, tak boleh dirinya sendiri.
+const reportSourceOptions = computed(() =>
+  props.connections
+    .filter((c) => c.id !== form.id)
+    .map((c) => ({ value: c.id, label: `${c.name} — ${c.db_name} (${c.host})` })),
+);
+
 const columns = [
   { key: "name", label: "Nama", sortable: true },
   { key: "db_type", label: "Tipe", sortable: true, align: "center" },
@@ -82,7 +89,7 @@ function setDefault(conn) {
 
 // --- Create / edit ---
 const showForm = ref(false);
-const form = useForm({ id: null, name: "", db_type: "grosir", host: "", port: 1433, db_name: "", username: "", password: "", cost_source: null });
+const form = useForm({ id: null, name: "", db_type: "grosir", host: "", port: 1433, db_name: "", username: "", password: "", cost_source: null, report_source: null });
 
 function openCreate() {
   form.reset();
@@ -99,6 +106,7 @@ function openEdit(c) {
   form.username = c.username;
   form.password = "";
   form.cost_source = c.cost_source ?? null;
+  form.report_source = c.report_source ?? null;
   showForm.value = true;
 }
 function save() {
@@ -211,9 +219,20 @@ function confirmDelete() {
           placeholder="Pilih server acuan modal…"
           :error="form.errors.cost_source"
         />
+        <Select
+          v-model="form.report_source"
+          label="Replica Laporan (opsional)"
+          :options="reportSourceOptions"
+          placeholder="Tidak ada — baca langsung ke server ini"
+          :error="form.errors.report_source"
+        />
       </div>
       <p v-if="form.db_type === 'retail'" class="mt-3 text-xs text-ink-subtle">
         Server retail wajib punya acuan modal. Margin dihitung dari harga jual server sumber modal.
+      </p>
+      <p class="mt-3 text-xs text-ink-subtle">
+        Replica laporan: kalau diisi, laporan (penjualan/pembelian/dll) baca dari server ini alih-alih server di atas —
+        harus sudah disinkron via CDC (<code>manage.py sync_cdc</code>). Kosongkan kalau belum ada replica.
       </p>
       <p class="mt-3 text-xs text-ink-subtle">Password dienkripsi (Fernet) di sisi server sebelum disimpan.</p>
       <template #footer>

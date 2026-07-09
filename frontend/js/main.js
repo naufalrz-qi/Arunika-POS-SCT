@@ -9,7 +9,9 @@ import axios from "axios";
 axios.defaults.xsrfCookieName = "csrftoken";
 axios.defaults.xsrfHeaderName = "X-CSRFTOKEN";
 
-const pages = import.meta.glob("../pages/**/*.vue", { eager: true });
+// Lazy glob: each page becomes its own chunk, fetched on first visit,
+// instead of one eager bundle that ships all pages on first paint.
+const pages = import.meta.glob("../pages/**/*.vue");
 
 createInertiaApp({
   resolve: (name) => {
@@ -17,7 +19,7 @@ createInertiaApp({
     if (!page) {
       throw new Error(`Inertia page not found: ${name}`);
     }
-    return page;
+    return page();
   },
   setup({ el, App, props, plugin }) {
     createApp({ render: () => h(App, props) })
