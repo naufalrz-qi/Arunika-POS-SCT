@@ -53,6 +53,7 @@ ALL_MENUS = [
     {"key": "customers", "label": "Master Pelanggan", "icon": "user", "href": "/admin-panel/master/customers", "section": "master"},
     {"key": "suppliers", "label": "Master Supplier", "icon": "truck", "href": "/admin-panel/master/suppliers", "section": "master"},
     {"key": "update_barang", "label": "Update Barang", "icon": "pencil", "href": "/admin-panel/master/update-barang", "section": "master"},
+    {"key": "riwayat_update_barang", "label": "Riwayat Update Barang", "icon": "clock", "href": "/admin-panel/master/riwayat-update-barang", "section": "master"},
     {"key": "sync_harga", "label": "Sinkronisasi Harga", "icon": "refresh", "href": "/admin-panel/master/sync-harga", "section": "master"},
     {"key": "sync_master", "label": "Sinkronisasi Master Data", "icon": "refresh", "href": "/admin-panel/master/sync-master", "section": "master"},
     {"key": "sync_history", "label": "Riwayat Sinkronisasi", "icon": "list", "href": "/admin-panel/master/sync-history", "section": "master"},

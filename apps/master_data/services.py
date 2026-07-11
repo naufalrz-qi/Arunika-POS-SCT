@@ -160,13 +160,19 @@ def list_barang_edit(profile, search: str = "") -> list[dict]:
 
     with mssql.cursor(profile) as cur:
         cur.execute(
-            f"SELECT TOP {MAX_ROWS} kd_barang, nama, keterangan, status FROM m_barang "
+            f"SELECT TOP {MAX_ROWS} kd_barang, kd_kategori, nama, keterangan, status FROM m_barang "
             f"WHERE {where_sql} ORDER BY nama",
             params,
         )
         barang = _dictify(cur)
         satuan_names = _cached(
             profile, "satuan_names", lambda: _key_map(cur, "SELECT kd_satuan, nama FROM m_satuan", "kd_satuan", "nama")
+        )
+        categories = _cached(
+            profile, "categories", lambda: _key_map(cur, "SELECT kd_kategori, nama FROM m_kategori", "kd_kategori", "nama")
+        )
+        divisi_names = _cached(
+            profile, "divisi_names", lambda: _key_map(cur, "SELECT kd_divisi, nama FROM m_divisi", "kd_divisi", "nama")
         )
 
         def _build_satuan_edit():
@@ -226,7 +232,11 @@ def list_barang_edit(profile, search: str = "") -> list[dict]:
                 unit["margin"] = _margin(harga, m)
             units.append(unit)
         divisi = [
-            {"kd_divisi": _st(d["kd_divisi"]), "status": _st(d["status"])}
+            {
+                "kd_divisi": _st(d["kd_divisi"]),
+                "nama": _st(divisi_names.get(d["kd_divisi"], "")),
+                "status": _st(d["status"]),
+            }
             for d in divisi_by.get(kd, [])
         ]
         out.append({
@@ -234,6 +244,8 @@ def list_barang_edit(profile, search: str = "") -> list[dict]:
             "nama": _st(b["nama"]),
             "keterangan": _st(b.get("keterangan", "")),
             "status": _st(b["status"]),
+            "kd_kategori": _st(b.get("kd_kategori", "")),
+            "kategori": _st(categories.get(b.get("kd_kategori"), "")),
             "satuan": units,
             "divisi": divisi,
             "is_retail": is_retail,
@@ -241,11 +253,12 @@ def list_barang_edit(profile, search: str = "") -> list[dict]:
     return out
 
 
-def update_harga(profile, kd_barang: str, prices: dict) -> int:
+def update_harga(profile, kd_barang: str, prices: dict) -> list[dict]:
     """Update harga_jual (dan margin) per satuan. `prices`: {kd_satuan: harga_jual}.
 
     Retail: margin = markup atas modal (harga_jual server sumber-modal). Lain: margin=0.
-    Return jumlah baris ter-update.
+    Return daftar perubahan aktual: [{kd_satuan, harga_lama, harga_baru}, ...] (hanya yang
+    nilainya benar-benar berubah) — dipakai caller untuk mencatat riwayat (BarangUpdateLog).
     """
     modal: dict = {}
     is_retail = _is_retail(profile)
@@ -256,41 +269,55 @@ def update_harga(profile, kd_barang: str, prices: dict) -> int:
                 cur.execute("SELECT kd_satuan, harga_jual FROM m_barang_satuan WHERE kd_barang = ?", [kd_barang])
                 modal = {_st(r["kd_satuan"]): _f(r["harga_jual"]) for r in _dictify(cur)}
 
-    n = 0
+    changes: list[dict] = []
     with mssql.cursor(profile, autocommit=False) as cur:
+        cur.execute("SELECT kd_satuan, harga_jual FROM m_barang_satuan WHERE kd_barang = ?", [kd_barang])
+        harga_lama = {_st(r["kd_satuan"]): _f(r["harga_jual"]) for r in _dictify(cur)}
+
         for kd_satuan, harga in prices.items():
+            ks = _st(kd_satuan)
             harga = _f(harga)
-            margin = _margin(harga, modal.get(_st(kd_satuan), 0.0)) if is_retail else 0.0
+            lama = harga_lama.get(ks, 0.0)
+            margin = _margin(harga, modal.get(ks, 0.0)) if is_retail else 0.0
             cur.execute(
                 "UPDATE m_barang_satuan SET harga_jual = ?, margin = ? WHERE kd_barang = ? AND kd_satuan = ?",
                 [harga, margin, kd_barang, kd_satuan],
             )
-            n += cur.rowcount
+            if cur.rowcount and lama != harga:
+                changes.append({"kd_satuan": ks, "harga_lama": lama, "harga_baru": harga})
         cur.connection.commit()
     _invalidate_inventory_cache(profile)
-    return n
+    return changes
 
 
-def update_status(profile, kd_barang: str, table: str, status, kd_divisi: str | None = None) -> int:
-    """Update kolom status di salah satu dari m_barang / m_barang_divisi / m_barang_satuan."""
+def update_status(profile, kd_barang: str, table: str, status, kd_divisi: str | None = None) -> dict:
+    """Update kolom status di salah satu dari m_barang / m_barang_divisi / m_barang_satuan.
+
+    Return {"n": jumlah baris ter-update, "lama": status sebelumnya (representatif,
+    baris pertama yang cocok) untuk keperluan riwayat}.
+    """
     if table not in _STATUS_TABLES:
         raise ValueError(f"Tabel status tidak valid: {table}")
     status = _st(status)
     if status not in ("0", "1", "2"):
         raise ValueError(f"Status tidak valid: {status}")
 
-    sql = f"UPDATE {table} SET status = ? WHERE kd_barang = ?"  # nosec: table di-whitelist di atas
-    params: list = [status, kd_barang]
+    where_sql = "WHERE kd_barang = ?"
+    where_params: list = [kd_barang]
     if table == "m_barang_divisi" and kd_divisi:
-        sql += " AND kd_divisi = ?"
-        params.append(kd_divisi)
+        where_sql += " AND kd_divisi = ?"
+        where_params.append(kd_divisi)
 
     with mssql.cursor(profile, autocommit=False) as cur:
-        cur.execute(sql, params)
+        cur.execute(f"SELECT TOP 1 status FROM {table} {where_sql}", where_params)  # nosec: table di-whitelist di atas
+        row = cur.fetchone()
+        lama = _st(row[0]) if row else ""
+
+        cur.execute(f"UPDATE {table} SET status = ? {where_sql}", [status] + where_params)  # nosec
         n = cur.rowcount
         cur.connection.commit()
     _invalidate_inventory_cache(profile)
-    return n
+    return {"n": n, "lama": lama}
 
 
 # --- Sinkronisasi harga antar-server (WRITE) -------------------------------

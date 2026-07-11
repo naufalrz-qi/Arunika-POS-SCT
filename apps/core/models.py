@@ -88,6 +88,76 @@ class SyncLog(models.Model):
         return json.loads(self.detail) if self.detail else []
 
 
+class BarangUpdateLog(models.Model):
+    """Riwayat perubahan per-barang dari halaman Update Barang (harga & status).
+
+    Satu baris per field yang benar-benar berubah (bukan per klik simpan), supaya
+    "Riwayat" pada kartu barang bisa langsung menampilkan nilai lama -> baru.
+    """
+
+    class Field(models.TextChoices):
+        HARGA = "harga", "Harga Jual"
+        STATUS_BARANG = "status_barang", "Status Barang"
+        STATUS_DIVISI = "status_divisi", "Status Divisi"
+        STATUS_SATUAN = "status_satuan", "Status Satuan"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="barang_update_logs",
+    )
+    # Denormalized so logs survive user/profile deletion, same pattern as ActivityLog.username.
+    username = models.CharField(max_length=150, blank=True)
+    profile = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True, on_delete=models.SET_NULL, related_name="barang_update_logs"
+    )
+    profile_name = models.CharField(max_length=100, blank=True)
+    kd_barang = models.CharField(max_length=30)
+    nama_barang = models.CharField(max_length=150, blank=True)
+    field = models.CharField(max_length=20, choices=Field.choices)
+    kd_ref = models.CharField(max_length=30, blank=True)  # kd_satuan / kd_divisi, kosong utk level m_barang
+    nilai_lama = models.CharField(max_length=100, blank=True)
+    nilai_baru = models.CharField(max_length=100, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["profile", "kd_barang", "-created_at"])]
+
+    def __str__(self) -> str:
+        return f"{self.created_at:%Y-%m-%d %H:%M} {self.kd_barang} {self.field}: {self.nilai_lama} -> {self.nilai_baru}"
+
+
+def log_barang_updates(request, profile, kd_barang, nama_barang, entries):
+    """Catat satu atau lebih perubahan field untuk satu barang (harga/status).
+
+    `entries`: list of (field, kd_ref, nilai_lama, nilai_baru). Entri dengan
+    nilai_lama == nilai_baru dilewati (bukan perubahan nyata).
+    """
+    user = getattr(request, "user", None)
+    username = user.username if (user and user.is_authenticated) else ""
+    rows = [
+        BarangUpdateLog(
+            user=user if (user and user.is_authenticated) else None,
+            username=username,
+            profile=profile,
+            profile_name=profile.name if profile else "",
+            kd_barang=kd_barang,
+            nama_barang=nama_barang,
+            field=field,
+            kd_ref=kd_ref or "",
+            nilai_lama="" if nilai_lama is None else str(nilai_lama),
+            nilai_baru="" if nilai_baru is None else str(nilai_baru),
+        )
+        for field, kd_ref, nilai_lama, nilai_baru in entries
+        if str(nilai_lama) != str(nilai_baru)
+    ]
+    if rows:
+        BarangUpdateLog.objects.bulk_create(rows)
+
+
 class CdcSyncCursor(models.Model):
     """Resume point for one CDC-synced table (apps/transactions/cdc_sync.py).
 

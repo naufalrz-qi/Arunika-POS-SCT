@@ -6,7 +6,7 @@ import pyodbc
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from django.http import HttpResponseForbidden
+from django.http import HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from inertia import defer, render
 
@@ -14,7 +14,7 @@ from apps.auth_app.models import Role, User
 from apps.connections.models import ServerProfile
 from apps.core.http import get_data
 from apps.core.menus import assignable_menus
-from apps.core.models import ActivityLog, SyncLog, log_activity, log_sync
+from apps.core.models import ActivityLog, BarangUpdateLog, SyncLog, log_activity, log_barang_updates, log_sync
 from apps.inventory import services as inv
 from apps.master_data import services as master
 from apps.transactions import services as tx
@@ -277,19 +277,30 @@ def customers_save(request):
 
 # --- Update Barang (WRITE ke MS SQL legacy) --------------------------------
 
+_STATUS_FIELD = {
+    "m_barang": BarangUpdateLog.Field.STATUS_BARANG,
+    "m_barang_divisi": BarangUpdateLog.Field.STATUS_DIVISI,
+    "m_barang_satuan": BarangUpdateLog.Field.STATUS_SATUAN,
+}
+
+
 def update_barang_index(request):
     # Ikut koneksi aktif (dipilih di navbar) — tidak ada pemilihan server terpisah.
     profile = _active()
     search = request.GET.get("search", "")
 
-    items, conn_error = [], None
-    if profile:
-        try:
-            items = master.list_barang_edit(profile, search)
-        except pyodbc.Error as exc:
-            conn_error = f"Gagal membaca barang: {exc.args[-1] if exc.args else exc}"
-    else:
-        conn_error = CONN_ERROR
+    # Deferred: m_barang + m_barang_satuan + m_barang_divisi bisa makan detik-an
+    # tanpa cache hangat (core/cache.py) — shell (filter, dsb) tetap tampil instan.
+    def load_items():
+        items, conn_error = [], None
+        if profile:
+            try:
+                items = master.list_barang_edit(profile, search)
+            except pyodbc.Error as exc:
+                conn_error = f"Gagal membaca barang: {exc.args[-1] if exc.args else exc}"
+        else:
+            conn_error = CONN_ERROR
+        return {"rows": items, "conn_error": conn_error}
 
     return render(
         request,
@@ -297,45 +308,138 @@ def update_barang_index(request):
         props={
             "active": profile.as_dict() if profile else None,
             "profile_type": profile.db_type if profile else None,
-            "items": items,
+            "items": defer(load_items),
             "filters": {"search": search},
-            "conn_error": conn_error,
         },
     )
 
 
-def _redirect_update_barang(profile):
+def update_barang_harga(request):
+    # Selalu tulis ke koneksi aktif SAAT INI (server-side), bukan id yang dikirim
+    # client — kalau tidak, halaman ini di tab lain yang masih terbuka setelah user
+    # ganti koneksi di navbar akan menulis ke server LAMA meski UI-nya menampilkan
+    # data server BARU (props.active sudah refresh, tapi id lama tetap terkirim).
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect("/admin-panel/master/update-barang")
+    data = get_data(request)
+    kd_barang = (data.get("kd_barang") or "").strip()
+    nama_barang = (data.get("nama") or "").strip()
+    prices = data.get("prices") or {}  # {kd_satuan: harga_jual}
+    try:
+        changes = master.update_harga(profile, kd_barang, prices)
+        log_barang_updates(
+            request, profile, kd_barang, nama_barang,
+            [
+                (BarangUpdateLog.Field.HARGA, c["kd_satuan"], c["harga_lama"], c["harga_baru"])
+                for c in changes
+            ],
+        )
+        log_activity(request, "barang", f"Update harga {kd_barang} ({profile.name}): {len(changes)} satuan")
+        request.session["flash_success"] = f"Harga {kd_barang} diperbarui ({len(changes)} satuan)."
+    except pyodbc.Error as exc:
+        request.session["flash_error"] = f"Gagal update harga: {exc.args[-1] if exc.args else exc}"
     return redirect("/admin-panel/master/update-barang")
 
 
-def update_barang_harga(request):
-    data = get_data(request)
-    profile = get_object_or_404(ServerProfile, pk=data.get("profile"))
-    kd_barang = (data.get("kd_barang") or "").strip()
-    prices = data.get("prices") or {}  # {kd_satuan: harga_jual}
-    try:
-        n = master.update_harga(profile, kd_barang, prices)
-        log_activity(request, "barang", f"Update harga {kd_barang} ({profile.name}): {n} satuan")
-        request.session["flash_success"] = f"Harga {kd_barang} diperbarui ({n} satuan)."
-    except pyodbc.Error as exc:
-        request.session["flash_error"] = f"Gagal update harga: {exc.args[-1] if exc.args else exc}"
-    return _redirect_update_barang(profile)
-
-
 def update_barang_status(request):
+    # Sama seperti update_barang_harga: selalu pakai koneksi aktif server-side.
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect("/admin-panel/master/update-barang")
     data = get_data(request)
-    profile = get_object_or_404(ServerProfile, pk=data.get("profile"))
     kd_barang = (data.get("kd_barang") or "").strip()
+    nama_barang = (data.get("nama") or "").strip()
     table = data.get("table") or ""
     status = data.get("status")
     kd_divisi = data.get("kd_divisi") or None
     try:
-        master.update_status(profile, kd_barang, table, status, kd_divisi)
+        result = master.update_status(profile, kd_barang, table, status, kd_divisi)
+        log_barang_updates(
+            request, profile, kd_barang, nama_barang,
+            [(_STATUS_FIELD.get(table, table), kd_divisi or "", result["lama"], status)],
+        )
         log_activity(request, "barang", f"Update status {table} {kd_barang} -> {status} ({profile.name})")
         request.session["flash_success"] = f"Status ({table}) untuk {kd_barang} diperbarui."
     except (pyodbc.Error, ValueError) as exc:
         request.session["flash_error"] = f"Gagal update status: {exc}"
-    return _redirect_update_barang(profile)
+    return redirect("/admin-panel/master/update-barang")
+
+
+def update_barang_riwayat(request):
+    """Riwayat perubahan (harga/status) untuk satu barang — dipakai modal 'Riwayat' di kartu."""
+    profile = _active()
+    kd_barang = (request.GET.get("kd_barang") or "").strip()
+    if not profile or not kd_barang:
+        return JsonResponse({"rows": []})
+    logs = BarangUpdateLog.objects.filter(profile=profile, kd_barang=kd_barang).order_by("-created_at")[:100]
+    rows = [
+        {
+            "field": log.field,
+            "field_label": log.get_field_display(),
+            "kd_ref": log.kd_ref,
+            "nilai_lama": log.nilai_lama,
+            "nilai_baru": log.nilai_baru,
+            "username": log.username,
+            "created_at": log.created_at.isoformat(),
+        }
+        for log in logs
+    ]
+    return JsonResponse({"rows": rows})
+
+
+def riwayat_update_barang_index(request):
+    """Riwayat perubahan harga/status untuk SEMUA barang (lintas koneksi) — halaman terpisah
+    dari modal 'Riwayat' per-kartu di update_barang_index."""
+    f = request.GET
+    kd_barang = (f.get("kd_barang") or "").strip()
+    field = (f.get("field") or "").strip()
+    date_from = _parse_date(f.get("date_from"))
+    date_to = _eod(_parse_date(f.get("date_to")))
+    profile_id = f.get("profile") or ""
+
+    def load_riwayat():
+        qs = BarangUpdateLog.objects.select_related("profile").all()
+        if kd_barang:
+            qs = qs.filter(kd_barang__icontains=kd_barang)
+        if field:
+            qs = qs.filter(field=field)
+        if date_from:
+            qs = qs.filter(created_at__gte=date_from)
+        if date_to:
+            qs = qs.filter(created_at__lte=date_to)
+        if profile_id:
+            qs = qs.filter(profile_id=profile_id)
+
+        rows = [
+            {
+                "id": log.id,
+                "created_at": log.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "kd_barang": log.kd_barang,
+                "nama_barang": log.nama_barang or "—",
+                "field": log.field,
+                "field_label": log.get_field_display(),
+                "kd_ref": log.kd_ref,
+                "nilai_lama": log.nilai_lama,
+                "nilai_baru": log.nilai_baru,
+                "username": log.username or "—",
+                "profile_name": log.profile_name or "—",
+            }
+            for log in qs[:500]
+        ]
+        return {"rows": rows}
+
+    return render(
+        request,
+        "Admin/MasterData/RiwayatUpdateBarang",
+        props={
+            "data": defer(load_riwayat),
+            "profiles": [{"value": str(p.id), "label": p.name} for p in ServerProfile.objects.all()],
+            "filters": {"kd_barang": kd_barang, "field": field, "date_from": f.get("date_from") or "", "date_to": f.get("date_to") or "", "profile": profile_id},
+        },
+    )
 
 
 # --- Sinkronisasi Harga antar-server ---------------------------------------

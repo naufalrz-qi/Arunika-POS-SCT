@@ -21,6 +21,7 @@ const variants = {
   warning: "bg-warning-600/90 text-white border-warning-500 hover:bg-warning-500 hover:shadow-[0_0_15px_rgba(255,196,0,0.4)] backdrop-blur-sm",
   info: "bg-blue-600/90 text-white border-blue-500 hover:bg-blue-500 hover:shadow-[0_0_15px_rgba(0,123,255,0.4)] backdrop-blur-sm",
   yellow: "bg-rx-yellow text-ink border-yellow-400 hover:bg-yellow-400 hover:shadow-[0_0_15px_rgba(255,196,0,0.6)] backdrop-blur-sm",
+  "yellow-outline": "bg-surface/80 text-ink border-rx-yellow hover:bg-warning-bg hover:text-warning-fg hover:shadow-[0_0_12px_rgba(255,196,0,0.35)] backdrop-blur-sm",
   accent: "bg-rx-red text-white border-red-500 hover:brightness-110 hover:shadow-[0_0_15px_rgba(230,0,18,0.6)] backdrop-blur-sm",
 };
 
