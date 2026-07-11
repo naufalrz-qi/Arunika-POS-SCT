@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import ReportPage from "@/components/report/ReportPage.vue";
 import FilterPanel from "@/components/ui/FilterPanel.vue";
+import FilterSection from "@/components/ui/FilterSection.vue";
 import DateModeField from "@/components/ui/DateModeField.vue";
 import SelectSearch from "@/components/ui/SelectSearch.vue";
 import Input from "@/components/ui/Input.vue";
@@ -86,39 +87,41 @@ const summaryItems = computed(() => {
       @per-page-change="onPerPage"
     >
       <template #filters>
-        <FilterPanel @submit="submit" @reset="onReset">
-          <DateModeField
-            label="Tanggal"
-            :mode="form.date_mode"
-            :from="form.date_from"
-            :to="form.date_to"
-            :date="form.date"
-            @update:mode="form.date_mode = $event"
-            @update:from="form.date_from = $event"
-            @update:to="form.date_to = $event"
-            @update:date="form.date = $event"
-          />
-          <SelectSearch v-model="form.kd_divisi" :options="divisiOptions" label="Divisi" />
-          <Input v-model="form.search" label="Cari" placeholder="no transaksi / kode / barang" />
-          <div class="sm:col-span-2 lg:col-span-4">
-            <span class="mb-1.5 block text-[10px] font-heading font-bold uppercase tracking-widest text-ink-muted">
-              Jenis Transaksi
-            </span>
-            <div class="flex flex-wrap gap-x-4 gap-y-2">
-              <label
-                v-for="opt in JENIS_OPTIONS"
-                :key="opt.value"
-                class="flex items-center gap-2 text-sm text-ink"
-              >
-                <input type="checkbox" :value="opt.value" v-model="jenisSel" class="accent-brand-600" />
-                {{ opt.label }}
-              </label>
+        <FilterPanel :form="form" @submit="submit" @reset="onReset">
+          <FilterSection title="Periode & Pencarian">
+            <DateModeField
+              class="sm:col-span-2"
+              label="Tanggal"
+              :mode="form.date_mode"
+              :from="form.date_from"
+              :to="form.date_to"
+              :date="form.date"
+              @update:mode="form.date_mode = $event"
+              @update:from="form.date_from = $event"
+              @update:to="form.date_to = $event"
+              @update:date="form.date = $event"
+            />
+            <SelectSearch v-model="form.kd_divisi" :options="divisiOptions" label="Divisi" />
+            <Input v-model="form.search" label="Cari" placeholder="no transaksi / kode / barang" />
+          </FilterSection>
+          <FilterSection title="Jenis Transaksi">
+            <div class="col-span-full">
+              <div class="flex flex-wrap gap-x-4 gap-y-2">
+                <label
+                  v-for="opt in JENIS_OPTIONS"
+                  :key="opt.value"
+                  class="flex items-center gap-2 text-sm text-ink"
+                >
+                  <input type="checkbox" :value="opt.value" v-model="jenisSel" class="accent-brand-600" />
+                  {{ opt.label }}
+                </label>
+              </div>
+              <p class="mt-1 text-xs text-ink-subtle">
+                Kosongkan = semua jenis. Tanpa tanggal = transaksi setelah tutup buku;
+                isi rentang tanggal untuk menembus sebelum tutup buku.
+              </p>
             </div>
-            <p class="mt-1 text-xs text-ink-subtle">
-              Kosongkan = semua jenis. Tanpa tanggal = transaksi setelah tutup buku;
-              isi rentang tanggal untuk menembus sebelum tutup buku.
-            </p>
-          </div>
+          </FilterSection>
         </FilterPanel>
       </template>
     </ReportPage>

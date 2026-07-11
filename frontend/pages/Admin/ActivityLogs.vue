@@ -8,6 +8,7 @@ import Button from "@/components/ui/Button.vue";
 import Badge from "@/components/ui/Badge.vue";
 import DataTable from "@/components/ui/DataTable.vue";
 import FilterPanel from "@/components/ui/FilterPanel.vue";
+import FilterSection from "@/components/ui/FilterSection.vue";
 import DateRangeField from "@/components/ui/DateRangeField.vue";
 import SelectSearch from "@/components/ui/SelectSearch.vue";
 import ExportButton from "@/components/ui/ExportButton.vue";
@@ -76,9 +77,11 @@ const actionVariant = (a) => {
     </div>
 
     <FilterPanel @submit="() => {}" @reset="resetFilters">
-      <Input v-model="actionFilter" label="Aksi" placeholder="cari aksi…" />
-      <SelectSearch v-model="userFilter" :options="userOptions" label="User" />
-      <DateRangeField v-model:from="dateFrom" v-model:to="dateTo" />
+      <FilterSection title="Periode & Pencarian">
+        <DateRangeField class="sm:col-span-2" v-model:from="dateFrom" v-model:to="dateTo" />
+        <Input v-model="actionFilter" label="Aksi" placeholder="cari aksi…" />
+        <SelectSearch v-model="userFilter" :options="userOptions" label="User" />
+      </FilterSection>
     </FilterPanel>
 
     <DataTable :columns="columns" :rows="filtered" :per-page="15" empty-message="Tidak ada log untuk filter ini.">

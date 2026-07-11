@@ -85,7 +85,7 @@ function formatCell(value, col) {
               :key="col.key"
               scope="col"
               :class="[
-                'border-b-2 border-border-strong px-3 py-2 font-semibold text-ink-muted',
+                'whitespace-nowrap border-b-2 border-border-strong px-3 py-2 text-[11px] font-heading font-semibold uppercase tracking-wider text-ink-muted',
                 alignClass(col.align),
                 col.sortable ? 'cursor-pointer select-none hover:text-ink' : '',
               ]"
@@ -111,11 +111,16 @@ function formatCell(value, col) {
               <EmptyState :message="emptyMessage" />
             </td>
           </tr>
-          <tr v-for="row in pagedRows" :key="row[rowKey]" v-show="!loading" class="hover:bg-surface-3">
+          <tr
+            v-for="row in pagedRows"
+            :key="row[rowKey]"
+            v-show="!loading"
+            class="even:bg-surface-2/60 hover:bg-surface-3"
+          >
             <td
               v-for="col in columns"
               :key="col.key"
-              :class="['px-3 py-2 text-ink', alignClass(col.align)]"
+              :class="['px-3 py-1.5 leading-snug text-ink', alignClass(col.align)]"
             >
               <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
                 {{ formatCell(row[col.key], col) }}

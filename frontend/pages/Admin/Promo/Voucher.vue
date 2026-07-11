@@ -3,6 +3,7 @@ import { computed } from "vue";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import ReportPage from "@/components/report/ReportPage.vue";
 import FilterPanel from "@/components/ui/FilterPanel.vue";
+import FilterSection from "@/components/ui/FilterSection.vue";
 import Input from "@/components/ui/Input.vue";
 import { useServerReport } from "@/composables/useServerReport.js";
 
@@ -55,8 +56,10 @@ const summaryItems = computed(() => {
       @per-page-change="onPerPage"
     >
       <template #filters>
-        <FilterPanel @submit="apply({ page: 1 })" @reset="reset">
-          <Input v-model="form.search" label="Cari" placeholder="kode voucher / nama" />
+        <FilterPanel :form="form" @submit="apply({ page: 1 })" @reset="reset">
+          <FilterSection title="Pencarian">
+            <Input v-model="form.search" label="Cari" placeholder="kode voucher / nama" />
+          </FilterSection>
         </FilterPanel>
       </template>
     </ReportPage>

@@ -4,6 +4,7 @@ import AdminLayout from "@/layouts/AdminLayout.vue";
 import ReportPage from "@/components/report/ReportPage.vue";
 import ColumnFilters from "@/components/report/ColumnFilters.vue";
 import FilterPanel from "@/components/ui/FilterPanel.vue";
+import FilterSection from "@/components/ui/FilterSection.vue";
 import DateModeField from "@/components/ui/DateModeField.vue";
 import SelectSearch from "@/components/ui/SelectSearch.vue";
 import Input from "@/components/ui/Input.vue";
@@ -88,22 +89,32 @@ const summaryItems = computed(() => {
       @per-page-change="onPerPage"
     >
       <template #filters>
-        <FilterPanel @submit="apply({ page: 1 })" @reset="reset">
-          <DateModeField
-            label="Tanggal"
-            :mode="form.date_mode"
-            :from="form.date_from"
-            :to="form.date_to"
-            :date="form.date"
-            @update:mode="form.date_mode = $event"
-            @update:from="form.date_from = $event"
-            @update:to="form.date_to = $event"
-            @update:date="form.date = $event"
-          />
-          <SelectSearch v-model="form.kd_divisi" :options="divisiOptions" label="Divisi" />
-          <SelectSearch v-model="form.kd_supplier" :options="supplierOptions" label="Supplier" />
-          <Input v-model="form.search" label="Cari" placeholder="no transaksi / barang / supplier" />
-          <ColumnFilters :filter-defs="filterDefs" :form="form" />
+        <FilterPanel :form="form" @submit="apply({ page: 1 })" @reset="reset">
+          <FilterSection title="Periode & Pencarian">
+            <DateModeField
+              class="sm:col-span-2"
+              label="Tanggal"
+              :mode="form.date_mode"
+              :from="form.date_from"
+              :to="form.date_to"
+              :date="form.date"
+              @update:mode="form.date_mode = $event"
+              @update:from="form.date_from = $event"
+              @update:to="form.date_to = $event"
+              @update:date="form.date = $event"
+            />
+            <SelectSearch v-model="form.kd_divisi" :options="divisiOptions" label="Divisi" />
+            <SelectSearch v-model="form.kd_supplier" :options="supplierOptions" label="Supplier" />
+            <Input v-model="form.search" label="Cari" placeholder="no transaksi / barang / supplier" />
+          </FilterSection>
+          <template #lanjutan>
+            <FilterSection title="Pencarian Lanjutan">
+              <ColumnFilters :filter-defs="filterDefs" :form="form" :types="['text', 'category']" />
+            </FilterSection>
+            <FilterSection title="Rentang Nilai">
+              <ColumnFilters :filter-defs="filterDefs" :form="form" :types="['number_range']" />
+            </FilterSection>
+          </template>
         </FilterPanel>
       </template>
     </ReportPage>

@@ -48,58 +48,71 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 </script>
 
 <template>
-  <div>
-    <div class="panel-cut-frame">
-      <div class="overflow-hidden panel-cut bg-surface">
+  <div class="panel-cut-frame">
+    <div class="overflow-hidden panel-cut bg-surface">
       <div class="overflow-x-auto scroll-slim">
-      <table class="w-full min-w-[720px] text-sm">
-        <thead class="sticky top-0 bg-surface-3">
-          <tr>
-            <th
-              v-for="col in columns"
-              :key="col.key"
-              @click="toggleSort(col)"
-              :class="[alignClass(col), col.sortable ? 'cursor-pointer select-none' : '', 'px-4 py-2 font-semibold text-ink-muted']"
+        <table class="w-full min-w-[720px] text-sm tabular-nums">
+          <thead class="sticky top-0 z-10 bg-surface-3">
+            <tr>
+              <th
+                v-for="col in columns"
+                :key="col.key"
+                @click="toggleSort(col)"
+                :class="[
+                  alignClass(col),
+                  col.sortable ? 'cursor-pointer select-none hover:text-ink' : '',
+                  'whitespace-nowrap border-b-2 border-border-strong px-3 py-2 text-[11px] font-heading font-semibold uppercase tracking-wider text-ink-muted',
+                ]"
+              >
+                {{ col.label }}
+                <span v-if="sortKey === col.key" class="text-brand-600">{{ sortDir === "asc" ? "▲" : "▼" }}</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="!rows.length">
+              <td :colspan="columns.length">
+                <EmptyState :message="emptyMessage" />
+              </td>
+            </tr>
+            <tr
+              v-for="row in rows"
+              :key="row[rowKey]"
+              class="border-t border-border-default even:bg-surface-2/60 hover:bg-surface-3"
             >
-              {{ col.label }}
-              <span v-if="sortKey === col.key">{{ sortDir === "asc" ? "▲" : "▼" }}</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in rows" :key="row[rowKey]" class="border-t border-border-default hover:bg-surface-2">
-            <td v-for="col in columns" :key="col.key" :class="[alignClass(col), 'px-4 py-2 text-ink']">
-              <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
-                {{ fmt(row[col.key], col) }}
-              </slot>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+              <td v-for="col in columns" :key="col.key" :class="[alignClass(col), 'px-3 py-1.5 leading-snug text-ink']">
+                <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
+                  {{ fmt(row[col.key], col) }}
+                </slot>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
+      <div
+        class="flex flex-wrap items-center justify-between gap-2 border-t border-border-default bg-surface-2 px-3 py-1.5"
+      >
+        <div class="flex items-center gap-2">
+          <label class="text-xs text-ink-muted">Per halaman:</label>
+          <select
+            :value="perPage"
+            @change="emit('per-page-change', Number($event.target.value))"
+            class="h-8 rounded border border-border-strong bg-surface px-2 text-sm text-ink"
+          >
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </select>
+        </div>
+        <Pagination
+          v-if="total > perPage"
+          :page="page"
+          :total="total"
+          :per-page="perPage"
+          @update:page="emit('page-change', $event)"
+        />
+        <span v-else-if="total" class="text-sm text-ink-muted">Menampilkan semua {{ total }} data</span>
       </div>
-    </div>
-    <EmptyState v-if="!rows.length" :message="emptyMessage" class="mt-3" />
-    <div class="mt-3 flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <label class="text-xs text-ink-muted">Per halaman:</label>
-        <select
-          :value="perPage"
-          @change="emit('per-page-change', Number($event.target.value))"
-          class="rounded-card border border-border-default bg-surface px-2 py-1 text-sm text-ink"
-        >
-          <option value="25">25</option>
-          <option value="50">50</option>
-          <option value="100">100</option>
-        </select>
-      </div>
-      <Pagination
-        v-if="total > perPage"
-        :page="page"
-        :total="total"
-        :per-page="perPage"
-        @update:page="emit('page-change', $event)"
-      />
     </div>
   </div>
 </template>

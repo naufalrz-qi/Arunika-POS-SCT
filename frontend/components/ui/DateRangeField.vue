@@ -41,31 +41,31 @@ const presets = [
   <div class="space-y-2">
     <div class="grid grid-cols-2 gap-2">
       <label class="block">
-        <span class="mb-1 block text-xs text-ink-muted">Dari Tanggal</span>
+        <span class="mb-1.5 block text-[10px] font-heading font-bold uppercase tracking-widest text-ink-muted">Dari Tanggal</span>
         <input
           type="date"
           :value="from"
           @input="emit('update:from', $event.target.value)"
-          class="w-full rounded-card border border-border-default bg-surface px-3 py-2 text-sm text-ink"
+          class="h-10 w-full rounded border border-border-strong bg-surface/50 px-3 text-sm text-ink transition-all duration-200 hover:border-brand-400 focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 focus:outline-none"
         />
       </label>
       <label class="block">
-        <span class="mb-1 block text-xs text-ink-muted">Sampai Tanggal</span>
+        <span class="mb-1.5 block text-[10px] font-heading font-bold uppercase tracking-widest text-ink-muted">Sampai Tanggal</span>
         <input
           type="date"
           :value="to"
           @input="emit('update:to', $event.target.value)"
-          class="w-full rounded-card border border-border-default bg-surface px-3 py-2 text-sm text-ink"
+          class="h-10 w-full rounded border border-border-strong bg-surface/50 px-3 text-sm text-ink transition-all duration-200 hover:border-brand-400 focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 focus:outline-none"
         />
       </label>
     </div>
-    <div class="flex flex-wrap gap-1">
+    <div class="flex flex-wrap gap-1.5">
       <button
         v-for="p in presets"
         :key="p.key"
         type="button"
         @click="setPreset(p.key)"
-        class="rounded-card border border-border-default px-2 py-1 text-xs text-ink-muted hover:bg-surface-3"
+        class="rounded-full border border-border-default px-2.5 py-0.5 text-[11px] text-ink-muted transition-colors hover:border-brand-400 hover:text-brand-fg"
       >
         {{ p.label }}
       </button>

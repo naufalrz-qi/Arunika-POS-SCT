@@ -3,6 +3,7 @@ import { computed } from "vue";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import ReportPage from "@/components/report/ReportPage.vue";
 import FilterPanel from "@/components/ui/FilterPanel.vue";
+import FilterSection from "@/components/ui/FilterSection.vue";
 import DateRangeField from "@/components/ui/DateRangeField.vue";
 import SelectSearch from "@/components/ui/SelectSearch.vue";
 import Input from "@/components/ui/Input.vue";
@@ -58,11 +59,13 @@ const summaryItems = computed(() => {
       @per-page-change="onPerPage"
     >
       <template #filters>
-        <FilterPanel @submit="apply({ page: 1 })" @reset="reset">
-          <DateRangeField v-model:from="form.date_from" v-model:to="form.date_to" />
-          <SelectSearch v-model="form.kd_divisi" :options="divisiOptions" label="Divisi" />
-          <SelectSearch v-model="form.kategori" :options="kategoriOptions" label="Kategori" />
-          <Input v-model="form.search" label="Cari" placeholder="nama biaya / keterangan" />
+        <FilterPanel :form="form" @submit="apply({ page: 1 })" @reset="reset">
+          <FilterSection title="Periode & Pencarian">
+            <DateRangeField class="sm:col-span-2" v-model:from="form.date_from" v-model:to="form.date_to" />
+            <SelectSearch v-model="form.kd_divisi" :options="divisiOptions" label="Divisi" />
+            <SelectSearch v-model="form.kategori" :options="kategoriOptions" label="Kategori" />
+            <Input v-model="form.search" label="Cari" placeholder="nama biaya / keterangan" />
+          </FilterSection>
         </FilterPanel>
       </template>
     </ReportPage>

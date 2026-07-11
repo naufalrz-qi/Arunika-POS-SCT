@@ -17,28 +17,35 @@ function setMode(m) {
 
 <template>
   <div class="space-y-2">
-    <span v-if="label" class="mb-1 block text-xs text-ink-muted">{{ label }}</span>
-    <div class="flex gap-1">
-      <button
-        type="button"
-        @click="setMode('range')"
-        :class="[
-          'rounded-card border px-2 py-1 text-xs',
-          mode === 'range' ? 'border-brand-500 bg-brand-bg text-brand-fg' : 'border-border-default text-ink-muted hover:bg-surface-3',
-        ]"
+    <div class="flex items-center justify-between gap-2">
+      <span
+        v-if="label"
+        class="text-[10px] font-heading font-bold uppercase tracking-widest text-ink-muted"
       >
-        Rentang
-      </button>
-      <button
-        type="button"
-        @click="setMode('exact')"
-        :class="[
-          'rounded-card border px-2 py-1 text-xs',
-          mode === 'exact' ? 'border-brand-500 bg-brand-bg text-brand-fg' : 'border-border-default text-ink-muted hover:bg-surface-3',
-        ]"
-      >
-        Tanggal Tertentu
-      </button>
+        {{ label }}
+      </span>
+      <div class="inline-flex overflow-hidden rounded border border-border-default">
+        <button
+          type="button"
+          @click="setMode('range')"
+          :class="[
+            'px-2 py-1 text-[11px] transition-colors',
+            mode === 'range' ? 'bg-brand-500 font-semibold text-white' : 'text-ink-muted hover:bg-surface-3',
+          ]"
+        >
+          Rentang
+        </button>
+        <button
+          type="button"
+          @click="setMode('exact')"
+          :class="[
+            'px-2 py-1 text-[11px] transition-colors',
+            mode === 'exact' ? 'bg-brand-500 font-semibold text-white' : 'text-ink-muted hover:bg-surface-3',
+          ]"
+        >
+          Tanggal Tertentu
+        </button>
+      </div>
     </div>
 
     <DateRangeField
@@ -48,14 +55,12 @@ function setMode(m) {
       @update:from="emit('update:from', $event)"
       @update:to="emit('update:to', $event)"
     />
-    <label v-else class="block">
-      <span class="mb-1 block text-xs text-ink-muted">Tanggal</span>
-      <input
-        type="date"
-        :value="date"
-        @input="emit('update:date', $event.target.value)"
-        class="w-full rounded-card border border-border-default bg-surface px-3 py-2 text-sm text-ink"
-      />
-    </label>
+    <input
+      v-else
+      type="date"
+      :value="date"
+      @input="emit('update:date', $event.target.value)"
+      class="h-10 w-full rounded border border-border-strong bg-surface/50 px-3 text-sm text-ink transition-all duration-200 hover:border-brand-400 focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 focus:outline-none"
+    />
   </div>
 </template>
