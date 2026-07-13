@@ -387,6 +387,62 @@ def sync_harga_jual(src_profile, dst_profile, keys: list, with_margin: bool = Fa
     return n
 
 
+# --- Snapshot harga harian (diff-only) -------------------------------------
+
+def snapshot_harga_changes(profile) -> dict:
+    """Deteksi perubahan harga_jual per SKU dibanding baseline tersimpan
+    (BarangHargaState di SQLite). Dipakai command `snapshot_harga` (sekali/hari).
+
+    SKU baru → seed state (tanpa log). Harga beda → catat BarangHargaChange +
+    update state. Idempotent (run kedua tanpa perubahan di server → 0 perubahan).
+    Return {"changes": n, "seeded": m, "total": t}.
+    """
+    from apps.core.models import BarangHargaChange, BarangHargaState
+
+    current = _harga_map(profile)  # {(kd_barang, kd_satuan): {harga_jual, margin}}
+    with mssql.cursor(profile) as cur:
+        names = _key_map(cur, "SELECT kd_barang, nama FROM m_barang", "kd_barang", "nama")
+    names = {_st(k): _st(v) for k, v in names.items()}
+
+    existing = {
+        (s.kd_barang, s.kd_satuan): s
+        for s in BarangHargaState.objects.filter(profile=profile)
+    }
+
+    new_states, upd_states, changes = [], [], []
+    for (kb, ks), val in current.items():
+        harga = Decimal(str(round(_f(val["harga_jual"]), 2)))
+        margin = Decimal(str(round(_f(val["margin"]), 2)))
+        st = existing.get((kb, ks))
+        if st is None:
+            new_states.append(
+                BarangHargaState(profile=profile, kd_barang=kb, kd_satuan=ks, harga_jual=harga, margin=margin)
+            )
+            continue
+        if st.harga_jual != harga:
+            changes.append(
+                BarangHargaChange(
+                    profile=profile, profile_name=profile.name, kd_barang=kb,
+                    nama_barang=names.get(kb, ""), kd_satuan=ks,
+                    harga_lama=st.harga_jual, harga_baru=harga,
+                )
+            )
+            st.harga_jual = harga
+            st.margin = margin
+            upd_states.append(st)
+
+    if new_states:
+        BarangHargaState.objects.bulk_create(new_states, batch_size=1000)
+    if upd_states:
+        # auto_now tidak jalan di bulk_update; last_seen tetap update lewat save
+        # berikutnya kalau perlu — di sini fokusnya harga/margin.
+        BarangHargaState.objects.bulk_update(upd_states, ["harga_jual", "margin"], batch_size=1000)
+    if changes:
+        BarangHargaChange.objects.bulk_create(changes, batch_size=1000)
+
+    return {"changes": len(changes), "seeded": len(new_states), "total": len(current)}
+
+
 # --- Sinkronisasi master data antar-server (m_barang/m_customer/m_supplier) -
 
 # Kolom diverifikasi live via INFORMATION_SCHEMA.COLUMNS (bukan dari dump statis

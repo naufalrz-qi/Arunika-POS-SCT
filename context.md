@@ -48,6 +48,16 @@ Laporan berat (`penjualan_detail` dkk, join ke `t_penjualan_detail` 3M+ baris) t
 - **Prasyarat di server legacy (kerjaan DBA, bukan kode)**: `EXEC sys.sp_cdc_enable_db;` lalu `sys.sp_cdc_enable_table` per tabel di `CDC_TABLE_SPECS` (nama capture instance default `dbo_<table>`, sesuaikan dict kalau DBA pakai nama custom). Replica butuh skema tabel yang sama, disiapkan manual di server kedua.
 - Staleness: laporan dari replica bisa lag ~1-2 menit dari transaksi terbaru (tergantung jadwal `sync_cdc`) — trade-off sadar demi tidak membebani legacy server, bukan bug.
 
+## Perubahan harga harian (snapshot diff-only)
+
+Harga bisa diubah langsung di POS/server tanpa lewat aplikasi ini (`BarangUpdateLog` cuma menangkap perubahan lewat aplikasi). Untuk memantau semua perubahan harga per hari: `manage.py snapshot_harga [--profile ID] [--prune-days N]` membaca `m_barang_satuan` server (reuse `master._harga_map`) dan membandingkannya dengan baseline tersimpan di SQLite.
+
+- Diff-only, bukan snapshot penuh: `apps/core/models.BarangHargaState` menyimpan harga terkini per SKU (di-update di tempat, ukuran tetap ~jumlah SKU × server), `BarangHargaChange` hanya diisi saat harga beda (append-only, tumbuh ∝ jumlah perubahan). Menghindari ledakan baris kalau full-snapshot 54rb produk × hari.
+- Idempotent: run kedua di hari sama tanpa perubahan → 0 baris. SKU baru → seed state tanpa log.
+- Default target = koneksi aktif (`mssql.get_active_profile()`); `--profile` untuk server lain. `--prune-days` untuk retensi log.
+- **Penjadwalan: in-process, tak perlu Task Scheduler.** `apps/core/scheduler.py` `start_scheduler()` dipanggil dari `config/wsgi.py` (hanya ke-load saat serving via runserver/waitress, bukan saat `migrate`/`shell`). Daemon thread cek tiap `HARGA_SNAPSHOT_INTERVAL_SECONDS` (default 30 mnt) dan jalan **sekali per hari kalender** untuk koneksi aktif, dijaga penanda `HargaSnapshotRun` per (profile, tanggal). Server mati seharian → hari itu dilewati (sesuai maksud "saat server berjalan saja"). Env: `HARGA_SNAPSHOT_ENABLED` (default 1), `HARGA_SNAPSHOT_HOUR` (default 0 = kesempatan pertama tiap hari). `manage.py snapshot_harga` tetap ada untuk manual/one-off atau kalau mau pakai Task Scheduler.
+- Tampil di halaman **Perubahan Harga Harian** (`perubahan_harga_harian_index` → `PerubahanHargaHarian.vue`), filter tanggal/kode/koneksi + info "snapshot terakhir".
+
 ## Tabel legacy tersedia (sudah dicek di server aktif)
 
 `m_barang`, `m_barang_satuan`, `m_barang_promo`(+`_detail`), `m_barang_divisi_diskon`, `m_voucher`, `m_kas`, `m_customer`, `m_supplier`, `m_divisi`, `m_kategori`, `m_pegawai`.

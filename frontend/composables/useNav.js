@@ -13,6 +13,8 @@ const SECTION_LABELS = {
   promo: "Promo & Voucher",
   kas: "Kas & Shift",
   master: "Master Data",
+  master_harga: "Harga & Update Barang",
+  master_sync: "Sinkronisasi",
   admin: "Administrasi",
 };
 
@@ -22,7 +24,7 @@ const NAV_GROUPS = [
   { key: "ringkasan", label: "Ringkasan", sections: ["ringkasan"] },
   { key: "laporan", label: "Laporan", sections: ["penjualan", "pembelian", "analitik"] },
   { key: "operasional", label: "Operasional", sections: ["stok", "promo", "kas"] },
-  { key: "master", label: "Master Data", sections: ["master"] },
+  { key: "master", label: "Master Data", sections: ["master", "master_harga", "master_sync"] },
   { key: "admin", label: "Administrasi", sections: ["admin"] },
 ];
 

@@ -205,3 +205,82 @@ def log_sync(request, feature, mode, src, dst, compared, applied, status="ok", i
         detail=json.dumps(items or []),
         error_message=error,
     )
+
+
+class BarangHargaState(models.Model):
+    """Harga terkini per SKU per koneksi — baseline untuk deteksi perubahan harga
+    harian (management command `snapshot_harga`). Di-update di tempat, jadi
+    ukurannya tetap (satu baris per SKU per server), bukan bertambah tiap hari.
+    """
+
+    profile = models.ForeignKey(
+        "connections.ServerProfile", on_delete=models.CASCADE, related_name="harga_states"
+    )
+    kd_barang = models.CharField(max_length=30)
+    kd_satuan = models.CharField(max_length=30)
+    harga_jual = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    margin = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    last_seen = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["profile", "kd_barang", "kd_satuan"], name="unique_harga_state_sku")
+        ]
+        indexes = [models.Index(fields=["profile", "kd_barang", "kd_satuan"])]
+
+    def __str__(self) -> str:
+        return f"{self.profile_id}:{self.kd_barang}/{self.kd_satuan} = {self.harga_jual}"
+
+
+class BarangHargaChange(models.Model):
+    """Log perubahan harga yang terdeteksi job harian (append-only). Menangkap
+    perubahan dari sumber APA PUN (termasuk edit langsung di POS), beda dari
+    `BarangUpdateLog` yang hanya mencatat perubahan lewat aplikasi ini.
+    """
+
+    profile = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True, on_delete=models.SET_NULL, related_name="harga_changes"
+    )
+    profile_name = models.CharField(max_length=100, blank=True)
+    kd_barang = models.CharField(max_length=30)
+    nama_barang = models.CharField(max_length=150, blank=True)
+    kd_satuan = models.CharField(max_length=30)
+    harga_lama = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    harga_baru = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    detected_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-detected_at"]
+        indexes = [
+            models.Index(fields=["profile", "-detected_at"]),
+            models.Index(fields=["kd_barang", "-detected_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.detected_at:%Y-%m-%d} {self.kd_barang}/{self.kd_satuan} {self.harga_lama}->{self.harga_baru}"
+
+
+class HargaSnapshotRun(models.Model):
+    """Penanda satu kali jalan snapshot harga per (profile, tanggal). Dipakai
+    scheduler in-process (config/wsgi.py + apps.core.scheduler) supaya cukup jalan
+    sekali/hari selama server hidup, sekaligus info "terakhir dijalankan".
+    """
+
+    profile = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True, on_delete=models.SET_NULL, related_name="harga_snapshot_runs"
+    )
+    profile_name = models.CharField(max_length=100, blank=True)
+    run_date = models.DateField()
+    ran_at = models.DateTimeField(auto_now_add=True)
+    changes = models.PositiveIntegerField(default=0)
+    seeded = models.PositiveIntegerField(default=0)
+    total = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["-ran_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["profile", "run_date"], name="unique_harga_snapshot_run_per_day")
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.run_date} {self.profile_name}: {self.changes} perubahan"

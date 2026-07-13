@@ -183,6 +183,72 @@ function saveStatus(table) {
   );
 }
 
+// --- Saran Harga (retail): nominal dari kolom keterangan ---
+const showSuggest = ref(false);
+const suggestApplying = ref(false);
+const confirmBulk = ref(false);
+
+// keterangan ditulis manual, mis. "ECER 3.450.000(50%)" / "ECER 300.000".
+// Ambil bagian sebelum "(" (buang "(50%)"), angka pertama (ribuan/polos),
+// lalu buang titik pemisah ribuan.
+function parseKeteranganPrice(ket) {
+  if (!ket) return null;
+  const m = String(ket).split("(")[0].match(/\d{1,3}(?:\.\d{3})+|\d+/);
+  if (!m) return null;
+  const n = parseInt(m[0].replace(/\./g, ""), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// Satuan dasar = yang jumlah-nya 1 (mis. PCS), fallback ke satuan pertama.
+function baseUnit(row) {
+  return row.satuan.find((u) => u.jumlah === 1) || row.satuan[0] || null;
+}
+
+const suggestions = computed(() => {
+  const out = [];
+  for (const row of data.value.rows || []) {
+    const u = baseUnit(row);
+    if (!u) continue;
+    const target = parseKeteranganPrice(row.keterangan);
+    if (target == null || target === u.harga_jual) continue;
+    out.push({
+      kd_barang: row.kd_barang,
+      nama: row.nama,
+      kd_satuan: u.kd_satuan,
+      satuan: u.satuan || u.kd_satuan,
+      harga_lama: u.harga_jual,
+      harga_baru: target,
+      selisih: target - u.harga_jual,
+    });
+  }
+  return out;
+});
+
+function applySuggest(list) {
+  if (!list.length) return;
+  suggestApplying.value = true;
+  router.post(
+    "/admin-panel/master/update-barang/harga-bulk",
+    { items: list.map((s) => ({ kd_barang: s.kd_barang, nama: s.nama, kd_satuan: s.kd_satuan, harga: s.harga_baru })) },
+    {
+      preserveScroll: true,
+      preserveState: true,
+      onSuccess: () => ui.pushToast(`${list.length} harga diterapkan.`, "success"),
+      onFinish: () => (suggestApplying.value = false),
+    },
+  );
+}
+
+function applyOne(s) {
+  applySuggest([s]);
+}
+
+function applyAll() {
+  confirmBulk.value = false;
+  applySuggest(suggestions.value);
+  showSuggest.value = false;
+}
+
 // --- Riwayat (history) modal ---
 const riwayat = ref(null); // { kd_barang, nama }
 const riwayatLoading = ref(false);
@@ -256,6 +322,12 @@ async function openRiwayat(item) {
           class="sm:w-40"
         />
         <Button variant="primary" @click="reload">Cari</Button>
+        <Button v-if="isRetail" variant="yellow-outline" @click="showSuggest = true">
+          <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
+          </svg>
+          Saran Harga<span v-if="suggestions.length" class="ml-1 rounded-full bg-rx-yellow px-1.5 text-[10px] font-bold text-ink">{{ suggestions.length }}</span>
+        </Button>
         <span class="text-sm text-ink-muted whitespace-nowrap">{{ filtered.length }} barang</span>
       </div>
     </Card>
@@ -512,6 +584,65 @@ async function openRiwayat(item) {
       <p v-else class="py-8 text-center text-sm text-ink-muted">Belum ada riwayat perubahan untuk barang ini.</p>
       <template #footer>
         <Button variant="ghost" @click="riwayat = null">Tutup</Button>
+      </template>
+    </Modal>
+
+    <!-- Saran Harga (retail) -->
+    <Modal :show="showSuggest" title="Saran Harga dari Keterangan" size="lg" @close="showSuggest = false">
+      <div v-if="suggestions.length" class="space-y-3">
+        <Banner
+          variant="info"
+          message="Harga saran diambil dari nominal di kolom keterangan tiap barang. Terapkan untuk menyamakan harga jual satuan dasar dengan nominal tersebut."
+        />
+        <div class="max-h-[55vh] overflow-y-auto scroll-slim">
+          <table class="w-full text-sm">
+            <thead class="sticky top-0 bg-surface">
+              <tr class="text-left text-ink-muted">
+                <th class="py-1.5">Barang</th>
+                <th class="py-1.5 text-right">Sekarang</th>
+                <th class="py-1.5 text-right">Saran</th>
+                <th class="py-1.5 text-right">Selisih</th>
+                <th class="py-1.5"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="s in suggestions" :key="s.kd_barang + s.kd_satuan" class="border-t border-border-default">
+                <td class="py-1.5">
+                  <p class="font-mono text-[11px] text-ink-muted">{{ s.kd_barang }} · {{ s.satuan }}</p>
+                  <p class="font-medium text-ink">{{ s.nama }}</p>
+                </td>
+                <td class="py-1.5 text-right text-ink-muted tabular-nums">{{ rupiah(s.harga_lama) }}</td>
+                <td class="py-1.5 text-right font-semibold text-ink tabular-nums">{{ rupiah(s.harga_baru) }}</td>
+                <td :class="['py-1.5 text-right font-medium tabular-nums', s.selisih < 0 ? 'text-danger-600' : 'text-success-700']">
+                  {{ s.selisih > 0 ? "+" : "" }}{{ rupiah(s.selisih) }}
+                </td>
+                <td class="py-1.5 text-right">
+                  <Button size="sm" variant="yellow-outline" :loading="suggestApplying" @click="applyOne(s)">Terapkan</Button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p v-else class="py-8 text-center text-sm text-ink-muted">
+        Semua harga sudah sesuai nominal di keterangan — tidak ada saran perubahan.
+      </p>
+      <template #footer>
+        <Button variant="ghost" @click="showSuggest = false">Tutup</Button>
+        <Button v-if="suggestions.length" variant="primary" :loading="suggestApplying" @click="confirmBulk = true">
+          Terapkan Semua ({{ suggestions.length }})
+        </Button>
+      </template>
+    </Modal>
+
+    <Modal :show="confirmBulk" title="Terapkan Semua Saran Harga?" @close="confirmBulk = false">
+      <Banner
+        variant="warning"
+        :message="`${suggestions.length} harga akan diperbarui langsung ke server aktif dan berlaku untuk transaksi berikutnya. Lanjutkan?`"
+      />
+      <template #footer>
+        <Button variant="ghost" @click="confirmBulk = false">Batal</Button>
+        <Button variant="primary" :loading="suggestApplying" @click="applyAll">Ya, Terapkan Semua</Button>
       </template>
     </Modal>
   </AdminLayout>

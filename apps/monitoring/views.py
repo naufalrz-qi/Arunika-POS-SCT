@@ -14,7 +14,16 @@ from apps.auth_app.models import Role, User
 from apps.connections.models import ServerProfile
 from apps.core.http import get_data
 from apps.core.menus import assignable_menus
-from apps.core.models import ActivityLog, BarangUpdateLog, SyncLog, log_activity, log_barang_updates, log_sync
+from apps.core.models import (
+    ActivityLog,
+    BarangHargaChange,
+    BarangUpdateLog,
+    HargaSnapshotRun,
+    SyncLog,
+    log_activity,
+    log_barang_updates,
+    log_sync,
+)
 from apps.inventory import services as inv
 from apps.master_data import services as master
 from apps.transactions import services as tx
@@ -343,6 +352,43 @@ def update_barang_harga(request):
     return redirect("/admin-panel/master/update-barang")
 
 
+def update_barang_harga_bulk(request):
+    """Terapkan banyak saran harga sekaligus (fitur "Saran Harga" retail).
+
+    Payload: {"items": [{kd_barang, nama, kd_satuan, harga}, ...]}. Dipakai baik
+    untuk 1 baris (list berisi 1) maupun "Terapkan Semua". Sama seperti
+    update_barang_harga: koneksi target selalu di-resolve server-side (_active()).
+    """
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect("/admin-panel/master/update-barang")
+    data = get_data(request)
+    items = data.get("items") or []
+    total = 0
+    try:
+        for it in items:
+            kd_barang = (it.get("kd_barang") or "").strip()
+            kd_satuan = (it.get("kd_satuan") or "").strip()
+            if not kd_barang or not kd_satuan:
+                continue
+            nama_barang = (it.get("nama") or "").strip()
+            changes = master.update_harga(profile, kd_barang, {kd_satuan: it.get("harga")})
+            log_barang_updates(
+                request, profile, kd_barang, nama_barang,
+                [
+                    (BarangUpdateLog.Field.HARGA, c["kd_satuan"], c["harga_lama"], c["harga_baru"])
+                    for c in changes
+                ],
+            )
+            total += len(changes)
+        log_activity(request, "barang", f"Terapkan saran harga ({profile.name}): {total} satuan / {len(items)} barang")
+        request.session["flash_success"] = f"{total} harga diperbarui dari saran keterangan."
+    except pyodbc.Error as exc:
+        request.session["flash_error"] = f"Gagal terapkan saran harga: {exc.args[-1] if exc.args else exc}"
+    return redirect("/admin-panel/master/update-barang")
+
+
 def update_barang_status(request):
     # Sama seperti update_barang_harga: selalu pakai koneksi aktif server-side.
     profile = _active()
@@ -438,6 +484,65 @@ def riwayat_update_barang_index(request):
             "data": defer(load_riwayat),
             "profiles": [{"value": str(p.id), "label": p.name} for p in ServerProfile.objects.all()],
             "filters": {"kd_barang": kd_barang, "field": field, "date_from": f.get("date_from") or "", "date_to": f.get("date_to") or "", "profile": profile_id},
+        },
+    )
+
+
+def perubahan_harga_harian_index(request):
+    """Perubahan harga yang terdeteksi job harian (`snapshot_harga`), lintas koneksi.
+    Menangkap perubahan dari sumber apa pun (termasuk edit langsung di POS)."""
+    f = request.GET
+    kd_barang = (f.get("kd_barang") or "").strip()
+    date_from = _parse_date(f.get("date_from"))
+    date_to = _eod(_parse_date(f.get("date_to")))
+    profile_id = f.get("profile") or ""
+
+    def load_changes():
+        qs = BarangHargaChange.objects.all()
+        if kd_barang:
+            qs = qs.filter(kd_barang__icontains=kd_barang)
+        if date_from:
+            qs = qs.filter(detected_at__gte=date_from)
+        if date_to:
+            qs = qs.filter(detected_at__lte=date_to)
+        if profile_id:
+            qs = qs.filter(profile_id=profile_id)
+        rows = [
+            {
+                "id": c.id,
+                "detected_at": c.detected_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "kd_barang": c.kd_barang,
+                "nama_barang": c.nama_barang or "—",
+                "kd_satuan": c.kd_satuan,
+                "harga_lama": float(c.harga_lama),
+                "harga_baru": float(c.harga_baru),
+                "selisih": float(c.harga_baru - c.harga_lama),
+                "profile_name": c.profile_name or "—",
+            }
+            for c in qs[:500]
+        ]
+        return {"rows": rows}
+
+    last = HargaSnapshotRun.objects.order_by("-ran_at").first()
+    last_run = (
+        {
+            "ran_at": last.ran_at.strftime("%Y-%m-%d %H:%M"),
+            "profile_name": last.profile_name or "—",
+            "changes": last.changes,
+            "total": last.total,
+        }
+        if last
+        else None
+    )
+
+    return render(
+        request,
+        "Admin/MasterData/PerubahanHargaHarian",
+        props={
+            "data": defer(load_changes),
+            "profiles": [{"value": str(p.id), "label": p.name} for p in ServerProfile.objects.all()],
+            "filters": {"kd_barang": kd_barang, "date_from": f.get("date_from") or "", "date_to": f.get("date_to") or "", "profile": profile_id},
+            "last_run": last_run,
         },
     )
 

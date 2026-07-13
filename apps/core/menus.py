@@ -1,7 +1,10 @@
 """Admin menu registry (single source of truth for sidebar + RBAC filtering)."""
 
 # Section order + display labels for the collapsible sidebar groups.
-SECTIONS = ["ringkasan", "penjualan", "pembelian", "stok", "analitik", "promo", "kas", "master", "admin"]
+SECTIONS = [
+    "ringkasan", "penjualan", "pembelian", "stok", "analitik", "promo", "kas",
+    "master", "master_harga", "master_sync", "admin",
+]
 SECTION_LABELS = {
     "ringkasan": "Ringkasan",
     "penjualan": "Penjualan",
@@ -10,7 +13,10 @@ SECTION_LABELS = {
     "analitik": "Analitik",
     "promo": "Promo & Voucher",
     "kas": "Kas & Shift",
+    # Master Data dipecah jadi sub-grup bertajuk di sidebar (satu tab yang sama).
     "master": "Master Data",
+    "master_harga": "Harga & Update Barang",
+    "master_sync": "Sinkronisasi",
     "admin": "Administrasi",
 }
 
@@ -48,15 +54,18 @@ ALL_MENUS = [
     {"key": "shift", "label": "Shift Kasir", "icon": "clock", "href": "/admin-panel/kas/shift", "section": "kas"},
     {"key": "biaya_operasional", "label": "Biaya Operasional", "icon": "cash", "href": "/admin-panel/laporan/biaya-operasional", "section": "kas"},
     {"key": "biaya_kategori", "label": "Biaya per Kategori", "icon": "chart", "href": "/admin-panel/laporan/biaya-kategori", "section": "kas"},
-    # Master Data
+    # Master Data — sub-grup 1: data master
     {"key": "products", "label": "Master Produk", "icon": "box", "href": "/admin-panel/master/products", "section": "master"},
     {"key": "customers", "label": "Master Pelanggan", "icon": "user", "href": "/admin-panel/master/customers", "section": "master"},
     {"key": "suppliers", "label": "Master Supplier", "icon": "truck", "href": "/admin-panel/master/suppliers", "section": "master"},
-    {"key": "update_barang", "label": "Update Barang", "icon": "pencil", "href": "/admin-panel/master/update-barang", "section": "master"},
-    {"key": "riwayat_update_barang", "label": "Riwayat Update Barang", "icon": "clock", "href": "/admin-panel/master/riwayat-update-barang", "section": "master"},
-    {"key": "sync_harga", "label": "Sinkronisasi Harga", "icon": "refresh", "href": "/admin-panel/master/sync-harga", "section": "master"},
-    {"key": "sync_master", "label": "Sinkronisasi Master Data", "icon": "refresh", "href": "/admin-panel/master/sync-master", "section": "master"},
-    {"key": "sync_history", "label": "Riwayat Sinkronisasi", "icon": "list", "href": "/admin-panel/master/sync-history", "section": "master"},
+    # Master Data — sub-grup 2: harga & update barang
+    {"key": "update_barang", "label": "Update Barang", "icon": "pencil", "href": "/admin-panel/master/update-barang", "section": "master_harga"},
+    {"key": "riwayat_update_barang", "label": "Riwayat Update Barang", "icon": "clock", "href": "/admin-panel/master/riwayat-update-barang", "section": "master_harga"},
+    {"key": "perubahan_harga_harian", "label": "Perubahan Harga Harian", "icon": "trending", "href": "/admin-panel/master/perubahan-harga-harian", "section": "master_harga"},
+    # Master Data — sub-grup 3: sinkronisasi antar-server
+    {"key": "sync_harga", "label": "Sinkronisasi Harga", "icon": "refresh", "href": "/admin-panel/master/sync-harga", "section": "master_sync"},
+    {"key": "sync_master", "label": "Sinkronisasi Master Data", "icon": "refresh", "href": "/admin-panel/master/sync-master", "section": "master_sync"},
+    {"key": "sync_history", "label": "Riwayat Sinkronisasi", "icon": "list", "href": "/admin-panel/master/sync-history", "section": "master_sync"},
     # Administrasi
     {"key": "users", "label": "Manajemen User", "icon": "users", "href": "/admin-panel/users", "section": "admin"},
     {"key": "connections", "label": "Koneksi Server", "icon": "server", "href": "/admin-panel/connections", "section": "admin"},
