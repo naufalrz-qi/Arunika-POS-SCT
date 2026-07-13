@@ -1,6 +1,6 @@
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
-import { useForm, router, Deferred } from "@inertiajs/vue3";
+import { router, Deferred } from "@inertiajs/vue3";
 import axios from "axios";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import Card from "@/components/ui/Card.vue";
@@ -13,6 +13,7 @@ import Pagination from "@/components/ui/Pagination.vue";
 import LoadingCard from "@/components/ui/LoadingCard.vue";
 import Modal from "@/components/ui/Modal.vue";
 import Spinner from "@/components/ui/Spinner.vue";
+import BarangEditModal from "@/components/master/BarangEditModal.vue";
 import { useUiStore } from "@/stores/ui.js";
 
 const props = defineProps({
@@ -44,11 +45,6 @@ const rupiah = (n) =>
 const tanggalJam = (iso) =>
   new Date(iso).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" });
 
-const statusOptions = [
-  { value: "1", label: "Aktif" },
-  { value: "0", label: "Non-aktif" },
-  { value: "2", label: "Tidak dijual (sembunyikan)" },
-];
 const statusLabel = (s) => ({ 0: "Non-aktif", 1: "Aktif", 2: "Tidak dijual" }[s] ?? s);
 const statusVariant = (s) => ({ 0: "danger", 1: "success", 2: "warning" }[s] ?? "neutral");
 const statusDotClass = (s) =>
@@ -115,72 +111,12 @@ function margin(row) {
   return ((u.harga_jual - u.modal) / u.modal) * 100;
 }
 
-// --- Edit modal ---
+// --- Edit modal (komponen bersama dengan halaman Pergerakan Harga) ---
 const editing = ref(null);
-const priceForm = useForm({ kd_barang: "", nama: "", prices: {} });
-const statusSel = reactive({ m_barang: "1", m_barang_divisi: "1", m_barang_satuan: "1" });
-const showConfirm = ref(false);
 const ui = useUiStore();
-
-const priceDiff = computed(() => {
-  if (!editing.value) return [];
-  return editing.value.satuan.map((u) => ({
-    kd_satuan: u.kd_satuan,
-    lama: u.harga_jual,
-    baru: Number(priceForm.prices[u.kd_satuan]) || 0,
-  })).filter((d) => d.lama !== d.baru);
-});
 
 function openEdit(item) {
   editing.value = item;
-  priceForm.kd_barang = item.kd_barang;
-  priceForm.nama = item.nama;
-  priceForm.prices = Object.fromEntries(item.satuan.map((u) => [u.kd_satuan, u.harga_jual]));
-  statusSel.m_barang = item.status || "1";
-  statusSel.m_barang_divisi = item.divisi[0]?.status || "1";
-  statusSel.m_barang_satuan = item.satuan[0]?.status || "1";
-}
-
-const liveMargin = (unit) => {
-  const harga = Number(priceForm.prices[unit.kd_satuan]) || 0;
-  const modal = unit.modal || 0;
-  return modal > 0 ? ((harga - modal) / modal) * 100 : 0;
-};
-
-// Retail: margin -> harga (kebalikan dari liveMargin). Modal tanpa nilai
-// (0/kosong) tidak punya basis hitung, jadi input margin diabaikan.
-function setHargaFromMargin(unit, marginStr) {
-  const margin = Number(marginStr);
-  const modal = unit.modal || 0;
-  if (!modal || Number.isNaN(margin)) return;
-  priceForm.prices[unit.kd_satuan] = Math.round(modal * (1 + margin / 100));
-}
-
-function askConfirm() {
-  showConfirm.value = true;
-}
-
-function confirmSave() {
-  showConfirm.value = false;
-  saveHarga();
-}
-
-function saveHarga() {
-  priceForm.post("/admin-panel/master/update-barang/harga", {
-    preserveScroll: true,
-    onSuccess: () => {
-      editing.value = null;
-      ui.pushToast("Harga berhasil disimpan.", "success");
-    },
-  });
-}
-
-function saveStatus(table) {
-  router.post(
-    "/admin-panel/master/update-barang/status",
-    { kd_barang: editing.value.kd_barang, nama: editing.value.nama, table, status: statusSel[table] },
-    { preserveScroll: true },
-  );
 }
 
 // --- Saran Harga (retail): nominal dari kolom keterangan ---
@@ -443,117 +379,7 @@ async function openRiwayat(item) {
       <Pagination v-if="filtered.length > perPage" class="mt-3" :page="page" :total="filtered.length" :per-page="perPage" @update:page="page = $event" />
     </Deferred>
 
-    <Modal :show="!!editing" :title="editing ? `${editing.kd_barang} — ${editing.nama}` : ''" size="md" @close="editing = null">
-      <div v-if="editing" class="max-h-[70vh] space-y-2 overflow-y-auto scroll-slim">
-        <!-- Harga per satuan -->
-        <div>
-          <h4 class="mb-1 text-xs font-semibold text-ink">Harga Jual per Satuan</h4>
-          <div class="space-y-1.5">
-            <div
-              v-for="u in editing.satuan"
-              :key="u.kd_satuan"
-              class="flex flex-col gap-1.5 rounded border-l-4 border-l-brand-600 bg-surface-2 p-2 sm:flex-row sm:items-end sm:gap-1.5"
-            >
-              <div class="min-w-max text-xs font-medium text-ink">
-                {{ u.satuan || u.kd_satuan }}
-                <span class="text-ink-muted">×{{ num(u.jumlah) }}</span>
-              </div>
-              <Input v-model="priceForm.prices[u.kd_satuan]" type="number" label="Harga" size="sm" class="sm:w-32" />
-
-              <!-- Margin untuk grosir (locked) -->
-              <div v-if="!isRetail" class="text-xs">
-                <p class="text-[0.65rem] text-ink-muted">Margin</p>
-                <input
-                  type="text"
-                  disabled
-                  :value="u.margin.toFixed(2) + '%'"
-                  class="rounded border border-border-default bg-surface-3 px-1.5 py-1 text-xs text-ink-muted cursor-not-allowed"
-                />
-              </div>
-
-              <!-- Margin untuk retail: harga & margin saling mengikuti -->
-              <template v-if="isRetail">
-                <div class="text-xs">
-                  <p class="text-[0.65rem] text-ink-muted">Modal</p>
-                  <p class="font-medium text-ink text-xs">{{ rupiah(u.modal) }}</p>
-                </div>
-                <Input
-                  :model-value="liveMargin(u).toFixed(2)"
-                  @update:model-value="(v) => setHargaFromMargin(u, v)"
-                  type="number"
-                  label="Margin (%)"
-                  size="sm"
-                  class="sm:w-24"
-                />
-              </template>
-
-              <!-- Save button aligned -->
-              <Button
-                v-if="editing.satuan.indexOf(u) === editing.satuan.length - 1"
-                variant="success"
-                size="sm"
-                :loading="priceForm.processing"
-                @click="askConfirm"
-              >
-                Simpan
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Status Ketersediaan -->
-        <div>
-          <h4 class="mb-1 text-xs font-semibold text-ink">Status Ketersediaan</h4>
-          <div class="grid gap-1.5 sm:grid-cols-3">
-            <div class="rounded border border-border-default p-2">
-              <Select v-model="statusSel.m_barang" label="Barang" :options="statusOptions" />
-              <Button variant="danger" size="sm" class="mt-1 w-full" @click="saveStatus('m_barang')">Simpan</Button>
-            </div>
-            <div class="rounded border border-border-default p-2">
-              <Select v-model="statusSel.m_barang_divisi" label="Divisi" :options="statusOptions" />
-              <Button variant="danger" size="sm" class="mt-1 w-full" @click="saveStatus('m_barang_divisi')">Simpan</Button>
-            </div>
-            <div class="rounded border border-border-default p-2">
-              <Select v-model="statusSel.m_barang_satuan" label="Satuan" :options="statusOptions" />
-              <Button variant="danger" size="sm" class="mt-1 w-full" @click="saveStatus('m_barang_satuan')">Simpan</Button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <template #footer>
-        <Button variant="ghost" @click="editing = null">Tutup</Button>
-      </template>
-    </Modal>
-
-    <Modal :show="showConfirm" title="Konfirmasi Perubahan Harga" @close="showConfirm = false">
-      <Banner
-        v-if="priceDiff.length"
-        variant="warning"
-        message="Perubahan harga langsung tersimpan ke database aktif dan berlaku untuk transaksi berikutnya. Pastikan nilai sudah benar."
-        class="mb-3"
-      />
-      <table class="w-full text-sm">
-        <thead>
-          <tr class="text-ink-muted">
-            <th class="py-1 text-left">Satuan</th>
-            <th class="py-1 text-right">Harga Lama</th>
-            <th class="py-1 text-right">Harga Baru</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="d in priceDiff" :key="d.kd_satuan" class="border-t border-border-default">
-            <td class="py-1">{{ d.kd_satuan }}</td>
-            <td class="py-1 text-right text-ink-muted">{{ d.lama }}</td>
-            <td class="py-1 text-right font-semibold text-ink">{{ d.baru }}</td>
-          </tr>
-        </tbody>
-      </table>
-      <p v-if="!priceDiff.length" class="text-sm text-ink-muted">Tidak ada perubahan harga.</p>
-      <template #footer>
-        <Button variant="ghost" @click="showConfirm = false">Batal</Button>
-        <Button variant="primary" :disabled="!priceDiff.length" @click="confirmSave">Simpan</Button>
-      </template>
-    </Modal>
+    <BarangEditModal :item="editing" :is-retail="isRetail" @close="editing = null" />
 
     <Modal :show="!!riwayat" :title="riwayat ? `Riwayat — ${riwayat.kd_barang} ${riwayat.nama}` : ''" size="md" @close="riwayat = null">
       <div v-if="riwayatLoading" class="flex items-center justify-center gap-3 py-10">

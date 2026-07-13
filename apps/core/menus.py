@@ -61,7 +61,7 @@ ALL_MENUS = [
     # Master Data — sub-grup 2: harga & update barang
     {"key": "update_barang", "label": "Update Barang", "icon": "pencil", "href": "/admin-panel/master/update-barang", "section": "master_harga"},
     {"key": "riwayat_update_barang", "label": "Riwayat Update Barang", "icon": "clock", "href": "/admin-panel/master/riwayat-update-barang", "section": "master_harga"},
-    {"key": "perubahan_harga_harian", "label": "Perubahan Harga Harian", "icon": "trending", "href": "/admin-panel/master/perubahan-harga-harian", "section": "master_harga"},
+    {"key": "pergerakan_harga", "label": "Pergerakan Harga", "icon": "trending", "href": "/admin-panel/master/pergerakan-harga", "section": "master_harga"},
     # Master Data — sub-grup 3: sinkronisasi antar-server
     {"key": "sync_harga", "label": "Sinkronisasi Harga", "icon": "refresh", "href": "/admin-panel/master/sync-harga", "section": "master_sync"},
     {"key": "sync_master", "label": "Sinkronisasi Master Data", "icon": "refresh", "href": "/admin-panel/master/sync-master", "section": "master_sync"},

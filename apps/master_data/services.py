@@ -5,6 +5,7 @@ PRD §5.3: table-level access only; joins & calculations done here in Python
 """
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 
 from core import mssql
@@ -250,6 +251,76 @@ def list_barang_edit(profile, search: str = "") -> list[dict]:
             "divisi": divisi,
             "is_retail": is_retail,
         })
+    return out
+
+
+# keterangan ditulis manual, mis. "ECER 3.450.000(50%)" / "ECER 300.000".
+# Ambil bagian sebelum "(" (buang "(50%)"), angka pertama (format ribuan
+# bertitik atau polos), lalu buang titik pemisah ribuan. Padanan Python dari
+# parseKeteranganPrice di frontend (UpdateBarang.vue) — jaga keduanya seragam.
+_KETERANGAN_PRICE_RE = re.compile(r"\d{1,3}(?:\.\d{3})+|\d+")
+
+
+def parse_keterangan_price(ket) -> float | None:
+    if not ket:
+        return None
+    m = _KETERANGAN_PRICE_RE.search(str(ket).split("(")[0])
+    if not m:
+        return None
+    n = int(m.group(0).replace(".", ""))
+    return float(n) if n > 0 else None
+
+
+def list_saran_harga(profile) -> list[dict]:
+    """Saran harga dari kolom keterangan untuk SELURUH katalog (tidak dibatasi
+    MAX_ROWS seperti list_barang_edit) — dipakai halaman Pergerakan Harga.
+
+    Satuan dasar = satuan dengan jumlah 1 (mis. PCS), fallback satuan pertama.
+    Hanya barang yang harga jual satuan dasarnya beda dari nominal keterangan.
+    """
+    with mssql.cursor(profile) as cur:
+        cur.execute(
+            "SELECT kd_barang, nama, keterangan FROM m_barang "
+            "WHERE keterangan IS NOT NULL AND LTRIM(RTRIM(keterangan)) <> ''"
+        )
+        barang = _dictify(cur)
+        satuan_names = _cached(
+            profile, "satuan_names", lambda: _key_map(cur, "SELECT kd_satuan, nama FROM m_satuan", "kd_satuan", "nama")
+        )
+
+        def _build_satuan_edit():
+            cur.execute("SELECT kd_barang, kd_satuan, jumlah, harga_jual, margin, status FROM m_barang_satuan")
+            by_barang: dict[str, list] = {}
+            for r in _dictify(cur):
+                by_barang.setdefault(_st(r["kd_barang"]), []).append(r)
+            return by_barang
+
+        # Cache key sama dengan list_barang_edit — saling berbagi hasil baca.
+        satuan_by = _cached(profile, "satuan_edit", _build_satuan_edit)
+
+    out = []
+    for b in barang:
+        kd = _st(b["kd_barang"])
+        units = satuan_by.get(kd, [])
+        base = next((u for u in units if _f(u["jumlah"]) == 1), units[0] if units else None)
+        if base is None:
+            continue
+        target = parse_keterangan_price(b.get("keterangan"))
+        harga = _f(base["harga_jual"])
+        if target is None or target == harga:
+            continue
+        ks = _st(base["kd_satuan"])
+        out.append({
+            "kd_barang": kd,
+            "nama": _st(b["nama"]),
+            "keterangan": _st(b.get("keterangan", "")),
+            "kd_satuan": ks,
+            "satuan": _st(satuan_names.get(base["kd_satuan"], "")) or ks,
+            "harga_lama": harga,
+            "harga_baru": target,
+            "selisih": target - harga,
+        })
+    out.sort(key=lambda r: r["nama"])
     return out
 
 

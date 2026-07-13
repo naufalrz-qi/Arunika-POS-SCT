@@ -8,6 +8,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.http import HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
+from django.utils import timezone
 from inertia import defer, render
 
 from apps.auth_app.models import Role, User
@@ -48,6 +49,16 @@ CONN_ERROR = "Tidak ada koneksi aktif, atau server tidak dapat dihubungi. Pilih 
 
 def _active():
     return mssql.get_active_profile()
+
+
+def _redirect_back(data, default: str):
+    """Redirect ke halaman asal form (opsional `redirect_to` di payload) supaya
+    endpoint update barang bisa dipakai dari halaman lain (mis. Pergerakan
+    Harga) tanpa terlempar balik ke Update Barang. Hanya path admin-panel."""
+    target = (data.get("redirect_to") or "").strip()
+    if target.startswith("/admin-panel/"):
+        return redirect(target)
+    return redirect(default)
 
 
 # --- Dashboard -------------------------------------------------------------
@@ -329,10 +340,10 @@ def update_barang_harga(request):
     # ganti koneksi di navbar akan menulis ke server LAMA meski UI-nya menampilkan
     # data server BARU (props.active sudah refresh, tapi id lama tetap terkirim).
     profile = _active()
+    data = get_data(request)
     if not profile:
         request.session["flash_error"] = CONN_ERROR
-        return redirect("/admin-panel/master/update-barang")
-    data = get_data(request)
+        return _redirect_back(data, "/admin-panel/master/update-barang")
     kd_barang = (data.get("kd_barang") or "").strip()
     nama_barang = (data.get("nama") or "").strip()
     prices = data.get("prices") or {}  # {kd_satuan: harga_jual}
@@ -349,7 +360,7 @@ def update_barang_harga(request):
         request.session["flash_success"] = f"Harga {kd_barang} diperbarui ({len(changes)} satuan)."
     except pyodbc.Error as exc:
         request.session["flash_error"] = f"Gagal update harga: {exc.args[-1] if exc.args else exc}"
-    return redirect("/admin-panel/master/update-barang")
+    return _redirect_back(data, "/admin-panel/master/update-barang")
 
 
 def update_barang_harga_bulk(request):
@@ -360,10 +371,10 @@ def update_barang_harga_bulk(request):
     update_barang_harga: koneksi target selalu di-resolve server-side (_active()).
     """
     profile = _active()
+    data = get_data(request)
     if not profile:
         request.session["flash_error"] = CONN_ERROR
-        return redirect("/admin-panel/master/update-barang")
-    data = get_data(request)
+        return _redirect_back(data, "/admin-panel/master/update-barang")
     items = data.get("items") or []
     total = 0
     try:
@@ -386,16 +397,16 @@ def update_barang_harga_bulk(request):
         request.session["flash_success"] = f"{total} harga diperbarui dari saran keterangan."
     except pyodbc.Error as exc:
         request.session["flash_error"] = f"Gagal terapkan saran harga: {exc.args[-1] if exc.args else exc}"
-    return redirect("/admin-panel/master/update-barang")
+    return _redirect_back(data, "/admin-panel/master/update-barang")
 
 
 def update_barang_status(request):
     # Sama seperti update_barang_harga: selalu pakai koneksi aktif server-side.
     profile = _active()
+    data = get_data(request)
     if not profile:
         request.session["flash_error"] = CONN_ERROR
-        return redirect("/admin-panel/master/update-barang")
-    data = get_data(request)
+        return _redirect_back(data, "/admin-panel/master/update-barang")
     kd_barang = (data.get("kd_barang") or "").strip()
     nama_barang = (data.get("nama") or "").strip()
     table = data.get("table") or ""
@@ -411,7 +422,27 @@ def update_barang_status(request):
         request.session["flash_success"] = f"Status ({table}) untuk {kd_barang} diperbarui."
     except (pyodbc.Error, ValueError) as exc:
         request.session["flash_error"] = f"Gagal update status: {exc}"
-    return redirect("/admin-panel/master/update-barang")
+    return _redirect_back(data, "/admin-panel/master/update-barang")
+
+
+def update_barang_detail(request):
+    """Detail satu barang (satuan/harga/status, format list_barang_edit) dari
+    koneksi AKTIF — dipakai halaman Pergerakan Harga untuk membuka modal edit
+    yang sama persis dengan Update Barang."""
+    profile = _active()
+    kd_barang = (request.GET.get("kd_barang") or "").strip()
+    if not profile or not kd_barang:
+        return JsonResponse({"item": None, "error": CONN_ERROR if not profile else "Kode barang kosong."})
+    try:
+        rows = master.list_barang_edit(profile, kd_barang)
+    except pyodbc.Error as exc:
+        return JsonResponse({"item": None, "error": f"Gagal membaca barang: {exc.args[-1] if exc.args else exc}"})
+    key = kd_barang.strip().upper()
+    item = next((r for r in rows if r["kd_barang"].strip().upper() == key), None)
+    return JsonResponse({
+        "item": item,
+        "error": None if item else f"Barang {kd_barang} tidak ditemukan di koneksi {profile.name}.",
+    })
 
 
 def update_barang_riwayat(request):
@@ -488,16 +519,26 @@ def riwayat_update_barang_index(request):
     )
 
 
-def perubahan_harga_harian_index(request):
-    """Perubahan harga yang terdeteksi job harian (`snapshot_harga`), lintas koneksi.
-    Menangkap perubahan dari sumber apa pun (termasuk edit langsung di POS)."""
+def pergerakan_harga_index(request):
+    """Pergerakan Harga: perubahan harga terdeteksi snapshot harian (lintas
+    koneksi, dari sumber apa pun — termasuk edit langsung di POS) + saran harga
+    dari kolom keterangan untuk seluruh katalog server yang dipilih.
+
+    Default menampilkan perubahan HARI INI; scope "semua" (atau filter tanggal
+    eksplisit) membuka seluruh riwayat."""
     f = request.GET
     kd_barang = (f.get("kd_barang") or "").strip()
     date_from = _parse_date(f.get("date_from"))
     date_to = _eod(_parse_date(f.get("date_to")))
     profile_id = f.get("profile") or ""
+    scope = f.get("scope") or "hari"
 
-    def load_changes():
+    active = _active()
+    # Saran harga dibaca dari server yang dipilih di filter; tanpa pilihan,
+    # ikut koneksi aktif. Penerapan saran tetap hanya ke koneksi aktif.
+    saran_profile = ServerProfile.objects.filter(pk=profile_id).first() if profile_id else active
+
+    def load_data():
         qs = BarangHargaChange.objects.all()
         if kd_barang:
             qs = qs.filter(kd_barang__icontains=kd_barang)
@@ -505,6 +546,8 @@ def perubahan_harga_harian_index(request):
             qs = qs.filter(detected_at__gte=date_from)
         if date_to:
             qs = qs.filter(detected_at__lte=date_to)
+        if not date_from and not date_to and scope != "semua":
+            qs = qs.filter(detected_at__gte=timezone.localtime().replace(hour=0, minute=0, second=0, microsecond=0))
         if profile_id:
             qs = qs.filter(profile_id=profile_id)
         rows = [
@@ -517,11 +560,21 @@ def perubahan_harga_harian_index(request):
                 "harga_lama": float(c.harga_lama),
                 "harga_baru": float(c.harga_baru),
                 "selisih": float(c.harga_baru - c.harga_lama),
+                "profile_id": c.profile_id,
                 "profile_name": c.profile_name or "—",
             }
             for c in qs[:500]
         ]
-        return {"rows": rows}
+
+        saran, saran_error = [], None
+        if saran_profile:
+            try:
+                saran = master.list_saran_harga(saran_profile)
+            except pyodbc.Error as exc:
+                saran_error = f"Gagal membaca saran harga: {exc.args[-1] if exc.args else exc}"
+        else:
+            saran_error = CONN_ERROR
+        return {"rows": rows, "saran": saran, "saran_error": saran_error}
 
     last = HargaSnapshotRun.objects.order_by("-ran_at").first()
     last_run = (
@@ -537,11 +590,20 @@ def perubahan_harga_harian_index(request):
 
     return render(
         request,
-        "Admin/MasterData/PerubahanHargaHarian",
+        "Admin/MasterData/PergerakanHarga",
         props={
-            "data": defer(load_changes),
+            "data": defer(load_data),
+            "active": active.as_dict() if active else None,
+            "profile_type": active.db_type if active else None,
+            "saran_profile": {"id": saran_profile.id, "name": saran_profile.name} if saran_profile else None,
             "profiles": [{"value": str(p.id), "label": p.name} for p in ServerProfile.objects.all()],
-            "filters": {"kd_barang": kd_barang, "date_from": f.get("date_from") or "", "date_to": f.get("date_to") or "", "profile": profile_id},
+            "filters": {
+                "kd_barang": kd_barang,
+                "date_from": f.get("date_from") or "",
+                "date_to": f.get("date_to") or "",
+                "profile": profile_id,
+                "scope": scope,
+            },
             "last_run": last_run,
         },
     )
