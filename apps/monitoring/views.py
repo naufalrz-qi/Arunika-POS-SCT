@@ -194,26 +194,26 @@ def products_index(request):
     search = request.GET.get("search", "")
     kd_kategori = request.GET.get("kd_kategori", "")
     profile = _active()
-    products, categories, conn_error = [], [], None
-    if profile:
-        try:
-            products = master.list_products(profile, search, kd_kategori)
-            categories = master.list_categories(profile)
-        except pyodbc.Error as exc:
-            conn_error = f"Gagal membaca master produk: {exc.args[-1] if exc.args else exc}"
-    else:
-        conn_error = CONN_ERROR
+
+    # Deferred: katalog penuh (tanpa cap) bisa makan detik-an — shell (judul,
+    # kartu) tampil instan, tabel muncul begitu query selesai.
+    def load_products():
+        products, categories, conn_error = [], [], None
+        if profile:
+            try:
+                products = master.list_products(profile, search, kd_kategori)
+                categories = master.list_categories(profile)
+            except pyodbc.Error as exc:
+                conn_error = f"Gagal membaca master produk: {exc.args[-1] if exc.args else exc}"
+        else:
+            conn_error = CONN_ERROR
+        return {"rows": products, "categories": categories, "conn_error": conn_error}
+
     return render(
         request,
         "Admin/MasterData/Products",
-        props={"products": products, "categories": categories, "conn_error": conn_error},
+        props={"products": defer(load_products)},
     )
-
-
-def products_save(request):
-    # Write to legacy m_barang deferred (PRD §7.3 write) — read-only phase.
-    request.session["flash_error"] = "Tulis ke master produk belum aktif di fase ini."
-    return redirect("/admin-panel/master/products")
 
 
 # --- Master: pelanggan (read-only) ----------------------------------------
@@ -221,44 +221,50 @@ def products_save(request):
 def customers_index(request):
     search = request.GET.get("search", "")
     profile = _active()
-    customers, conn_error = [], None
-    if profile:
-        try:
-            customers = master.list_customers(profile, search)
-        except pyodbc.Error as exc:
-            conn_error = f"Gagal membaca master pelanggan: {exc.args[-1] if exc.args else exc}"
-    else:
-        conn_error = CONN_ERROR
+
+    def load_customers():
+        customers, conn_error = [], None
+        if profile:
+            try:
+                customers = master.list_customers(profile, search)
+            except pyodbc.Error as exc:
+                conn_error = f"Gagal membaca master pelanggan: {exc.args[-1] if exc.args else exc}"
+        else:
+            conn_error = CONN_ERROR
+        return {"rows": customers, "conn_error": conn_error}
+
     return render(
         request,
         "Admin/MasterData/Customers",
-        props={"customers": customers, "conn_error": conn_error},
+        props={"customers": defer(load_customers)},
     )
 
 
 def suppliers_index(request):
     profile = _active()
-    suppliers, conn_error = [], None
-    if profile:
-        try:
-            with mssql.cursor(profile) as cur:
-                # kota/flag_aktif don't exist on m_supplier (verified live via
-                # INFORMATION_SCHEMA) — real columns are kd_kota/jenis; aliased
-                # to keep Supplier.vue's existing prop contract unchanged.
-                cur.execute(
-                    "SELECT kd_supplier, nama, alamat, kd_kota AS kota, telepon, jenis AS flag_aktif "
-                    "FROM m_supplier ORDER BY nama"
-                )
-                suppliers = reporting.dictify(cur)
-                suppliers = reporting.clean_rows(suppliers)
-        except pyodbc.Error as exc:
-            conn_error = f"Gagal membaca supplier: {exc.args[-1] if exc.args else exc}"
-    else:
-        conn_error = CONN_ERROR
+
+    def load_suppliers():
+        suppliers, conn_error = [], None
+        if profile:
+            try:
+                with mssql.cursor(profile) as cur:
+                    cur.execute(
+                        "SELECT kd_supplier, kd_kota, nama, alamat, telepon, fax, "
+                        "kontak, hp, email, kd_bank, rekening, jenis, keterangan "
+                        "FROM m_supplier ORDER BY nama"
+                    )
+                    suppliers = reporting.dictify(cur)
+                    suppliers = reporting.clean_rows(suppliers)
+            except pyodbc.Error as exc:
+                conn_error = f"Gagal membaca supplier: {exc.args[-1] if exc.args else exc}"
+        else:
+            conn_error = CONN_ERROR
+        return {"rows": suppliers, "conn_error": conn_error}
+
     return render(
         request,
         "Admin/MasterData/Supplier",
-        props={"suppliers": suppliers, "conn_error": conn_error},
+        props={"suppliers": defer(load_suppliers)},
     )
 
 
@@ -290,11 +296,6 @@ def sync_history_index(request):
     )
 
 
-def customers_save(request):
-    request.session["flash_error"] = "Tulis ke master pelanggan belum aktif di fase ini."
-    return redirect("/admin-panel/master/customers")
-
-
 # --- Update Barang (WRITE ke MS SQL legacy) --------------------------------
 
 _STATUS_FIELD = {
@@ -322,6 +323,16 @@ def update_barang_index(request):
             conn_error = CONN_ERROR
         return {"rows": items, "conn_error": conn_error}
 
+    # Saran harga: katalog PENUH (bukan hasil search/TOP di atas) — tombol
+    # "Saran Harga" harus melihat semua barang, bukan cuma yang sedang tampil.
+    def load_saran():
+        if not profile:
+            return {"rows": [], "conn_error": CONN_ERROR}
+        try:
+            return {"rows": master.list_saran_harga(profile), "conn_error": None}
+        except pyodbc.Error as exc:
+            return {"rows": [], "conn_error": f"Gagal membaca saran harga: {exc.args[-1] if exc.args else exc}"}
+
     return render(
         request,
         "Admin/MasterData/UpdateBarang",
@@ -329,6 +340,7 @@ def update_barang_index(request):
             "active": profile.as_dict() if profile else None,
             "profile_type": profile.db_type if profile else None,
             "items": defer(load_items),
+            "saran": defer(load_saran, group="saran"),
             "filters": {"search": search},
         },
     )
@@ -360,43 +372,6 @@ def update_barang_harga(request):
         request.session["flash_success"] = f"Harga {kd_barang} diperbarui ({len(changes)} satuan)."
     except pyodbc.Error as exc:
         request.session["flash_error"] = f"Gagal update harga: {exc.args[-1] if exc.args else exc}"
-    return _redirect_back(data, "/admin-panel/master/update-barang")
-
-
-def update_barang_harga_bulk(request):
-    """Terapkan banyak saran harga sekaligus (fitur "Saran Harga" retail).
-
-    Payload: {"items": [{kd_barang, nama, kd_satuan, harga}, ...]}. Dipakai baik
-    untuk 1 baris (list berisi 1) maupun "Terapkan Semua". Sama seperti
-    update_barang_harga: koneksi target selalu di-resolve server-side (_active()).
-    """
-    profile = _active()
-    data = get_data(request)
-    if not profile:
-        request.session["flash_error"] = CONN_ERROR
-        return _redirect_back(data, "/admin-panel/master/update-barang")
-    items = data.get("items") or []
-    total = 0
-    try:
-        for it in items:
-            kd_barang = (it.get("kd_barang") or "").strip()
-            kd_satuan = (it.get("kd_satuan") or "").strip()
-            if not kd_barang or not kd_satuan:
-                continue
-            nama_barang = (it.get("nama") or "").strip()
-            changes = master.update_harga(profile, kd_barang, {kd_satuan: it.get("harga")})
-            log_barang_updates(
-                request, profile, kd_barang, nama_barang,
-                [
-                    (BarangUpdateLog.Field.HARGA, c["kd_satuan"], c["harga_lama"], c["harga_baru"])
-                    for c in changes
-                ],
-            )
-            total += len(changes)
-        log_activity(request, "barang", f"Terapkan saran harga ({profile.name}): {total} satuan / {len(items)} barang")
-        request.session["flash_success"] = f"{total} harga diperbarui dari saran keterangan."
-    except pyodbc.Error as exc:
-        request.session["flash_error"] = f"Gagal terapkan saran harga: {exc.args[-1] if exc.args else exc}"
     return _redirect_back(data, "/admin-panel/master/update-barang")
 
 

@@ -1,139 +1,117 @@
 <script setup>
-import { computed, ref } from "vue";
-import { useForm } from "@inertiajs/vue3";
+import { computed, reactive } from "vue";
+import { Deferred } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import Card from "@/components/ui/Card.vue";
-import Button from "@/components/ui/Button.vue";
 import Input from "@/components/ui/Input.vue";
-import Badge from "@/components/ui/Badge.vue";
+import Select from "@/components/ui/Select.vue";
 import Banner from "@/components/ui/Banner.vue";
 import DataTable from "@/components/ui/DataTable.vue";
-import Modal from "@/components/ui/Modal.vue";
-import Icon from "@/components/nav/Icon.vue";
 import ExportButton from "@/components/ui/ExportButton.vue";
 import SelectSearch from "@/components/ui/SelectSearch.vue";
-import StatusSelect from "@/components/ui/StatusSelect.vue";
+import FilterPanel from "@/components/ui/FilterPanel.vue";
+import FilterSection from "@/components/ui/FilterSection.vue";
+import LoadingCard from "@/components/ui/LoadingCard.vue";
 
 const props = defineProps({
-  suppliers: { type: Array, default: () => [] },
-  conn_error: { type: String, default: null },
+  suppliers: { type: Object, default: null },
 });
 
-const search = ref("");
-const kotaFilter = ref("");
-const statusFilter = ref("");
+const data = computed(() => props.suppliers || {});
+const rows = computed(() => data.value.rows || []);
 
-const kotaOptions = computed(() => {
-  const cities = new Set(props.suppliers.map(s => s.kota).filter(Boolean));
-  return Array.from(cities).map(city => ({ value: city, label: city }));
+function distinctOptions(list, key) {
+  const values = new Set(list.map((r) => r[key]).filter((v) => v !== "" && v != null));
+  return Array.from(values).map((v) => ({ value: v, label: v }));
+}
+
+const kotaOptions = computed(() => distinctOptions(rows.value, "kd_kota"));
+const jenisOptions = computed(() => distinctOptions(rows.value, "jenis"));
+
+const filters = reactive({
+  search: "",
+  kota: "",
+  jenis: "",
+  rekening: "",
 });
+
+function resetFilters() {
+  filters.search = "";
+  filters.kota = "";
+  filters.jenis = "";
+  filters.rekening = "";
+}
 
 const filtered = computed(() => {
-  const q = search.value.toLowerCase().trim();
-  return props.suppliers.filter(s => {
-    const matchQ = !q || s.nama.toLowerCase().includes(q) || s.kd_supplier.toLowerCase().includes(q) || (s.kota || "").toLowerCase().includes(q);
-    const matchKota = !kotaFilter.value || s.kota === kotaFilter.value;
-    const matchStatus = statusFilter.value === "" || (s.status === (statusFilter.value === "1" ? 1 : 0));
-    return matchQ && matchKota && matchStatus;
+  const q = filters.search.toLowerCase().trim();
+  return rows.value.filter((s) => {
+    const matchQ =
+      !q ||
+      s.nama.toLowerCase().includes(q) ||
+      s.kd_supplier.toLowerCase().includes(q) ||
+      (s.kontak || "").toLowerCase().includes(q) ||
+      (s.hp || "").toLowerCase().includes(q);
+    const matchKota = !filters.kota || s.kd_kota === filters.kota;
+    const matchJenis = !filters.jenis || s.jenis === filters.jenis;
+    const matchRekening = !filters.rekening || (filters.rekening === "1" ? !!s.rekening : !s.rekening);
+    return matchQ && matchKota && matchJenis && matchRekening;
   });
 });
 
 const columns = [
   { key: "kd_supplier", label: "Kode", sortable: true },
   { key: "nama", label: "Nama", sortable: true },
-  { key: "kota", label: "Kota" },
+  { key: "kd_kota", label: "Kota" },
+  { key: "alamat", label: "Alamat" },
+  { key: "telepon", label: "Telepon" },
+  { key: "fax", label: "Fax" },
   { key: "kontak", label: "Kontak" },
   { key: "hp", label: "HP" },
-  { key: "status", label: "Status", align: "center" },
-  { key: "actions", label: "", align: "right" },
+  { key: "email", label: "Email" },
+  { key: "kd_bank", label: "Bank" },
+  { key: "rekening", label: "No. Rekening" },
+  { key: "jenis", label: "Jenis" },
+  { key: "keterangan", label: "Keterangan" },
 ];
 
-const exportColumns = [
-  { key: "kd_supplier", label: "Kode" },
-  { key: "nama", label: "Nama" },
-  { key: "kota", label: "Kota" },
-  { key: "kontak", label: "Kontak" },
-  { key: "hp", label: "HP" },
-  { key: "status", label: "Status" },
-];
-
-const showForm = ref(false);
-const form = useForm({
-  kd_supplier: "",
-  nama: "",
-  kota: "",
-  kontak: "",
-  hp: "",
-  status: 1,
-  _editing: false,
-});
-
-function openCreate() {
-  form.reset();
-  form.clearErrors();
-  showForm.value = true;
-}
-function openEdit(s) {
-  form.kd_supplier = s.kd_supplier;
-  form.nama = s.nama;
-  form.kota = s.kota;
-  form.kontak = s.kontak;
-  form.hp = s.hp;
-  form.status = s.status;
-  form._editing = true;
-  showForm.value = true;
-}
-function save() {
-  form.post("/admin-panel/master/suppliers/save", { onSuccess: () => (showForm.value = false) });
-}
+const exportColumns = columns.map(({ key, label }) => ({ key, label }));
 </script>
 
 <template>
   <AdminLayout title="Master Supplier">
-    <Banner v-if="conn_error" variant="warning" :message="conn_error" />
-    <Card>
-      <template #header>
-        <div class="flex items-center justify-between">
-          <Button size="sm" @click="openCreate"><Icon name="plus" size="h-4 w-4" /> Tambah Supplier</Button>
-          <ExportButton mode="client" filename="supplier" :columns="exportColumns" :rows="filtered" sheet-name="Supplier" />
-        </div>
-      </template>
-
-      <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end">
-        <div class="sm:max-w-xs sm:flex-1">
-          <Input v-model="search" placeholder="Cari kode / nama / kota…" />
-        </div>
-        <div class="sm:w-48">
-          <SelectSearch v-model="kotaFilter" :options="kotaOptions" placeholder="Semua kota" label="Kota" />
-        </div>
-        <div class="sm:w-48">
-          <StatusSelect v-model="statusFilter" label="Status" />
-        </div>
-      </div>
-
-      <DataTable :columns="columns" row-key="kd_supplier" :rows="filtered" empty-message="Supplier tidak ditemukan.">
-        <template #cell-status="{ value }">
-          <Badge :variant="value ? 'success' : 'danger'">{{ value ? "Aktif" : "Nonaktif" }}</Badge>
+    <Card class="mb-4">
+      <FilterPanel :form="filters" @submit="() => {}" @reset="resetFilters">
+        <FilterSection>
+          <Input v-model="filters.search" label="Cari" placeholder="Kode / nama / kontak / HP…" />
+          <SelectSearch v-model="filters.kota" :options="kotaOptions" label="Kota" placeholder="Semua kota" />
+        </FilterSection>
+        <template #lanjutan>
+          <FilterSection title="Filter Lanjutan">
+            <Select v-model="filters.jenis" label="Jenis" :options="jenisOptions" placeholder="Semua jenis" />
+            <Select
+              v-model="filters.rekening"
+              label="Punya Rekening"
+              :options="[{ value: '1', label: 'Ya' }, { value: '0', label: 'Tidak' }]"
+              placeholder="Semua"
+            />
+          </FilterSection>
         </template>
-        <template #cell-actions="{ row }">
-          <Button variant="ghost" size="sm" @click="openEdit(row)"><Icon name="pencil" size="h-4 w-4" /></Button>
-        </template>
-      </DataTable>
+      </FilterPanel>
     </Card>
 
-    <Modal :show="showForm" :title="form._editing ? 'Edit Supplier' : 'Tambah Supplier'" @close="showForm = false">
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Input v-model="form.kd_supplier" label="Kode Supplier" :error="form.errors.kd_supplier" required />
-        <Input v-model="form.nama" label="Nama" :error="form.errors.nama" required />
-        <Input v-model="form.kota" label="Kota" />
-        <Input v-model="form.kontak" label="Kontak" />
-        <Input v-model="form.hp" label="No. HP" />
-        <StatusSelect v-model="form.status" />
-      </div>
-      <template #footer>
-        <Button variant="secondary" @click="showForm = false">Batal</Button>
-        <Button :loading="form.processing" @click="save">Simpan</Button>
+    <Deferred data="suppliers">
+      <template #fallback>
+        <LoadingCard message="Mengambil data supplier…" />
       </template>
-    </Modal>
+
+      <Banner v-if="data.conn_error" variant="warning" :message="data.conn_error" />
+
+      <div class="mb-3 flex items-center justify-between">
+        <span class="text-sm text-ink-muted">{{ filtered.length.toLocaleString("id-ID") }} supplier</span>
+        <ExportButton mode="client" filename="supplier" :columns="exportColumns" :rows="filtered" sheet-name="Supplier" />
+      </div>
+
+      <DataTable :columns="columns" row-key="kd_supplier" :rows="filtered" empty-message="Supplier tidak ditemukan." />
+    </Deferred>
   </AdminLayout>
 </template>

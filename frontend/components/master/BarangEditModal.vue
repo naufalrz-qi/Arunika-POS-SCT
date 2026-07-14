@@ -7,6 +7,7 @@ import Select from "@/components/ui/Select.vue";
 import Button from "@/components/ui/Button.vue";
 import Banner from "@/components/ui/Banner.vue";
 import { useUiStore } from "@/stores/ui.js";
+import { suggestFor } from "@/utils/priceSuggestion.js";
 
 // Modal edit barang (harga per satuan + status ketersediaan) — dipakai
 // Update Barang dan Pergerakan Harga supaya tampilannya sama persis.
@@ -51,6 +52,16 @@ watch(
   },
   { immediate: true },
 );
+
+// Saran harga dari kolom keterangan (mis. "ECER 3.450.000(50%)") untuk satuan
+// dasar barang ini — cuma hint, user tetap harus klik untuk isi lalu Simpan.
+const suggestion = computed(() => suggestFor(props.item));
+
+function applySuggestion() {
+  const s = suggestion.value;
+  if (!s) return;
+  priceForm.prices[s.kd_satuan] = s.harga_baru;
+}
 
 const priceDiff = computed(() => {
   if (!props.item) return [];
@@ -124,7 +135,18 @@ function saveStatus(table) {
               {{ u.satuan || u.kd_satuan }}
               <span class="text-ink-muted">×{{ num(u.jumlah) }}</span>
             </div>
-            <Input v-model="priceForm.prices[u.kd_satuan]" type="number" label="Harga" size="sm" class="sm:w-32" />
+            <div class="sm:w-32">
+              <Input v-model="priceForm.prices[u.kd_satuan]" type="number" label="Harga" size="sm" />
+              <button
+                v-if="suggestion && suggestion.kd_satuan === u.kd_satuan"
+                type="button"
+                class="mt-1 inline-flex items-center gap-1 rounded-full bg-rx-yellow/20 px-2 py-0.5 text-[10px] font-semibold text-warning-fg hover:bg-rx-yellow/30"
+                :title="`Dari keterangan: ${item.keterangan}`"
+                @click="applySuggestion"
+              >
+                ✨ Saran: {{ rupiah(suggestion.harga_baru) }}
+              </button>
+            </div>
 
             <!-- Margin untuk grosir (locked) -->
             <div v-if="!isRetail" class="text-xs">

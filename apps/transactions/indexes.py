@@ -129,6 +129,9 @@ INDEXES = {
     "IX_mcustomer_nama": (
         "CREATE NONCLUSTERED INDEX IX_mcustomer_nama ON m_customer (nama)"
     ),
+    "IX_msupplier_nama": (
+        "CREATE NONCLUSTERED INDEX IX_msupplier_nama ON m_supplier (nama)"
+    ),
     # --- movement engine composites (apps/inventory/services.py _movement_sql) --
     "IX_mbarangdivisi_barang_divisi": (
         # [0] "Stok Awal" block filters bd.kd_barang/bd.kd_divisi; also read in

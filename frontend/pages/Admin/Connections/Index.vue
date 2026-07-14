@@ -92,7 +92,19 @@ const showForm = ref(false);
 const form = useForm({ id: null, name: "", db_type: "grosir", host: "", port: 1433, db_name: "", username: "", password: "", cost_source: null, report_source: null });
 
 function openCreate() {
-  form.reset();
+  // Not form.reset(): Inertia v2 rewrites the form's defaults to the last-submitted
+  // values after every successful post, so reset() after an edit would restore that
+  // edited row's id instead of a blank form. Assign fields explicitly instead.
+  form.id = null;
+  form.name = "";
+  form.db_type = "grosir";
+  form.host = "";
+  form.port = 1433;
+  form.db_name = "";
+  form.username = "";
+  form.password = "";
+  form.cost_source = null;
+  form.report_source = null;
   form.clearErrors();
   showForm.value = true;
 }

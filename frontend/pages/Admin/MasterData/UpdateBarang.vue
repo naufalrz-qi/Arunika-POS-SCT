@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { router, Deferred } from "@inertiajs/vue3";
 import axios from "axios";
 import AdminLayout from "@/layouts/AdminLayout.vue";
@@ -9,21 +9,24 @@ import Input from "@/components/ui/Input.vue";
 import Select from "@/components/ui/Select.vue";
 import Badge from "@/components/ui/Badge.vue";
 import Banner from "@/components/ui/Banner.vue";
-import Pagination from "@/components/ui/Pagination.vue";
 import LoadingCard from "@/components/ui/LoadingCard.vue";
 import Modal from "@/components/ui/Modal.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import BarangEditModal from "@/components/master/BarangEditModal.vue";
 import { useUiStore } from "@/stores/ui.js";
+import { suggestFor } from "@/utils/priceSuggestion.js";
 
 const props = defineProps({
   active: { type: Object, default: null },
   profile_type: { type: String, default: null },
   items: { type: Object, default: null },
+  saran: { type: Object, default: null },
   filters: { type: Object, default: () => ({}) },
 });
 
 const data = computed(() => props.items || {});
+const saranData = computed(() => props.saran || {});
+const saranRows = computed(() => saranData.value.rows || []);
 
 const isRetail = computed(() => props.profile_type === "retail");
 
@@ -61,9 +64,6 @@ const statusScopes = [
   { key: "m_barang_satuan", label: "Ketersediaan per Satuan", hint: "Status tiap satuan jual (pcs, dus, dll)." },
 ];
 
-const page = ref(1);
-const perPage = 24;
-
 // Filter & sort items
 const filtered = computed(() => {
   let result = data.value.rows || [];
@@ -96,14 +96,30 @@ const filtered = computed(() => {
   return sorted;
 });
 
-const pagedItems = computed(() => {
-  const start = (page.value - 1) * perPage;
-  return filtered.value.slice(start, start + perPage);
+// --- Infinite scroll: 25 kartu awal, +25 tiap digulirkan ke bawah ---
+const CHUNK = 25;
+const visibleCount = ref(CHUNK);
+const visibleItems = computed(() => filtered.value.slice(0, visibleCount.value));
+const hasMore = computed(() => visibleCount.value < filtered.value.length);
+
+watch(filtered, () => {
+  visibleCount.value = CHUNK;
 });
 
-watch(() => props.items, () => {
-  page.value = 1;
+const sentinel = ref(null);
+let observer = null;
+watch(sentinel, (el) => {
+  observer?.disconnect();
+  if (!el) return;
+  observer = new IntersectionObserver(
+    (entries) => {
+      if (entries[0].isIntersecting && hasMore.value) visibleCount.value += CHUNK;
+    },
+    { rootMargin: "600px" },
+  );
+  observer.observe(el);
 });
+onBeforeUnmount(() => observer?.disconnect());
 
 function margin(row) {
   const u = row.satuan[0];
@@ -119,70 +135,34 @@ function openEdit(item) {
   editing.value = item;
 }
 
-// --- Saran Harga (retail): nominal dari kolom keterangan ---
-const showSuggest = ref(false);
-const suggestApplying = ref(false);
-const confirmBulk = ref(false);
-
-// keterangan ditulis manual, mis. "ECER 3.450.000(50%)" / "ECER 300.000".
-// Ambil bagian sebelum "(" (buang "(50%)"), angka pertama (ribuan/polos),
-// lalu buang titik pemisah ribuan.
-function parseKeteranganPrice(ket) {
-  if (!ket) return null;
-  const m = String(ket).split("(")[0].match(/\d{1,3}(?:\.\d{3})+|\d+/);
-  if (!m) return null;
-  const n = parseInt(m[0].replace(/\./g, ""), 10);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-// Satuan dasar = yang jumlah-nya 1 (mis. PCS), fallback ke satuan pertama.
-function baseUnit(row) {
-  return row.satuan.find((u) => u.jumlah === 1) || row.satuan[0] || null;
-}
-
-const suggestions = computed(() => {
-  const out = [];
-  for (const row of data.value.rows || []) {
-    const u = baseUnit(row);
-    if (!u) continue;
-    const target = parseKeteranganPrice(row.keterangan);
-    if (target == null || target === u.harga_jual) continue;
-    out.push({
-      kd_barang: row.kd_barang,
-      nama: row.nama,
-      kd_satuan: u.kd_satuan,
-      satuan: u.satuan || u.kd_satuan,
-      harga_lama: u.harga_jual,
-      harga_baru: target,
-      selisih: target - u.harga_jual,
-    });
-  }
-  return out;
-});
-
-function applySuggest(list) {
-  if (!list.length) return;
-  suggestApplying.value = true;
-  router.post(
-    "/admin-panel/master/update-barang/harga-bulk",
-    { items: list.map((s) => ({ kd_barang: s.kd_barang, nama: s.nama, kd_satuan: s.kd_satuan, harga: s.harga_baru })) },
-    {
-      preserveScroll: true,
-      preserveState: true,
-      onSuccess: () => ui.pushToast(`${list.length} harga diterapkan.`, "success"),
-      onFinish: () => (suggestApplying.value = false),
-    },
-  );
-}
-
-function applyOne(s) {
-  applySuggest([s]);
-}
-
-function applyAll() {
-  confirmBulk.value = false;
-  applySuggest(suggestions.value);
+// Saran harga (browse modal) referensi barang yang mungkin di luar kartu yang
+// sedang tampil (search/filter) — ambil detail lengkap dari server dulu.
+const editLoadingKd = ref(null);
+async function openEditByCode(kd_barang) {
   showSuggest.value = false;
+  editLoadingKd.value = kd_barang;
+  try {
+    const { data: res } = await axios.get("/admin-panel/master/update-barang/detail", {
+      params: { kd_barang },
+    });
+    if (res.item) editing.value = res.item;
+    else ui.pushToast(res.error || "Barang tidak ditemukan.", "error");
+  } catch {
+    ui.pushToast("Gagal memuat detail barang.", "error");
+  } finally {
+    editLoadingKd.value = null;
+  }
+}
+
+// --- Saran Harga (retail): nominal dari kolom keterangan, katalog penuh ---
+// Bukan tombol "terapkan" — cuma daftar untuk dibaca, penerapan harus lewat
+// modal Edit Barang secara manual (lihat BarangEditModal.vue).
+const showSuggest = ref(false);
+
+// Badge per kartu: pakai data yang sudah ada di kartu (row), bukan katalog
+// penuh — cukup untuk kartu yang sedang dirender.
+function cardSuggestion(row) {
+  return suggestFor(row);
 }
 
 // --- Riwayat (history) modal ---
@@ -262,7 +242,7 @@ async function openRiwayat(item) {
           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
           </svg>
-          Saran Harga<span v-if="suggestions.length" class="ml-1 rounded-full bg-rx-yellow px-1.5 text-[10px] font-bold text-ink">{{ suggestions.length }}</span>
+          Saran Harga<span v-if="saranRows.length" class="ml-1 rounded-full bg-rx-yellow px-1.5 text-[10px] font-bold text-ink">{{ saranRows.length }}</span>
         </Button>
         <span class="text-sm text-ink-muted whitespace-nowrap">{{ filtered.length }} barang</span>
       </div>
@@ -276,11 +256,21 @@ async function openRiwayat(item) {
       <Banner v-if="data.conn_error" variant="warning" :message="data.conn_error" />
 
       <div
-        v-if="pagedItems.length > 0"
+        v-if="visibleItems.length > 0"
         class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
       >
-        <div v-for="row in pagedItems" :key="row.kd_barang" class="panel-cut-frame panel-cut-frame-accent">
-          <div class="mecha-card panel-cut flex h-full flex-col gap-2.5 bg-surface p-3.5">
+        <div v-for="row in visibleItems" :key="row.kd_barang" class="panel-cut-frame panel-cut-frame-accent">
+          <div class="relative mecha-card panel-cut flex h-full flex-col gap-2.5 bg-surface p-3.5">
+            <button
+              v-if="isRetail && cardSuggestion(row)"
+              type="button"
+              class="absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-full bg-rx-yellow px-2 py-0.5 text-[10px] font-bold text-ink shadow-sm"
+              :title="`Saran harga: ${rupiah(cardSuggestion(row).harga_baru)} (sekarang ${rupiah(cardSuggestion(row).harga_lama)})`"
+              @click="openEdit(row)"
+            >
+              ✨ Saran
+            </button>
+
             <!-- Status trio: Barang / Divisi / Satuan -->
             <div class="flex flex-wrap items-center gap-1.5">
               <span :class="['inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold', statusDotClass(row.status)]">
@@ -376,7 +366,10 @@ async function openRiwayat(item) {
         <p class="text-sm text-ink-muted">Tidak ada barang.</p>
       </div>
 
-      <Pagination v-if="filtered.length > perPage" class="mt-3" :page="page" :total="filtered.length" :per-page="perPage" @update:page="page = $event" />
+      <div v-if="hasMore" ref="sentinel" class="flex items-center justify-center gap-2 py-6 text-sm text-ink-muted">
+        <Spinner size="h-4 w-4" />
+        Memuat lebih banyak…
+      </div>
     </Deferred>
 
     <BarangEditModal :item="editing" :is-retail="isRetail" @close="editing = null" />
@@ -413,18 +406,26 @@ async function openRiwayat(item) {
       </template>
     </Modal>
 
-    <!-- Saran Harga (retail) -->
+    <!-- Saran Harga (retail) — daftar baca-saja, katalog penuh. Prioritas: -->
+    <!-- keterangan yang eksplisit sebut %/margin duluan (lihat backend). -->
+    <!-- Tidak ada tombol terapkan — ubah harga lewat Edit Barang secara manual. -->
     <Modal :show="showSuggest" title="Saran Harga dari Keterangan" size="lg" @close="showSuggest = false">
-      <div v-if="suggestions.length" class="space-y-3">
+      <div v-if="!props.saran" class="flex items-center justify-center gap-3 py-10">
+        <Spinner />
+        <span class="text-sm text-ink-muted">Memuat saran harga…</span>
+      </div>
+      <Banner v-else-if="saranData.conn_error" variant="warning" :message="saranData.conn_error" />
+      <div v-else-if="saranRows.length" class="space-y-3">
         <Banner
           variant="info"
-          message="Harga saran diambil dari nominal di kolom keterangan tiap barang. Terapkan untuk menyamakan harga jual satuan dasar dengan nominal tersebut."
+          message="Harga saran diambil dari nominal di kolom keterangan tiap barang, diurutkan barang dengan %/margin eksplisit duluan. Ubah harga lewat Edit Barang secara manual."
         />
         <div class="max-h-[55vh] overflow-y-auto scroll-slim">
           <table class="w-full text-sm">
             <thead class="sticky top-0 bg-surface">
               <tr class="text-left text-ink-muted">
                 <th class="py-1.5">Barang</th>
+                <th class="py-1.5">Keterangan</th>
                 <th class="py-1.5 text-right">Sekarang</th>
                 <th class="py-1.5 text-right">Saran</th>
                 <th class="py-1.5 text-right">Selisih</th>
@@ -432,18 +433,21 @@ async function openRiwayat(item) {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="s in suggestions" :key="s.kd_barang + s.kd_satuan" class="border-t border-border-default">
+              <tr v-for="s in saranRows" :key="s.kd_barang + s.kd_satuan" class="border-t border-border-default">
                 <td class="py-1.5">
                   <p class="font-mono text-[11px] text-ink-muted">{{ s.kd_barang }} · {{ s.satuan }}</p>
                   <p class="font-medium text-ink">{{ s.nama }}</p>
                 </td>
+                <td class="py-1.5 max-w-[14rem] truncate text-xs text-ink-subtle" :title="s.keterangan">{{ s.keterangan }}</td>
                 <td class="py-1.5 text-right text-ink-muted tabular-nums">{{ rupiah(s.harga_lama) }}</td>
                 <td class="py-1.5 text-right font-semibold text-ink tabular-nums">{{ rupiah(s.harga_baru) }}</td>
                 <td :class="['py-1.5 text-right font-medium tabular-nums', s.selisih < 0 ? 'text-danger-600' : 'text-success-700']">
                   {{ s.selisih > 0 ? "+" : "" }}{{ rupiah(s.selisih) }}
                 </td>
                 <td class="py-1.5 text-right">
-                  <Button size="sm" variant="yellow-outline" :loading="suggestApplying" @click="applyOne(s)">Terapkan</Button>
+                  <Button size="sm" variant="yellow-outline" :loading="editLoadingKd === s.kd_barang" @click="openEditByCode(s.kd_barang)">
+                    Edit
+                  </Button>
                 </td>
               </tr>
             </tbody>
@@ -455,20 +459,6 @@ async function openRiwayat(item) {
       </p>
       <template #footer>
         <Button variant="ghost" @click="showSuggest = false">Tutup</Button>
-        <Button v-if="suggestions.length" variant="primary" :loading="suggestApplying" @click="confirmBulk = true">
-          Terapkan Semua ({{ suggestions.length }})
-        </Button>
-      </template>
-    </Modal>
-
-    <Modal :show="confirmBulk" title="Terapkan Semua Saran Harga?" @close="confirmBulk = false">
-      <Banner
-        variant="warning"
-        :message="`${suggestions.length} harga akan diperbarui langsung ke server aktif dan berlaku untuk transaksi berikutnya. Lanjutkan?`"
-      />
-      <template #footer>
-        <Button variant="ghost" @click="confirmBulk = false">Batal</Button>
-        <Button variant="primary" :loading="suggestApplying" @click="applyAll">Ya, Terapkan Semua</Button>
       </template>
     </Modal>
   </AdminLayout>

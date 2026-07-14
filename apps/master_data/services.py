@@ -54,7 +54,8 @@ def list_products(profile, search: str = "", kd_kategori: str = "") -> list[dict
 
     with mssql.cursor(profile) as cur:
         cur.execute(
-            f"SELECT TOP {MAX_ROWS} kd_barang, kd_kategori, nama, status "
+            f"SELECT kd_barang, kd_kategori, kd_jenis_bahan, kd_model, kd_merk, kd_warna, "
+            f"ukuran, nama, keterangan, pabrik, status, status_pinjam "
             f"FROM m_barang WHERE {where_sql} ORDER BY nama",
             params,
         )
@@ -94,10 +95,18 @@ def list_products(profile, search: str = "", kd_kategori: str = "") -> list[dict
                 "nama": (b["nama"] or "").strip(),
                 "kd_kategori": (b["kd_kategori"] or "").strip(),
                 "kategori": (categories.get(b["kd_kategori"], "") or "").strip(),
+                "kd_jenis_bahan": _st(b.get("kd_jenis_bahan")),
+                "kd_model": _st(b.get("kd_model")),
+                "kd_merk": _st(b.get("kd_merk")),
+                "kd_warna": _st(b.get("kd_warna")),
+                "ukuran": _st(b.get("ukuran")),
+                "keterangan": _st(b.get("keterangan")),
+                "pabrik": _st(b.get("pabrik")),
                 "satuan": (satuan_names.get(price.get("kd_satuan"), "") or "").strip(),
                 "harga_jual": _f(price.get("harga_jual")),
                 "stok": _f(stok_by_barang.get(kd, 0)),
                 "status": _active(b["status"]),
+                "status_pinjam": _st(b.get("status_pinjam")),
             }
         )
     return products
@@ -121,8 +130,9 @@ def list_customers(profile, search: str = "") -> list[dict]:
 
     with mssql.cursor(profile) as cur:
         cur.execute(
-            f"SELECT TOP {MAX_ROWS} kd_customer, nama, alamat, hp, email, point, "
-            f"limit_kredit, status FROM m_customer WHERE {where_sql} ORDER BY nama",
+            f"SELECT kd_customer, kd_kota, nama, alamat, telepon, fax, kontak, hp, email, "
+            f"point, limit_kredit, disc, status, parent, keterangan, npwp_no, nppkp_no, npwp_nama, npwp_alamat "
+            f"FROM m_customer WHERE {where_sql} ORDER BY nama",
             params,
         )
         rows = _dictify(cur)
@@ -130,13 +140,24 @@ def list_customers(profile, search: str = "") -> list[dict]:
     return [
         {
             "kd_customer": (r["kd_customer"] or "").strip(),
+            "kd_kota": _st(r.get("kd_kota")),
             "nama": (r["nama"] or "").strip(),
             "alamat": (r["alamat"] or "").strip(),
+            "telepon": _st(r.get("telepon")),
+            "fax": _st(r.get("fax")),
+            "kontak": _st(r.get("kontak")),
             "hp": (r["hp"] or "").strip(),
             "email": (r["email"] or "").strip(),
             "point": _f(r["point"]),
             "limit_kredit": _f(r["limit_kredit"]),
+            "disc": _f(r.get("disc")),
             "status": _active(r["status"]),
+            "parent": _st(r.get("parent")),
+            "keterangan": _st(r.get("keterangan")),
+            "npwp_no": _st(r.get("npwp_no")),
+            "nppkp_no": _st(r.get("nppkp_no")),
+            "npwp_nama": _st(r.get("npwp_nama")),
+            "npwp_alamat": _st(r.get("npwp_alamat")),
         }
         for r in rows
     ]
@@ -320,7 +341,14 @@ def list_saran_harga(profile) -> list[dict]:
             "harga_baru": target,
             "selisih": target - harga,
         })
-    out.sort(key=lambda r: r["nama"])
+    # Prioritaskan barang yang keterangannya eksplisit soal %/margin, mis.
+    # "ECER 3.450.000(50%)" — sinyal paling kuat kalau nominal itu memang harga
+    # jual yang disengaja, bukan sekadar catatan bebas.
+    def _priority(r):
+        ket = r["keterangan"].lower()
+        return 0 if ("%" in ket or "margin" in ket) else 1
+
+    out.sort(key=lambda r: (_priority(r), r["nama"]))
     return out
 
 

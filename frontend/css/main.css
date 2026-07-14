@@ -297,6 +297,14 @@ h1, h2, h3, h4, h5, h6 {
   animation: pulse-glow 2s infinite;
 }
 
+@keyframes loading-bar {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.animate-loading-bar {
+  animation: loading-bar 1.2s ease-in-out infinite;
+}
+
 /* Seamless, unobtrusive scrollbars for scroll regions. */
 .scroll-slim {
   scrollbar-width: thin;
@@ -320,6 +328,7 @@ h1, h2, h3, h4, h5, h6 {
 
 @media (prefers-reduced-motion: reduce) {
   .page-enter, .stagger-1, .stagger-2, .stagger-3, .stagger-4, .slide-right-enter { animation: none; opacity: 1; }
+  .animate-loading-bar { animation: none; width: 100%; transform: none; }
   .mecha-card { transition: none; transform: none; }
 }
 

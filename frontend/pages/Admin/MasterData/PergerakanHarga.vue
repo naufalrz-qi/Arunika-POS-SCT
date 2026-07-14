@@ -7,7 +7,6 @@ import Input from "@/components/ui/Input.vue";
 import Select from "@/components/ui/Select.vue";
 import Button from "@/components/ui/Button.vue";
 import Banner from "@/components/ui/Banner.vue";
-import Modal from "@/components/ui/Modal.vue";
 import ReportView from "@/components/report/ReportView.vue";
 import LoadingCard from "@/components/ui/LoadingCard.vue";
 import BarangEditModal from "@/components/master/BarangEditModal.vue";
@@ -114,31 +113,6 @@ async function openEdit(kd_barang) {
   }
 }
 
-// --- Terapkan saran harga (endpoint bulk yang sama dengan Update Barang) ---
-const applying = ref(false);
-const confirmBulk = ref(false);
-
-function applySaran(list) {
-  if (!list.length) return;
-  applying.value = true;
-  router.post(
-    "/admin-panel/master/update-barang/harga-bulk",
-    {
-      items: list.map((s) => ({ kd_barang: s.kd_barang, nama: s.nama, kd_satuan: s.kd_satuan, harga: s.harga_baru })),
-      redirect_to: currentUrl.value,
-    },
-    {
-      preserveScroll: true,
-      onSuccess: () => ui.pushToast(`${list.length} harga diterapkan.`, "success"),
-      onFinish: () => (applying.value = false),
-    },
-  );
-}
-
-function applyAll() {
-  confirmBulk.value = false;
-  applySaran(saran.value);
-}
 </script>
 
 <template>
@@ -276,14 +250,6 @@ function applyAll() {
             </div>
           </template>
 
-          <template #summary>
-            <div v-if="saran.length && saranIsActive" class="flex justify-end">
-              <Button variant="primary" :loading="applying" @click="confirmBulk = true">
-                Terapkan Semua ({{ saran.length }})
-              </Button>
-            </div>
-          </template>
-
           <template #cell-harga_lama="{ value }">
             <span class="text-ink-muted tabular-nums">{{ rupiah(value) }}</span>
           </template>
@@ -296,27 +262,16 @@ function applyAll() {
             </span>
           </template>
           <template #cell-aksi="{ row }">
-            <div class="flex justify-end gap-1.5">
-              <Button
-                size="sm"
-                variant="yellow-outline"
-                :disabled="!saranIsActive"
-                :loading="applying"
-                @click="applySaran([row])"
-              >
-                Terapkan
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                :disabled="!saranIsActive"
-                :loading="editLoadingKd === row.kd_barang"
-                :title="saranIsActive ? 'Edit harga & status barang' : 'Hanya untuk koneksi aktif'"
-                @click="openEdit(row.kd_barang)"
-              >
-                Edit
-              </Button>
-            </div>
+            <Button
+              size="sm"
+              variant="yellow-outline"
+              :disabled="!saranIsActive"
+              :loading="editLoadingKd === row.kd_barang"
+              :title="saranIsActive ? 'Edit harga & status barang' : 'Hanya untuk koneksi aktif'"
+              @click="openEdit(row.kd_barang)"
+            >
+              Edit
+            </Button>
           </template>
         </ReportView>
       </div>
@@ -324,16 +279,5 @@ function applyAll() {
 
     <!-- Modal edit — komponen yang sama persis dengan Update Barang -->
     <BarangEditModal :item="editItem" :is-retail="isRetail" :redirect-to="currentUrl" @close="editItem = null" />
-
-    <Modal :show="confirmBulk" title="Terapkan Semua Saran Harga?" @close="confirmBulk = false">
-      <Banner
-        variant="warning"
-        :message="`${saran.length} harga akan diperbarui langsung ke server aktif dan berlaku untuk transaksi berikutnya. Lanjutkan?`"
-      />
-      <template #footer>
-        <Button variant="ghost" @click="confirmBulk = false">Batal</Button>
-        <Button variant="primary" :loading="applying" @click="applyAll">Ya, Terapkan Semua</Button>
-      </template>
-    </Modal>
   </AdminLayout>
 </template>
