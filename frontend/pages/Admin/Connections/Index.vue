@@ -1,7 +1,9 @@
 <script setup>
 import { computed, ref } from "vue";
 import { useForm, router } from "@inertiajs/vue3";
+import { storeToRefs } from "pinia";
 import axios from "axios";
+import { useConnectionStore } from "@/stores/connection";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
@@ -16,6 +18,9 @@ const props = defineProps({
   connections: { type: Array, default: () => [] },
   db_types: { type: Array, default: () => ["gudang", "grosir", "retail"] },
 });
+
+// Koneksi aktif SESI user ini (per-user, dari shared prop active_connection).
+const { active } = storeToRefs(useConnectionStore());
 
 const typeOptions = computed(() =>
   props.db_types.map((t) => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) })),
@@ -43,7 +48,7 @@ const columns = [
   { key: "host", label: "Host : Port" },
   { key: "db_name", label: "Database", sortable: true },
   { key: "username", label: "User" },
-  { key: "is_default", label: "Default", align: "center" },
+  { key: "is_default", label: "Koneksi", align: "center" },
   { key: "test", label: "Test", align: "center" },
   { key: "indexing", label: "Indexing", align: "center" },
   { key: "actions", label: "", align: "right" },
@@ -83,7 +88,8 @@ async function checkIndexes(conn) {
 const statusVariant = { exists: "neutral", created: "success", failed: "danger" };
 const statusLabel = { exists: "Sudah ada", created: "Dibuat", failed: "Gagal" };
 
-function setDefault(conn) {
+function useConnection(conn) {
+  // Pilih koneksi ini untuk SESI user ini (tak mengubah user lain).
   router.post(`/admin-panel/connections/${conn.id}/set-default`, {}, { preserveScroll: true });
 }
 
@@ -148,10 +154,19 @@ function confirmDelete() {
         </template>
 
         <template #cell-is_default="{ row }">
-          <Badge v-if="row.is_default" variant="brand">Default</Badge>
-          <button v-else class="text-xs text-brand-600 hover:underline" @click="setDefault(row)">
-            Jadikan default
-          </button>
+          <div class="flex flex-col items-center gap-1">
+            <Badge v-if="row.id === active?.id" variant="success">Aktif (sesi Anda)</Badge>
+            <button v-else class="text-xs text-brand-600 hover:underline" @click="useConnection(row)">
+              Pakai koneksi ini
+            </button>
+            <span
+              v-if="row.is_default"
+              class="text-[10px] text-ink-subtle"
+              title="Koneksi default untuk tugas latar (snapshot & sync) saat tidak ada sesi user"
+            >
+              default sistem
+            </span>
+          </div>
         </template>
 
         <template #cell-test="{ row }">
