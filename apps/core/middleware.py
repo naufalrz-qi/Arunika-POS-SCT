@@ -32,13 +32,21 @@ def _auth_user_dict(user):
 
 def inertia_share(get_response):
     def middleware(request):
+        from core import mssql
+
         user = getattr(request, "user", None)
+
+        # Per-user active connection: stamp THIS session's chosen profile for the
+        # life of the request so every get_active_profile() call (shared props,
+        # views, services) resolves to the current user's pick — not a global one
+        # another user could change. Cleared in finally so the pooled thread never
+        # carries a choice into the next request.
+        session = getattr(request, "session", None)
+        mssql.set_request_profile_id(session.get("active_profile_id") if session else None)
 
         def active_connection():
             # Lazy: only hit the DB on Inertia renders, not asset/XHR noise.
-            from core.mssql import get_active_profile
-
-            profile = get_active_profile()
+            profile = mssql.get_active_profile()
             return profile.as_dict() if profile else None
 
         def connections_list():
@@ -58,7 +66,10 @@ def inertia_share(get_response):
                 "error": request.session.pop("flash_error", None),
             },
         )
-        return get_response(request)
+        try:
+            return get_response(request)
+        finally:
+            mssql.clear_request_profile()
 
     return middleware
 

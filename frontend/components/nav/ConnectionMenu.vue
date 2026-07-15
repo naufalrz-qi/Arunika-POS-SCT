@@ -14,7 +14,7 @@ const dot = (status) => (status === "online" ? "bg-success-500" : status === "of
 
 function choose(c) {
   open.value = false;
-  if (!c.is_default) store.switchConnection(c.id);
+  if (c.id !== active.value?.id) store.switchConnection(c.id);
 }
 </script>
 
@@ -59,7 +59,7 @@ function choose(c) {
               {{ c.name }}
               <span class="text-xs text-ink-muted">· {{ typeName[c.db_type] || c.db_type }}</span>
             </span>
-            <span v-if="c.is_default" class="shrink-0 rounded bg-brand-bg px-1.5 py-0.5 text-xs font-medium text-brand-fg">
+            <span v-if="c.id === active?.id" class="shrink-0 rounded bg-brand-bg px-1.5 py-0.5 text-xs font-medium text-brand-fg">
               Aktif
             </span>
           </button>

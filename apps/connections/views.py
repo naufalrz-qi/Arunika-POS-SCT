@@ -71,10 +71,13 @@ def connections_delete(request, conn_id):
 
 
 def connections_set_default(request, conn_id):
+    # Per-user: store the pick in THIS user's session only, so switching a
+    # connection no longer changes it for everyone. The global is_default remains
+    # the fallback for background jobs (scheduler / manage.py) that have no session.
     profile = get_object_or_404(ServerProfile, pk=conn_id)
-    profile.make_default()
-    log_activity(request, "konfigurasi", f"Set default {profile.db_type}: {profile.name}")
-    request.session["flash_success"] = "Koneksi default diperbarui."
+    request.session["active_profile_id"] = profile.pk
+    log_activity(request, "konfigurasi", f"Pilih koneksi {profile.db_type}: {profile.name}")
+    request.session["flash_success"] = f"Koneksi aktif: {profile.name} (untuk sesi Anda)."
     data = get_data(request)
     redirect_to = data.get("redirect_to") or "/admin-panel/connections"
     return redirect(redirect_to)

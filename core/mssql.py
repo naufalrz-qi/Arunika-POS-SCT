@@ -14,12 +14,35 @@ the same trusted LAN as the app server.
 """
 from __future__ import annotations
 
+import threading
 import time
 from contextlib import contextmanager
 
 import pyodbc
 
 from core.encryption import EncryptionKeyMissing, PasswordDecryptError, decrypt_checked
+
+# Per-request active connection. Each HTTP request may target a different
+# ServerProfile chosen by THAT user (stored in their session, stamped here by
+# apps.core.middleware.inertia_share for the life of the request). Thread-local
+# so concurrent users on the waitress thread-pool don't clobber each other; the
+# middleware clears it in a finally so a pooled thread never leaks a choice into
+# the next request. Background code with no request (scheduler, manage.py
+# commands) leaves it unset → get_active_profile falls back to the global
+# is_default. This replaces the old single global active connection.
+_request_local = threading.local()
+
+
+def set_request_profile_id(profile_id) -> None:
+    _request_local.profile_id = profile_id
+
+
+def clear_request_profile() -> None:
+    _request_local.profile_id = None
+
+
+def _request_profile_id():
+    return getattr(_request_local, "profile_id", None)
 
 # Preferred newest-first; picks whichever is actually registered on this
 # machine instead of hard-failing when only an older/legacy driver is present.
@@ -137,15 +160,24 @@ def report_cursor(profile):
 
 
 def get_active_profile(db_type: str | None = None):
-    """Return the single active ServerProfile (global), or None.
+    """Return the ServerProfile active for the current request, or None.
 
-    Satu koneksi aktif untuk seluruh aplikasi — tipe (gudang/grosir/retail) hanya
-    menentukan perilaku, bukan koneksi mana. `db_type` opsional untuk menyaring.
+    Per-user: resolves the profile the current user picked (their session, via
+    the request-local set by middleware). Falls back to the global `is_default`
+    when there is no request-scoped choice (background jobs) or the chosen
+    profile no longer exists / doesn't match `db_type`. `db_type` optional filter.
     """
     from apps.connections.models import ServerProfile
 
-    qs = ServerProfile.objects.filter(db_type=db_type) if db_type else ServerProfile.objects.all()
-    profile = qs.filter(is_default=True).first() or qs.first()
+    profile = None
+    pid = _request_profile_id()
+    if pid is not None:
+        profile = ServerProfile.objects.filter(pk=pid).first()
+        if profile and db_type and profile.db_type != db_type:
+            profile = None  # session choice doesn't match requested type → fall back
+    if profile is None:
+        qs = ServerProfile.objects.filter(db_type=db_type) if db_type else ServerProfile.objects.all()
+        profile = qs.filter(is_default=True).first() or qs.first()
     if profile:
         # Auto-build the report/stock indexes once per profile per process, in
         # the background — new connections get them without a manual command.
