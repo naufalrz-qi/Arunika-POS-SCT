@@ -79,12 +79,30 @@ def _run_due_harga(now, profile) -> None:
 
 
 def _run_due_stok(now, profile) -> None:
-    """Rebuild snapshot stok bila hari ini belum & sudah lewat jam minimum."""
-    from apps.core.models import StokSnapshotRun
-    from apps.inventory.services import snapshot_stok
+    """Rebuild snapshot stok untuk `profile`: base beku (bulanan) lalu live (harian).
 
-    if now.hour < _hour("STOK_SNAPSHOT_HOUR", 3):
+    Opportunistic — jam minimum default 0, jadi jalan di kesempatan pertama saat
+    server hidup (server user cuma nyala jam kerja, bukan dini hari)."""
+    from apps.core.models import StokSnapshotBaseRun, StokSnapshotRun
+    from apps.inventory.services import _base_date, snapshot_stok, snapshot_stok_base
+
+    if now.hour < _hour("STOK_SNAPSHOT_HOUR", 0):
         return
+
+    # (a) BASE beku: cukup sekali per bulan-base (berat, scan sejak tutup buku).
+    base_month = _base_date(now).strftime("%Y-%m")
+    if not StokSnapshotBaseRun.objects.filter(profile=profile, base_month=base_month).exists():
+        try:
+            res = snapshot_stok_base(profile)
+        except Exception as exc:  # server mati / pyodbc — hentikan profil ini, retry tick berikutnya
+            log.warning("snapshot_stok_base terjadwal gagal (%s): %s", profile.name, exc)
+            return
+        StokSnapshotBaseRun.objects.create(
+            profile=profile, profile_name=profile.name, base_month=base_month, rows=res["rows"],
+        )
+        log.info("snapshot_stok_base %s (%s): %s baris", profile.name, base_month, res["rows"])
+
+    # (b) LIVE: sekali per hari (ringan — hanya delta sejak base).
     today = now.date()
     if StokSnapshotRun.objects.filter(profile=profile, run_date=today).exists():
         return
@@ -100,18 +118,24 @@ def _run_due_stok(now, profile) -> None:
 
 
 def _run_due_jobs() -> None:
+    """Jalankan snapshot untuk SEMUA profil (bukan hanya koneksi aktif) — tiap
+    server/database butuh snapshotnya sendiri. Berurutan, per-profil terisolasi:
+    satu server mati/gagal tak menghentikan yang lain."""
     from django.utils import timezone
 
-    from core import mssql
+    from apps.connections.models import ServerProfile
 
     now = timezone.localtime()
-    profile = mssql.get_active_profile()
-    if not profile:
-        return
-    if _harga_enabled():
-        _run_due_harga(now, profile)
-    if _stok_enabled():
-        _run_due_stok(now, profile)
+    stok_on = _stok_enabled()
+    harga_on = _harga_enabled()
+    for profile in ServerProfile.objects.all():
+        try:
+            if stok_on:
+                _run_due_stok(now, profile)
+            if harga_on:
+                _run_due_harga(now, profile)
+        except Exception:  # pragma: no cover — profil gagal tak hentikan lainnya
+            log.exception("scheduler snapshot gagal untuk profil %s", getattr(profile, "name", "?"))
 
 
 def _loop() -> None:
@@ -136,7 +160,7 @@ def start_scheduler() -> None:
         _started = True
     threading.Thread(target=_loop, name="snapshot-scheduler", daemon=True).start()
     log.info(
-        "Scheduler snapshot aktif (interval %ss; harga=%s jam≥%s, stok=%s jam≥%s).",
+        "Scheduler snapshot aktif (interval %ss, semua profil; harga=%s jam≥%s, stok=%s jam≥%s).",
         _interval(), _harga_enabled(), _hour("HARGA_SNAPSHOT_HOUR", 0),
-        _stok_enabled(), _hour("STOK_SNAPSHOT_HOUR", 3),
+        _stok_enabled(), _hour("STOK_SNAPSHOT_HOUR", 0),
     )

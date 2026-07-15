@@ -45,9 +45,10 @@ Set these in the shell or `.env` before running:
 | `DJANGO_VITE_DEV` | `DEBUG` | Vite dev mode; `0` in prod. |
 | `SESSION_COOKIE_SECURE` / `CSRF_COOKIE_SECURE` | `0` | Set `1` when fronted by HTTPS (else cookies never send over plain-HTTP LAN → login breaks). |
 | `SECURE_HSTS_SECONDS` | `0` | Set e.g. `31536000` only under HTTPS. |
-| `STOK_SNAPSHOT_ENABLED` / `STOK_SNAPSHOT_HOUR` | `1` / `3` | Rebuild snapshot saldo stok harian (jalur baca Stok Akhir cepat). Jam beda dari snapshot harga (0). |
+| `STOK_SNAPSHOT_ENABLED` / `STOK_SNAPSHOT_HOUR` | `1` / `0` | Snapshot saldo stok untuk SEMUA server (dua lapis: base beku + live). `HOUR=0` = jalan saat server pertama kali hidup tiap hari (server toko cuma nyala jam kerja). |
+| `STOK_SNAPSHOT_BASE_MONTHS` | `13` | Window immutable; live rebuild cukup scan sekian bulan terakhir, bukan seluruh histori. |
 
-> **Catatan keamanan operasional:** `seed_dev` (password = username) menolak jalan saat `DEBUG=0`. Di produksi buat user & profil koneksi manual. Snapshot stok/harga jalan sendiri via scheduler in-process selama server hidup; untuk mesin yang sering mati, jadwalkan `manage.py snapshot_stok` / `snapshot_harga` lewat Windows Task Scheduler.
+> **Catatan keamanan operasional:** `seed_dev` (password = username) menolak jalan saat `DEBUG=0`. Di produksi buat user & profil koneksi manual. Snapshot stok/harga jalan sendiri via scheduler in-process untuk **semua** profil selama server hidup (berurutan, per-profil terisolasi). `HOUR=0` supaya jalan di jam kerja (server toko mati saat dini hari). Untuk backfill awal / mesin yang sering mati, jalankan `manage.py snapshot_stok` (semua profil; `--base` untuk paksa base) / `manage.py snapshot_harga` manual atau lewat Windows Task Scheduler.
 
 ## Performance (scaling to 200–500 req/s)
 

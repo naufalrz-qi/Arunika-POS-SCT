@@ -16,7 +16,6 @@ from django.core.management.base import BaseCommand, CommandError
 
 from apps.connections.models import ServerProfile
 from apps.master_data.services import snapshot_harga_changes
-from core import mssql
 
 
 class Command(BaseCommand):
@@ -39,22 +38,27 @@ class Command(BaseCommand):
             self.stdout.write(f"Prune: {n} baris log dihapus (> {opts['prune_days']} hari).")
 
         if opts["profile"]:
-            profile = ServerProfile.objects.filter(pk=opts["profile"]).first()
-            if not profile:
+            profiles = list(ServerProfile.objects.filter(pk=opts["profile"]))
+            if not profiles:
                 raise CommandError(f"Profile {opts['profile']} tidak ditemukan.")
         else:
-            profile = mssql.get_active_profile()
-            if not profile:
-                raise CommandError("Tidak ada koneksi aktif.")
+            profiles = list(ServerProfile.objects.all())
+            if not profiles:
+                raise CommandError("Belum ada profil koneksi.")
 
-        self.stdout.write(f"Snapshot harga: {profile.name}")
-        try:
-            res = snapshot_harga_changes(profile)
-        except pyodbc.Error as exc:
-            raise CommandError(f"Gagal baca harga dari {profile.name}: {exc.args[-1] if exc.args else exc}")
-
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"  {res['changes']} perubahan, {res['seeded']} SKU baru di-seed, {res['total']} SKU dibaca."
+        failed = 0
+        for profile in profiles:
+            self.stdout.write(f"Snapshot harga: {profile.name}")
+            try:
+                res = snapshot_harga_changes(profile)
+            except pyodbc.Error as exc:
+                failed += 1
+                self.stderr.write(self.style.ERROR(f"  gagal: {exc.args[-1] if exc.args else exc}"))
+                continue
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"  {res['changes']} perubahan, {res['seeded']} SKU baru di-seed, {res['total']} SKU dibaca."
+                )
             )
-        )
+        if failed:
+            raise CommandError(f"{failed} dari {len(profiles)} profil gagal.")

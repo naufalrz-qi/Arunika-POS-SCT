@@ -308,3 +308,27 @@ class StokSnapshotRun(models.Model):
 
     def __str__(self) -> str:
         return f"{self.run_date} {self.profile_name}: {self.rows} baris"
+
+
+class StokSnapshotBaseRun(models.Model):
+    """Penanda rebuild BASE snapshot (beku ~13 bln) per (profile, bulan-base).
+    Base cukup dibangun sekali per bulan kalender base — marker ini mencegah
+    rebuild penuh (berat, scan sejak tutup buku) berulang di bulan yang sama.
+    """
+
+    profile = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True, on_delete=models.SET_NULL, related_name="stok_snapshot_base_runs"
+    )
+    profile_name = models.CharField(max_length=100, blank=True)
+    base_month = models.CharField(max_length=7)  # "YYYY-MM" dari base_date
+    ran_at = models.DateTimeField(auto_now_add=True)
+    rows = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["-ran_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["profile", "base_month"], name="unique_stok_snapshot_base_per_month")
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.base_month} {self.profile_name}: {self.rows} baris"
