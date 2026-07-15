@@ -45,3 +45,28 @@ class Command(BaseCommand):
                 self.stderr.write(f"  {k}: py={agg_py.get(k)} sql={agg_sql.get(k)}")
             raise CommandError(f"{len(bad)} key beda (dari {len(agg_py)}).")
         self.stdout.write(self.style.SUCCESS(f"OK: {len(agg_py)} key identik ({len(moves)} movement)."))
+
+        # --- Snapshot check: snapshot+delta == full recompute (Fase 1 §1.6) ---
+        from apps.inventory.services import _snapshot_meta
+
+        with mssql.cursor(profile) as cur:
+            if _snapshot_meta(cur) is None:
+                self.stdout.write("Snapshot: pos_stok_snapshot belum ada/kosong — lewati cek snapshot.")
+                return
+            snap = {  # jalur snapshot+delta
+                (_k(r["kd_divisi"]), _k(r["kd_barang"])): _f(r["stok_awal"]) + _f(r["masuk"]) - _f(r["keluar"])
+                for r in _movement_sums(cur, date_to=date_to, use_snapshot=True)
+            }
+        # agg_sql di atas = jalur penuh (use_snapshot default True tapi tanpa snapshot
+        # saat itu?) — hitung ulang penuh eksplisit untuk perbandingan yang jelas.
+        with mssql.cursor(profile) as cur:
+            full = {
+                (_k(r["kd_divisi"]), _k(r["kd_barang"])): _f(r["stok_awal"]) + _f(r["masuk"]) - _f(r["keluar"])
+                for r in _movement_sums(cur, date_to=date_to, use_snapshot=False)
+            }
+        bad2 = [k for k in set(snap) | set(full) if abs(snap.get(k, 0.0) - full.get(k, 0.0)) > 0.001]
+        if bad2:
+            for k in bad2[:10]:
+                self.stderr.write(f"  {k}: snapshot={snap.get(k)} full={full.get(k)}")
+            raise CommandError(f"Snapshot: {len(bad2)} key beda vs recompute penuh (dari {len(full)}).")
+        self.stdout.write(self.style.SUCCESS(f"Snapshot OK: {len(full)} key identik (snapshot+delta == penuh)."))

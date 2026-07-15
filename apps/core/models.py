@@ -284,3 +284,27 @@ class HargaSnapshotRun(models.Model):
 
     def __str__(self) -> str:
         return f"{self.run_date} {self.profile_name}: {self.changes} perubahan"
+
+
+class StokSnapshotRun(models.Model):
+    """Penanda satu kali jalan snapshot stok per (profile, tanggal). Sama pola
+    dengan HargaSnapshotRun: dipakai scheduler in-process supaya rebuild penuh
+    (berat) cukup sekali/hari, sekaligus info "terakhir dijalankan".
+    """
+
+    profile = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True, on_delete=models.SET_NULL, related_name="stok_snapshot_runs"
+    )
+    profile_name = models.CharField(max_length=100, blank=True)
+    run_date = models.DateField()
+    ran_at = models.DateTimeField(auto_now_add=True)
+    rows = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["-ran_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["profile", "run_date"], name="unique_stok_snapshot_run_per_day")
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.run_date} {self.profile_name}: {self.rows} baris"

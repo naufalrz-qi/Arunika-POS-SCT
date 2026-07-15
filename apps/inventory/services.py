@@ -10,11 +10,27 @@ debet, kredit, kd_satuan, harga, jenis.
 from __future__ import annotations
 
 import datetime as dt
+import os
 from decimal import Decimal
 
 from core import mssql
 from core.cache import _cached, invalidate_master_cache  # noqa: F401 (re-exported)
 from apps.core.reporting import dictify as _dictify
+
+# Rolling stock-balance snapshot: SATU set baris terkini per server (bukan
+# harian bertumpuk) di tabel `pos_stok_snapshot` pada DB legacy. Membuat blok
+# "Stok Awal" jalur baca berhenti me-re-agregasi SELURUH histori sejak tutup
+# buku (bisa bertahun-tahun) — cukup baca saldo snapshot + delta transaksi sejak
+# tanggal snapshot. Dibangun ulang PENUH tiap malam (self-correcting; error
+# window maks 1 hari untuk transaksi backdate — lihat implementation_plan.md §1.5).
+SNAPSHOT_TABLE = "pos_stok_snapshot"
+
+
+def _snapshot_max_age_days() -> int:
+    try:
+        return max(1, int(os.environ.get("STOK_SNAPSHOT_MAX_AGE_DAYS", "7")))
+    except ValueError:
+        return 7
 
 
 def _f(v) -> float:
@@ -46,6 +62,36 @@ def _closing_date(cur) -> dt.datetime:
     return row[0] if row and row[0] else dt.datetime(1900, 1, 1)
 
 
+def _snapshot_meta(cur):
+    """Tanggal set snapshot stok terkini (datetime) atau None bila tabel belum
+    ada / kosong. Query ringan (satu baris) — dipanggil per _movement_sums."""
+    cur.execute("SELECT OBJECT_ID(?)", [SNAPSHOT_TABLE])
+    if cur.fetchone()[0] is None:
+        return None
+    cur.execute(f"SELECT MAX(tanggal) FROM {SNAPSHOT_TABLE}")
+    row = cur.fetchone()
+    return row[0] if row and row[0] else None
+
+
+def _snapshot_date_if_usable(cur, date_from, date_to):
+    """Kembalikan tanggal snapshot bila boleh dipakai sebagai stok awal untuk
+    query ini, else None (→ jalur lama re-agregasi penuh).
+
+    v1 forward-only: snapshot hanya menahan saldo SAMPAI tanggalnya, jadi query
+    yang butuh saldo SEBELUM tanggal snapshot (date_to/date_from < snapshot)
+    tak bisa dilayani → fallback. Juga fallback bila snapshot basi (> N hari)."""
+    snap = _snapshot_meta(cur)
+    if snap is None:
+        return None
+    if (dt.datetime.now() - snap).days > _snapshot_max_age_days():
+        return None
+    if date_to is not None and date_to < snap:
+        return None
+    if date_from is not None and date_from < snap:
+        return None
+    return snap
+
+
 def _unit_factors(cur) -> dict:
     """(kd_barang, kd_satuan) -> jumlah (qty in smallest unit per 1 of this unit)."""
     cur.execute("SELECT kd_barang, kd_satuan, jumlah FROM m_barang_satuan")
@@ -54,15 +100,25 @@ def _unit_factors(cur) -> dict:
 
 # --- Movement set (the 9 UNION ALL sources, table-level) --------------------
 
-def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date_from=None):
+def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date_from=None, snapshot_date=None):
     """Build the UNION ALL movement query + params. Optional filters are applied
     inside every source so the DB can seek instead of scanning.
 
     `date_from` bounds transaction-based sources ([1]-[8]) only — never block
     [0] Stok Awal (a point-in-time opening balance, not a dated movement).
     Callers that need pre-date_from history for a running balance (stock_card,
-    _movement_sums) must not pass it."""
+    _movement_sums) must not pass it.
+
+    `snapshot_date` (opt): when set, block [0] Stok Awal is read from the rolling
+    `pos_stok_snapshot` (saldo base-unit at that date) INSTEAD of re-aggregating
+    from m_barang_divisi + full history since closing, and the transaction
+    sources are bounded to `tanggal > snapshot_date` instead of `> closing`.
+    Net result is identical (snapshot saldo already folds in movement
+    closing..snapshot_date) but the delta window shrinks to a few days."""
     params: list = []
+    # Transaction sources start just after the opening balance point: snapshot
+    # date when using the snapshot, else the book-closing date.
+    txn_boundary = snapshot_date if snapshot_date else closing
 
     def trans_filters(tcol, dcol, divcol):
         """Common WHERE tail for transaction-based sources (closing/date/div/barang)."""
@@ -81,24 +137,44 @@ def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date
 
     blocks: list[str] = []
 
-    # [0] Stok Awal — no date filter (it is the opening balance at closing date).
-    b0 = (
-        "SELECT bd.kd_divisi, ? AS tanggal, '0' AS no_transaksi, 'Stok Awal' AS transaksi, "
-        "bd.kd_barang, bd.stok_awal AS debet, 0 AS kredit, bs.kd_satuan, bd.harga_beli_awal AS harga, 0 AS jenis "
-        "FROM m_barang_divisi bd "
-        "INNER JOIN m_barang b ON bd.kd_barang = b.kd_barang "
-        "INNER JOIN m_kategori k ON b.kd_kategori = k.kd_kategori AND k.status <> 2 "
-        "INNER JOIN m_barang_satuan bs ON bd.kd_barang = bs.kd_barang AND bs.jumlah = 1 "
-        "WHERE 1=1"
-    )
-    params.append(closing)
-    if kd_divisi:
-        b0 += " AND bd.kd_divisi = ?"
-        params.append(kd_divisi)
-    if kd_barang:
-        b0 += " AND bd.kd_barang = ?"
-        params.append(kd_barang)
-    blocks.append(b0)
+    if snapshot_date:
+        # [0] Stok Awal dari snapshot. saldo sudah base-unit → kd_satuan NULL agar
+        # LEFT JOIN faktor di _movement_sums tak match (COALESCE(jumlah,1)=1, tanpa
+        # konversi ganda). Tagged tanggal = snapshot_date supaya jatuh ke bucket
+        # stok_awal bila date_from > snapshot_date.
+        b0 = (
+            "SELECT s.kd_divisi, ? AS tanggal, '0' AS no_transaksi, 'Stok Awal' AS transaksi, "
+            "s.kd_barang, s.saldo AS debet, 0 AS kredit, NULL AS kd_satuan, 0 AS harga, 0 AS jenis "
+            f"FROM {SNAPSHOT_TABLE} s WHERE s.tanggal = ?"
+        )
+        params.append(snapshot_date)  # tanggal tag
+        params.append(snapshot_date)  # WHERE s.tanggal = ?
+        if kd_divisi:
+            b0 += " AND s.kd_divisi = ?"
+            params.append(kd_divisi)
+        if kd_barang:
+            b0 += " AND s.kd_barang = ?"
+            params.append(kd_barang)
+        blocks.append(b0)
+    else:
+        # [0] Stok Awal — no date filter (it is the opening balance at closing date).
+        b0 = (
+            "SELECT bd.kd_divisi, ? AS tanggal, '0' AS no_transaksi, 'Stok Awal' AS transaksi, "
+            "bd.kd_barang, bd.stok_awal AS debet, 0 AS kredit, bs.kd_satuan, bd.harga_beli_awal AS harga, 0 AS jenis "
+            "FROM m_barang_divisi bd "
+            "INNER JOIN m_barang b ON bd.kd_barang = b.kd_barang "
+            "INNER JOIN m_kategori k ON b.kd_kategori = k.kd_kategori AND k.status <> 2 "
+            "INNER JOIN m_barang_satuan bs ON bd.kd_barang = bs.kd_barang AND bs.jumlah = 1 "
+            "WHERE 1=1"
+        )
+        params.append(closing)
+        if kd_divisi:
+            b0 += " AND bd.kd_divisi = ?"
+            params.append(kd_divisi)
+        if kd_barang:
+            b0 += " AND bd.kd_barang = ?"
+            params.append(kd_barang)
+        blocks.append(b0)
 
     # [1] Mutasi Keluar (-)
     c, p = trans_filters("t.tanggal", "d.kd_barang", "t.kd_divisi_asal")
@@ -108,7 +184,7 @@ def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date
         "FROM t_mutasi_stok_detail d INNER JOIN t_mutasi_stok t ON d.no_transaksi = t.no_transaksi "
         "WHERE t.tanggal > ?" + c
     )
-    params += [closing] + p
+    params += [txn_boundary] + p
 
     # [2] Mutasi Masuk (+)
     c, p = trans_filters("t.tanggal", "d.kd_barang", "t.kd_divisi_tujuan")
@@ -118,7 +194,7 @@ def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date
         "FROM t_mutasi_stok_detail d INNER JOIN t_mutasi_stok t ON d.no_transaksi = t.no_transaksi "
         "WHERE t.tanggal > ?" + c
     )
-    params += [closing] + p
+    params += [txn_boundary] + p
 
     # [3/4] Opname (status=2 masuk, else keluar)
     c, p = trans_filters("tanggal", "kd_barang", "kd_divisi")
@@ -129,7 +205,7 @@ def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date
         "kd_satuan, 0, CASE WHEN status = 2 THEN 3 ELSE 4 END "
         "FROM t_opname_stok WHERE tanggal > ?" + c
     )
-    params += [closing] + p
+    params += [txn_boundary] + p
 
     # [5] Pembelian (+)
     c, p = trans_filters("t.tanggal", "d.kd_barang", "t.kd_divisi")
@@ -139,7 +215,7 @@ def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date
         "FROM t_pembelian_detail d INNER JOIN t_pembelian t ON d.no_transaksi = t.no_transaksi "
         "WHERE t.tanggal > ? AND t.status IN (0, 1)" + c
     )
-    params += [closing] + p
+    params += [txn_boundary] + p
 
     # [6] Retur Pembelian (-)
     c, p = trans_filters("t.tanggal", "d.kd_barang", "t.kd_divisi")
@@ -149,7 +225,7 @@ def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date
         "FROM t_pembelian_retur_detail d INNER JOIN t_pembelian_retur t ON d.no_retur = t.no_retur "
         "WHERE t.tanggal > ?" + c
     )
-    params += [closing] + p
+    params += [txn_boundary] + p
 
     # [7] Penjualan (-) — non-service categories only
     c, p = trans_filters("t.tanggal", "d.kd_barang", "t.kd_divisi")
@@ -162,7 +238,7 @@ def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date
         "INNER JOIN m_kategori k ON b.kd_kategori = k.kd_kategori AND k.status <> 2 "
         "WHERE t.tanggal > ?" + c
     )
-    params += [closing] + p
+    params += [txn_boundary] + p
 
     # [8] Retur Penjualan (+)
     c, p = trans_filters("t.tanggal", "d.kd_barang", "t.kd_divisi")
@@ -172,7 +248,7 @@ def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date
         "FROM t_penjualan_retur_detail d INNER JOIN t_penjualan_retur t ON d.no_retur = t.no_retur "
         "WHERE t.tanggal > ?" + c
     )
-    params += [closing] + p
+    params += [txn_boundary] + p
 
     return "\nUNION ALL\n".join(blocks), params
 
@@ -186,7 +262,7 @@ def _fetch_movements(cur, *, kd_barang=None, kd_divisi=None, date_to=None, date_
     return _dictify(cur)
 
 
-def _movement_sums(cur, *, kd_divisi=None, date_from=None, date_to=None) -> list[dict]:
+def _movement_sums(cur, *, kd_divisi=None, date_from=None, date_to=None, use_snapshot=True) -> list[dict]:
     """Movement UNION aggregated IN SQL per (kd_divisi, kd_barang), in base units.
 
     Row transfer scales with catalog size instead of transaction count — on real
@@ -194,9 +270,16 @@ def _movement_sums(cur, *, kd_divisi=None, date_from=None, date_to=None) -> list
     time. Plain SELECT + GROUP BY only (no views/functions/SPs per PRD §5.3).
     Returns: stok_awal (movement before date_from), masuk, keluar (>= date_from);
     with date_from=None everything lands in masuk/keluar.
+
+    `use_snapshot`: when True (default) and a fresh, applicable `pos_stok_snapshot`
+    exists, the opening block reads from it and the transaction window shrinks to
+    movement since the snapshot date — same total, far less scanned. The snapshot
+    BUILDER must pass use_snapshot=False so its nightly rebuild is a full,
+    self-correcting recompute (catches backdated rows) rather than snapshot+delta.
     """
     closing = _closing_date(cur)
-    inner, params = _movement_sql(closing, kd_divisi=kd_divisi, date_to=date_to)
+    snap_date = _snapshot_date_if_usable(cur, date_from, date_to) if use_snapshot else None
+    inner, params = _movement_sql(closing, kd_divisi=kd_divisi, date_to=date_to, snapshot_date=snap_date)
     boundary = date_from or dt.datetime(1900, 1, 1)
     # MAX(jumlah) dedupes (kd_barang, kd_satuan); missing factor falls back to 1
     # like factors.get(..., 1.0) in the Python path.
@@ -218,6 +301,54 @@ def _movement_sums(cur, *, kd_divisi=None, date_from=None, date_to=None) -> list
     )
     cur.execute(sql, [boundary, boundary, boundary] + params + [boundary, boundary, boundary])
     return _dictify(cur)
+
+
+# --- Snapshot builder ------------------------------------------------------
+
+def _ensure_snapshot_table(profile) -> None:
+    """Buat `pos_stok_snapshot` di DB legacy bila belum ada (idempotent). Pola
+    DDL sama dengan apps/transactions/indexes.py (SET options + IF OBJECT_ID)."""
+    with mssql.cursor(profile) as cur:
+        cur.execute("SET ANSI_NULLS ON")
+        cur.execute("SET QUOTED_IDENTIFIER ON")
+        cur.execute(
+            f"IF OBJECT_ID('{SNAPSHOT_TABLE}', 'U') IS NULL "
+            f"CREATE TABLE {SNAPSHOT_TABLE} ("
+            "kd_divisi varchar(30) NOT NULL, kd_barang varchar(30) NOT NULL, "
+            "saldo float NOT NULL, tanggal datetime2 NOT NULL, "
+            f"CONSTRAINT PK_{SNAPSHOT_TABLE} PRIMARY KEY CLUSTERED (kd_divisi, kd_barang))"
+        )
+
+
+def snapshot_stok(profile) -> dict:
+    """Bangun ulang PENUH set snapshot saldo stok (satu set per server).
+
+    Recompute penuh via jalur lama (`use_snapshot=False`) — self-correcting,
+    menangkap transaksi backdate; jalan dini hari, bukan di request. Tulis
+    DELETE+INSERT dalam satu transaksi (fast_executemany, pola
+    cdc_sync.backfill_table). Return {"rows": n, "tanggal": snap_ts}."""
+    snap_ts = dt.datetime.now()
+    with mssql.report_cursor(profile) as rcur:
+        sums = _movement_sums(rcur, date_to=snap_ts, use_snapshot=False)
+
+    rows = []
+    for m in sums:
+        saldo = _f(m["stok_awal"]) + _f(m["masuk"]) - _f(m["keluar"])
+        if round(saldo, 3) == 0:  # simpan hanya SKU bersaldo (opening 0 = tak perlu blok)
+            continue
+        rows.append(((m["kd_divisi"] or "").strip(), (m["kd_barang"] or "").strip(), saldo, snap_ts))
+
+    _ensure_snapshot_table(profile)
+    with mssql.cursor(profile, autocommit=False) as cur:
+        cur.execute(f"DELETE FROM {SNAPSHOT_TABLE}")
+        if rows:
+            cur.fast_executemany = True
+            cur.executemany(
+                f"INSERT INTO {SNAPSHOT_TABLE} (kd_divisi, kd_barang, saldo, tanggal) VALUES (?, ?, ?, ?)",
+                rows,
+            )
+        cur.connection.commit()
+    return {"rows": len(rows), "tanggal": snap_ts}
 
 
 # --- Public services -------------------------------------------------------
