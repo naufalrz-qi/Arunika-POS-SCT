@@ -13,6 +13,7 @@ import Icon from "@/components/nav/Icon.vue";
 
 const props = defineProps({
   users: { type: Array, default: () => [] },
+  can_manage_admin: { type: Boolean, default: false },
 });
 
 const search = ref("");
@@ -32,10 +33,14 @@ const columns = [
   { key: "actions", label: "", align: "right" },
 ];
 
-const roleOptions = [
-  { value: "kasir", label: "Kasir" },
-  { value: "supervisor", label: "Supervisor" },
-];
+const roleOptions = computed(() => {
+  const base = [
+    { value: "kasir", label: "Kasir" },
+    { value: "supervisor", label: "Supervisor" },
+  ];
+  if (props.can_manage_admin) base.push({ value: "admin", label: "Admin" });
+  return base;
+});
 
 // --- Create / edit modal ---
 const showForm = ref(false);
@@ -62,11 +67,20 @@ function save() {
 
 // --- Reset password ---
 const resetTarget = ref(null);
+const resetPassword = ref("");
+function openReset(u) {
+  resetPassword.value = "";
+  resetTarget.value = u;
+}
 function confirmReset() {
-  router.post(`/admin-panel/users/save`, {}, { onFinish: () => (resetTarget.value = null) });
+  router.post(
+    `/admin-panel/users/${resetTarget.value.id}/reset-password`,
+    { password: resetPassword.value },
+    { onFinish: () => (resetTarget.value = null) },
+  );
 }
 
-// --- Deactivate ---
+// --- Activate / deactivate (toggle) ---
 const deleteTarget = ref(null);
 function confirmDelete() {
   router.delete(`/admin-panel/users/${deleteTarget.value.id}/delete`, {
@@ -88,7 +102,7 @@ function confirmDelete() {
 
       <DataTable :columns="columns" :rows="filtered" empty-message="Tidak ada user.">
         <template #cell-role="{ value }">
-          <Badge :variant="value === 'supervisor' ? 'brand' : 'neutral'" class="capitalize">{{ value }}</Badge>
+          <Badge :variant="value === 'admin' ? 'warning' : value === 'supervisor' ? 'brand' : 'neutral'" class="capitalize">{{ value }}</Badge>
         </template>
         <template #cell-is_active="{ value }">
           <Badge :variant="value ? 'success' : 'danger'">{{ value ? "Aktif" : "Nonaktif" }}</Badge>
@@ -96,8 +110,8 @@ function confirmDelete() {
         <template #cell-actions="{ row }">
           <div class="flex justify-end gap-1">
             <Button variant="ghost" size="sm" aria-label="Edit user" title="Edit user" @click="openEdit(row)"><Icon name="pencil" size="h-4 w-4" /></Button>
-            <Button variant="ghost" size="sm" aria-label="Reset password" title="Reset password" @click="resetTarget = row"><Icon name="key" size="h-4 w-4" /></Button>
-            <Button variant="ghost" size="sm" aria-label="Aktif/nonaktif user" title="Aktif/nonaktif user" @click="deleteTarget = row"><Icon name="power" size="h-4 w-4" /></Button>
+            <Button variant="ghost" size="sm" aria-label="Reset password" title="Reset password" @click="openReset(row)"><Icon name="key" size="h-4 w-4" /></Button>
+            <Button variant="ghost" size="sm" :aria-label="row.is_active ? 'Nonaktifkan user' : 'Aktifkan user'" :title="row.is_active ? 'Nonaktifkan user' : 'Aktifkan user'" @click="deleteTarget = row"><Icon name="power" size="h-4 w-4" /></Button>
           </div>
         </template>
       </DataTable>
@@ -123,25 +137,35 @@ function confirmDelete() {
       </template>
     </Modal>
 
-    <!-- Reset password confirm -->
+    <!-- Reset password -->
     <Modal :show="!!resetTarget" title="Reset Password" size="sm" @close="resetTarget = null">
-      <p class="text-sm text-ink-muted">
-        Reset password untuk <strong>{{ resetTarget?.name }}</strong> ke password default?
-      </p>
+      <div class="space-y-3">
+        <p class="text-sm text-ink-muted">
+          Password baru untuk <strong>{{ resetTarget?.name }}</strong>:
+        </p>
+        <Input v-model="resetPassword" label="Password Baru" type="password" />
+      </div>
       <template #footer>
         <Button variant="secondary" @click="resetTarget = null">Batal</Button>
-        <Button @click="confirmReset">Reset</Button>
+        <Button :disabled="!resetPassword" @click="confirmReset">Reset</Button>
       </template>
     </Modal>
 
-    <!-- Deactivate confirm -->
-    <Modal :show="!!deleteTarget" title="Nonaktifkan User" size="sm" @close="deleteTarget = null">
+    <!-- Activate / deactivate -->
+    <Modal :show="!!deleteTarget" :title="deleteTarget?.is_active ? 'Nonaktifkan User' : 'Aktifkan User'" size="sm" @close="deleteTarget = null">
       <p class="text-sm text-ink-muted">
-        Nonaktifkan akun <strong>{{ deleteTarget?.name }}</strong>? User tidak akan bisa login.
+        <template v-if="deleteTarget?.is_active">
+          Nonaktifkan akun <strong>{{ deleteTarget?.name }}</strong>? User tidak akan bisa login.
+        </template>
+        <template v-else>
+          Aktifkan kembali akun <strong>{{ deleteTarget?.name }}</strong>?
+        </template>
       </p>
       <template #footer>
         <Button variant="secondary" @click="deleteTarget = null">Batal</Button>
-        <Button variant="danger" @click="confirmDelete">Nonaktifkan</Button>
+        <Button :variant="deleteTarget?.is_active ? 'danger' : 'primary'" @click="confirmDelete">
+          {{ deleteTarget?.is_active ? "Nonaktifkan" : "Aktifkan" }}
+        </Button>
       </template>
     </Modal>
   </AdminLayout>

@@ -127,39 +127,50 @@ def _user_dict(u):
     }
 
 
+# PRD §4 — operational-account management. A plain Admin manages kasir/supervisor;
+# a Superadmin additionally manages Admin accounts. Superadmin accounts are NEVER
+# managed here (a superadmin edits their own account via /profile) — the actor's
+# managed-role set gates both the accepted `role` value and the reachable targets,
+# blocking privilege escalation via the save/delete/reset endpoints.
+def _managed_roles(user):
+    if user.role == Role.SUPERADMIN:
+        return [Role.KASIR, Role.SUPERVISOR, Role.ADMIN]
+    return [Role.KASIR, Role.SUPERVISOR]
+
+
 def users_index(request):
-    users = User.objects.filter(role__in=[Role.KASIR, Role.SUPERVISOR]).order_by("username")
-    return render(request, "Admin/Users/Index", props={"users": [_user_dict(u) for u in users]})
-
-
-# PRD §4 — this page manages operational accounts only. Admin/superadmin
-# accounts are out of scope here, so the save/delete endpoints must never
-# accept them as role values nor touch them as targets (privilege escalation).
-_MANAGED_ROLES = [Role.KASIR, Role.SUPERVISOR]
+    roles = _managed_roles(request.user)
+    users = User.objects.filter(role__in=roles).order_by("role", "username")
+    return render(request, "Admin/Users/Index", props={
+        "users": [_user_dict(u) for u in users],
+        "can_manage_admin": request.user.role == Role.SUPERADMIN,
+    })
 
 
 def users_save(request):
     data = get_data(request)
+    managed = _managed_roles(request.user)
     user_id = data.get("id")
     name = (data.get("name") or "").strip()
     first, _, last = name.partition(" ")
 
     role = data.get("role") or Role.KASIR
-    if role not in _MANAGED_ROLES:
-        request.session["flash_error"] = "Role tidak valid untuk halaman ini."
+    if role not in managed:
+        request.session["flash_error"] = "Role tidak valid atau di luar wewenang Anda."
         return redirect("/admin-panel/users")
 
-    fields = {
-        "first_name": first,
-        "last_name": last,
-        "role": role,
-    }
     if user_id:
-        user = get_object_or_404(User, pk=user_id, role__in=_MANAGED_ROLES)
-        for k, v in fields.items():
-            setattr(user, k, v)
+        user = get_object_or_404(User, pk=user_id, role__in=managed)
+        user.first_name, user.last_name, user.role = first, last, role
     else:
-        user = User(username=(data.get("username") or "").strip(), **fields)
+        username = (data.get("username") or "").strip()
+        if not username:
+            request.session["flash_error"] = "Username wajib diisi."
+            return redirect("/admin-panel/users")
+        if User.objects.filter(username__iexact=username).exists():
+            request.session["flash_error"] = "Username sudah dipakai."
+            return redirect("/admin-panel/users")
+        user = User(username=username, first_name=first, last_name=last, role=role)
 
     password = data.get("password")
     if not password and not user_id:
@@ -179,12 +190,29 @@ def users_save(request):
     return redirect("/admin-panel/users")
 
 
+def users_reset_password(request, user_id):
+    user = get_object_or_404(User, pk=user_id, role__in=_managed_roles(request.user))
+    data = get_data(request)
+    password = data.get("password") or ""
+    try:
+        validate_password(password, user)
+    except ValidationError as exc:
+        request.session["flash_error"] = " ".join(exc.messages)
+        return redirect("/admin-panel/users")
+    user.set_password(password)
+    user.save(update_fields=["password"])
+    log_activity(request, "user", f"Reset password {user.username}")
+    request.session["flash_success"] = "Password direset."
+    return redirect("/admin-panel/users")
+
+
 def users_delete(request, user_id):
-    user = get_object_or_404(User, pk=user_id, role__in=_MANAGED_ROLES)
-    user.is_active = False
+    user = get_object_or_404(User, pk=user_id, role__in=_managed_roles(request.user))
+    user.is_active = not user.is_active
     user.save(update_fields=["is_active"])
-    log_activity(request, "user", f"Nonaktifkan user {user.username}")
-    request.session["flash_success"] = "User dinonaktifkan."
+    state = "diaktifkan" if user.is_active else "dinonaktifkan"
+    log_activity(request, "user", f"User {user.username} {state}")
+    request.session["flash_success"] = f"User {state}."
     return redirect("/admin-panel/users")
 
 
@@ -1801,6 +1829,13 @@ def profile_save(request):
     u = request.user
     name = (data.get("name") or "").strip()
     u.first_name, _, u.last_name = name.partition(" ")
+    # Self username change (superadmin & admin manage their own login name).
+    username = (data.get("username") or "").strip()
+    if username and username != u.username:
+        if User.objects.filter(username__iexact=username).exclude(pk=u.pk).exists():
+            request.session["flash_error"] = "Username sudah dipakai."
+            return redirect("/admin-panel/profile")
+        u.username = username
     password = data.get("password")
     if password:
         try:

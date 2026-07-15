@@ -11,6 +11,7 @@ const props = defineProps({
 });
 
 const form = useForm({
+  username: props.profile.username || "",
   name: props.profile.name || "",
   password: "",
 });
@@ -34,6 +35,7 @@ function save() {
       </div>
 
       <div class="space-y-4">
+        <Input v-model="form.username" label="Username" :error="form.errors.username" />
         <Input v-model="form.name" label="Nama Lengkap" :error="form.errors.name" />
         <Input
           v-model="form.password"
