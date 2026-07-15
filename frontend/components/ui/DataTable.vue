@@ -84,12 +84,17 @@ function formatCell(value, col) {
               v-for="col in columns"
               :key="col.key"
               scope="col"
+              :role="col.sortable ? 'button' : undefined"
+              :tabindex="col.sortable ? 0 : undefined"
+              :aria-sort="col.sortable ? (sortKey === col.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none') : undefined"
               :class="[
                 'whitespace-nowrap border-b-2 border-border-strong px-3 py-2 text-[11px] font-heading font-semibold uppercase tracking-wider text-ink-muted',
                 alignClass(col.align),
-                col.sortable ? 'cursor-pointer select-none hover:text-ink' : '',
+                col.sortable ? 'cursor-pointer select-none hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500' : '',
               ]"
               @click="toggleSort(col)"
+              @keydown.enter.prevent="col.sortable && toggleSort(col)"
+              @keydown.space.prevent="col.sortable && toggleSort(col)"
             >
               <span class="inline-flex items-center gap-1">
                 {{ col.label }}

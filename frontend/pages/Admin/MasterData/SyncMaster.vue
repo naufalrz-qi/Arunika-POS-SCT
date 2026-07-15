@@ -8,6 +8,7 @@ import Select from "@/components/ui/Select.vue";
 import Badge from "@/components/ui/Badge.vue";
 import Banner from "@/components/ui/Banner.vue";
 import DataTable from "@/components/ui/DataTable.vue";
+import Modal from "@/components/ui/Modal.vue";
 
 const props = defineProps({
   profiles: { type: Array, default: () => [] },
@@ -64,16 +65,22 @@ function toggleAll() {
 }
 
 const syncing = ref(false);
-function sinkronkan() {
+const showConfirm = ref(false);
+const dstName = computed(() => {
+  const p = props.profiles.find((x) => String(x.id) === String(pick.dst));
+  return p ? p.name : "server tujuan";
+});
+// Aksi menulis lintas server → minta konfirmasi dulu (pola sama dengan modal delete).
+function doSync() {
   const keys = rows.value
     .filter((r) => selected.value.has(r._key))
     .map((r) => ({ [pkCol.value]: r[pkCol.value] }));
-  if (!keys.length) return;
+  if (!keys.length) { showConfirm.value = false; return; }
   syncing.value = true;
   router.post(
     "/admin-panel/master/sync-master/apply",
     { entity: pick.entity, src: pick.src, dst: pick.dst, keys },
-    { preserveScroll: true, onFinish: () => { syncing.value = false; selected.value = new Set(); } },
+    { preserveScroll: true, onFinish: () => { syncing.value = false; selected.value = new Set(); showConfirm.value = false; } },
   );
 }
 
@@ -106,11 +113,22 @@ const columns = computed(() => [
       <p class="text-sm text-ink-muted">{{ diff.length.toLocaleString("id-ID") }} baris berbeda</p>
       <p class="text-sm text-ink-subtle">{{ selected.size }} dipilih</p>
       <div class="ml-auto">
-        <Button :loading="syncing" :disabled="selected.size === 0" @click="sinkronkan">
+        <Button :loading="syncing" :disabled="selected.size === 0" @click="showConfirm = true">
           Sinkronkan Terpilih
         </Button>
       </div>
     </div>
+
+    <Modal :show="showConfirm" title="Konfirmasi Sinkronisasi" size="sm" @close="showConfirm = false">
+      <p class="text-sm text-ink">
+        Tulis <strong>{{ selected.size }}</strong> perubahan master ke
+        <strong>{{ dstName }}</strong>? Aksi ini menimpa data di server tujuan dan tidak bisa dibatalkan.
+      </p>
+      <template #footer>
+        <Button variant="ghost" @click="showConfirm = false">Batal</Button>
+        <Button variant="danger" :loading="syncing" @click="doSync">Ya, Sinkronkan</Button>
+      </template>
+    </Modal>
 
     <DataTable
       v-if="diff.length || (pick.src && pick.dst)"

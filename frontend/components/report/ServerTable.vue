@@ -57,10 +57,16 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
               <th
                 v-for="col in columns"
                 :key="col.key"
+                scope="col"
+                :role="col.sortable ? 'button' : undefined"
+                :tabindex="col.sortable ? 0 : undefined"
+                :aria-sort="col.sortable ? (sortKey === col.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none') : undefined"
                 @click="toggleSort(col)"
+                @keydown.enter.prevent="toggleSort(col)"
+                @keydown.space.prevent="toggleSort(col)"
                 :class="[
                   alignClass(col),
-                  col.sortable ? 'cursor-pointer select-none hover:text-ink' : '',
+                  col.sortable ? 'cursor-pointer select-none hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500' : '',
                   'whitespace-nowrap border-b-2 border-border-strong px-3 py-2 text-[11px] font-heading font-semibold uppercase tracking-wider text-ink-muted',
                 ]"
               >
