@@ -36,13 +36,18 @@ Set these in the shell or `.env` before running:
 
 | Var | Default | Note |
 |-----|---------|------|
-| `DEBUG` | `1` (true) | Set to `0` in production. |
-| `SECRET_KEY` | `django-insecure-...` (dev fallback) | **Must set in production.** Generate: `python -c "import secrets; print(secrets.token_urlsafe(50))"`. |
-| `ALLOWED_HOSTS` | `127.0.0.1,localhost,192.168.1.10,100.64.0.1` | Comma-separated IPs. |
-| `ENFORCE_TAILSCALE` | `1` (not DEBUG) | Restrict `/admin-panel/*` to Tailscale IPs. |
+| `DEBUG` | `0` (false) | Secure default. Set `1` only for dev. |
+| `SECRET_KEY` | `django-insecure-...` (dev fallback) | **Must set in production.** With `DEBUG=0` the app REFUSES TO BOOT while the dev key is in place. Generate: `python -c "import secrets; print(secrets.token_urlsafe(50))"`. |
+| `ALLOWED_HOSTS` | `127.0.0.1,localhost` | Comma-separated IPs; add LAN/Tailscale hosts. |
+| `ENFORCE_TAILSCALE` | `1` (not DEBUG) | **WAJIB `1` di produksi** — membatasi `/admin-panel/*` ke range Tailscale. Jangan set `0` di server produksi. |
 | `TAILSCALE_CIDR` | `100.64.0.0/10` | Tailscale CGNAT range. |
 | `SESSION_IDLE_SECONDS` | `14400` (4h) | Session expiry. |
 | `DJANGO_VITE_DEV` | `DEBUG` | Vite dev mode; `0` in prod. |
+| `SESSION_COOKIE_SECURE` / `CSRF_COOKIE_SECURE` | `0` | Set `1` when fronted by HTTPS (else cookies never send over plain-HTTP LAN → login breaks). |
+| `SECURE_HSTS_SECONDS` | `0` | Set e.g. `31536000` only under HTTPS. |
+| `STOK_SNAPSHOT_ENABLED` / `STOK_SNAPSHOT_HOUR` | `1` / `3` | Rebuild snapshot saldo stok harian (jalur baca Stok Akhir cepat). Jam beda dari snapshot harga (0). |
+
+> **Catatan keamanan operasional:** `seed_dev` (password = username) menolak jalan saat `DEBUG=0`. Di produksi buat user & profil koneksi manual. Snapshot stok/harga jalan sendiri via scheduler in-process selama server hidup; untuk mesin yang sering mati, jadwalkan `manage.py snapshot_stok` / `snapshot_harga` lewat Windows Task Scheduler.
 
 ## Performance (scaling to 200–500 req/s)
 

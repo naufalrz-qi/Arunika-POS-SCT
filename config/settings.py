@@ -17,7 +17,7 @@ def _env_bool(name, default=False):
 _DEV_SECRET_KEY = "django-insecure-dev-key-frontend-phase-change-me"
 SECRET_KEY = os.environ.get("SECRET_KEY", _DEV_SECRET_KEY)
 
-DEBUG = _env_bool("DEBUG", default=True)
+DEBUG = _env_bool("DEBUG", default=False)
 
 if not DEBUG and SECRET_KEY == _DEV_SECRET_KEY:
     from django.core.exceptions import ImproperlyConfigured
@@ -117,6 +117,17 @@ AUTH_PASSWORD_VALIDATORS = [
 # Idle session expiry (PRD §8.1) — do NOT save every request (kills SQLite concurrency).
 SESSION_COOKIE_AGE = int(os.environ.get("SESSION_IDLE_SECONDS", 60 * 60 * 4))  # 4h
 SESSION_SAVE_EVERY_REQUEST = False
+
+# Cookie hardening. SameSite=Lax explicit (CSRF defense-in-depth). The Secure /
+# HSTS flags stay behind env because the app also serves plain-HTTP LAN/Tailscale
+# — turn them ON only when fronted by HTTPS, else the cookies never get sent and
+# login breaks.
+SESSION_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=False)
+CSRF_COOKIE_SECURE = _env_bool("CSRF_COOKIE_SECURE", default=False)
+SECURE_HSTS_SECONDS = int(os.environ.get("SECURE_HSTS_SECONDS", "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=False)
 
 # --- Network access control (PRD §3.4 / §7.6) ------------------------------
 # When enabled, /admin-panel/* is reachable only from the Tailscale CGNAT range.

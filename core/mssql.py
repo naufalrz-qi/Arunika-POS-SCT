@@ -19,7 +19,7 @@ from contextlib import contextmanager
 
 import pyodbc
 
-from core.encryption import EncryptionKeyMissing, PasswordDecryptError, decrypt_checked, safe_decrypt
+from core.encryption import EncryptionKeyMissing, PasswordDecryptError, decrypt_checked
 
 # Preferred newest-first; picks whichever is actually registered on this
 # machine instead of hard-failing when only an older/legacy driver is present.
@@ -106,13 +106,18 @@ def cursor(profile, autocommit=True):
     """Context manager yielding a cursor for the given ServerProfile.
 
     Use autocommit=False for write transactions, then call conn.commit() yourself.
+
+    Password decrypt is CHECKED (fail loud): a corrupt/rotated POS_FERNET_KEY
+    raises PasswordDecryptError here instead of silently connecting with a blank
+    password and surfacing as a confusing SQL Server login error. `safe_decrypt`
+    stays for display-only paths that must never raise.
     """
     conn = _connect(
         profile.host,
         profile.port,
         profile.db_name,
         profile.username,
-        safe_decrypt(profile.password_encrypted),
+        decrypt_checked(profile.password_encrypted),
         autocommit=autocommit,
     )
     try:

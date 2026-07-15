@@ -1,10 +1,21 @@
 """Auth views (real). PRD §7.1 — login/logout with bcrypt + SQLite sessions."""
 from inertia import render
 from django.contrib.auth import authenticate, login, logout
+from django.core.cache import cache
 from django.shortcuts import redirect
 
 from apps.core.http import get_data
 from apps.core.models import log_activity
+
+# Brute-force throttle: lock a (username, IP) pair after N failures for a short
+# window. Uses Django's process-local cache (no new dependency); adequate for the
+# single-process waitress deploy this app targets.
+LOGIN_MAX_FAILS = 5
+LOGIN_LOCK_SECONDS = 15 * 60
+
+
+def _login_fail_key(username, ip) -> str:
+    return f"login_fail:{username.lower()}:{ip or '?'}"
 
 
 def root_redirect(request):
@@ -22,16 +33,30 @@ def login_view(request):
         data = get_data(request)
         username = (data.get("username") or "").strip()
         password = data.get("password") or ""
+        ip = request.META.get("REMOTE_ADDR")
+        fail_key = _login_fail_key(username, ip)
+
+        if cache.get(fail_key, 0) >= LOGIN_MAX_FAILS:
+            log_activity(request, "login_terkunci", f"username={username[:32]}")
+            return render(
+                request,
+                "Auth/Login",
+                props={"errors": {"username": "Terlalu banyak percobaan gagal. Coba lagi dalam beberapa menit."}},
+            )
+
         user = authenticate(request, username=username, password=password)
 
         if user is None or not user.is_active:
-            log_activity(request, "login_gagal", f"username={username}")
+            cache.set(fail_key, cache.get(fail_key, 0) + 1, LOGIN_LOCK_SECONDS)
+            # Cap the logged value — a mistyped password can land in the username field.
+            log_activity(request, "login_gagal", f"username={username[:32]}")
             return render(
                 request,
                 "Auth/Login",
                 props={"errors": {"username": "Username atau password salah."}},
             )
 
+        cache.delete(fail_key)  # reset counter on success
         login(request, user)
         log_activity(request, "login", "Login berhasil")
 

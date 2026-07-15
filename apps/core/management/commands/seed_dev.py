@@ -1,16 +1,25 @@
 """Seed dev data: users (real login) + the grosir connection profile from .env."""
 import os
 
-from django.core.management.base import BaseCommand
+from django.conf import settings
+from django.core.management.base import BaseCommand, CommandError
 
 from apps.auth_app.models import Role, User
 from apps.connections.models import DbType, ServerProfile
 
 
 class Command(BaseCommand):
-    help = "Create dev users and the grosir ServerProfile (idempotent)."
+    help = "Create dev users and the grosir ServerProfile (idempotent). DEV ONLY."
 
     def handle(self, *args, **options):
+        # Seeded passwords equal their usernames (incl. superadmin) — refuse to
+        # run outside DEBUG so this never lands weak creds on a production box.
+        if not settings.DEBUG:
+            raise CommandError(
+                "seed_dev hanya untuk pengembangan (password = username). "
+                "Jalankan dengan DEBUG=1, atau buat user/koneksi manual di produksi."
+            )
+        self.stdout.write(self.style.WARNING("seed_dev: membuat user dev dengan password = username (JANGAN di produksi)."))
         self._seed_users()
         self._seed_grosir()
 
