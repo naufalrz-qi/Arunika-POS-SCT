@@ -33,7 +33,7 @@ const { activeTab, isActive } = useNav();
       <template v-for="(sub, i) in activeTab.subsections" :key="sub.key">
         <p
           v-if="!sidebarCollapsed && activeTab.subsections.length > 1"
-          class="px-2 pb-1.5 pt-4 text-[10px] font-heading font-bold uppercase tracking-widest text-white/30"
+          class="px-2 pb-1.5 pt-4 text-[10px] font-heading font-bold uppercase tracking-widest text-white/50"
         >
           {{ sub.label }}
         </p>
@@ -48,17 +48,17 @@ const { activeTab, isActive } = useNav();
             :href="item.href"
             :title="sidebarCollapsed ? item.label : undefined"
             :class="[
-              'group flex items-center gap-3 rounded-lg py-2 transition-all duration-200',
+              'group flex items-center gap-3 rounded-lg py-2 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60',
               sidebarCollapsed ? 'justify-center px-0' : 'px-3',
               isActive(item.href)
                 ? 'bg-brand-600 font-semibold text-white relative overflow-hidden'
-                : 'text-white/60 hover:bg-white/10 hover:text-white ' + (sidebarCollapsed ? '' : 'hover:translate-x-1'),
+                : 'text-white/70 hover:bg-white/10 hover:text-white ' + (sidebarCollapsed ? '' : 'hover:translate-x-1'),
             ]"
           >
             <!-- V-fin accent bar on active state -->
             <div v-if="isActive(item.href)" class="absolute left-0 top-0 bottom-0 w-1 bg-rx-yellow"></div>
             
-            <Icon :name="item.icon" size="h-4 w-4" :class="['shrink-0 z-10', isActive(item.href) ? 'text-white' : 'text-white/50 group-hover:text-white/90']" />
+            <Icon :name="item.icon" size="h-4 w-4" :class="['shrink-0 z-10', isActive(item.href) ? 'text-white' : 'text-white/70 group-hover:text-white/90']" />
             <span v-if="!sidebarCollapsed" class="truncate z-10 text-sm">{{ item.label }}</span>
           </Link>
         </div>
@@ -67,7 +67,7 @@ const { activeTab, isActive } = useNav();
 
     <button
       type="button"
-      class="flex items-center gap-3 border-t border-white/10 px-5 py-4 text-xs font-heading font-medium tracking-wide text-white/50 transition-all duration-200 hover:bg-white/10 hover:text-white"
+      class="flex items-center gap-3 border-t border-white/10 px-5 py-4 text-xs font-heading font-medium tracking-wide text-white/70 transition-all duration-200 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
       :class="sidebarCollapsed ? 'justify-center px-0' : ''"
       :title="sidebarCollapsed ? 'Perlebar sidebar' : 'Ciutkan sidebar'"
       @click="ui.toggleSidebar()"
