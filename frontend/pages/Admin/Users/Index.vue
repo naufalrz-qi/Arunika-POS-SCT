@@ -95,9 +95,9 @@ function confirmDelete() {
         </template>
         <template #cell-actions="{ row }">
           <div class="flex justify-end gap-1">
-            <Button variant="ghost" size="sm" @click="openEdit(row)"><Icon name="pencil" size="h-4 w-4" /></Button>
-            <Button variant="ghost" size="sm" @click="resetTarget = row"><Icon name="key" size="h-4 w-4" /></Button>
-            <Button variant="ghost" size="sm" @click="deleteTarget = row"><Icon name="power" size="h-4 w-4" /></Button>
+            <Button variant="ghost" size="sm" aria-label="Edit user" title="Edit user" @click="openEdit(row)"><Icon name="pencil" size="h-4 w-4" /></Button>
+            <Button variant="ghost" size="sm" aria-label="Reset password" title="Reset password" @click="resetTarget = row"><Icon name="key" size="h-4 w-4" /></Button>
+            <Button variant="ghost" size="sm" aria-label="Aktif/nonaktif user" title="Aktif/nonaktif user" @click="deleteTarget = row"><Icon name="power" size="h-4 w-4" /></Button>
           </div>
         </template>
       </DataTable>

@@ -1,5 +1,5 @@
 <script setup>
-import { watch } from "vue";
+import { watch, onBeforeUnmount } from "vue";
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -10,13 +10,20 @@ const emit = defineEmits(["close"]);
 
 const sizes = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl" };
 
-// Lock body scroll while open.
+function onKey(e) {
+  if (e.key === "Escape" && props.show) emit("close");
+}
+
+// Lock body scroll + Esc-to-close while open.
 watch(
   () => props.show,
   (open) => {
     document.body.style.overflow = open ? "hidden" : "";
+    if (open) window.addEventListener("keydown", onKey);
+    else window.removeEventListener("keydown", onKey);
   },
 );
+onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 </script>
 
 <template>
@@ -37,11 +44,14 @@ watch(
         >
           <div
             v-if="show"
+            role="dialog"
+            aria-modal="true"
+            :aria-label="title || undefined"
             :class="['relative flex max-h-[85vh] w-full flex-col rounded-card bg-surface shadow-xl', sizes[size]]"
           >
             <div class="flex shrink-0 items-center justify-between border-b border-border-default px-5 py-3.5">
               <h3 class="text-base font-semibold text-ink">{{ title }}</h3>
-              <button class="rounded p-1 text-ink-muted hover:bg-surface-3 hover:text-ink" @click="emit('close')">
+              <button class="rounded p-1 text-ink-muted hover:bg-surface-3 hover:text-ink" aria-label="Tutup" title="Tutup" @click="emit('close')">
                 <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>

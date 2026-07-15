@@ -200,8 +200,8 @@ function confirmDelete() {
 
         <template #cell-actions="{ row }">
           <div class="flex justify-end gap-1">
-            <Button variant="ghost" size="sm" @click="openEdit(row)"><Icon name="pencil" size="h-4 w-4" /></Button>
-            <Button variant="ghost" size="sm" @click="deleteTarget = row"><Icon name="power" size="h-4 w-4" /></Button>
+            <Button variant="ghost" size="sm" aria-label="Edit koneksi" title="Edit koneksi" @click="openEdit(row)"><Icon name="pencil" size="h-4 w-4" /></Button>
+            <Button variant="ghost" size="sm" aria-label="Aktif/nonaktif koneksi" title="Aktif/nonaktif koneksi" @click="deleteTarget = row"><Icon name="power" size="h-4 w-4" /></Button>
           </div>
         </template>
       </DataTable>

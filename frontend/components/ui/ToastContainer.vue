@@ -22,6 +22,7 @@ watch(
 const styles = {
   success: "bg-success-600",
   danger: "bg-danger-600",
+  error: "bg-danger-600", // alias: callers use "error"; without this it fell through to info (blue)
   warning: "bg-warning-600",
   info: "bg-brand-600",
 };

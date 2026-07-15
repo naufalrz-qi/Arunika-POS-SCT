@@ -77,8 +77,8 @@ function formatCell(value, col) {
   <div class="panel-cut-frame">
     <div class="overflow-hidden panel-cut bg-surface">
     <div class="overflow-x-auto">
-      <table class="min-w-full divide-y divide-border-default text-sm tabular-nums">
-        <thead class="bg-surface-2 sticky top-0">
+      <table class="min-w-[720px] divide-y divide-border-default text-sm tabular-nums">
+        <thead class="bg-surface-2 sticky top-0 z-10">
           <tr>
             <th
               v-for="col in columns"
