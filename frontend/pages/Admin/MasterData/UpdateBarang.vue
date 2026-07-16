@@ -19,6 +19,7 @@ import { suggestFor } from "@/utils/priceSuggestion.js";
 const props = defineProps({
   active: { type: Object, default: null },
   profile_type: { type: String, default: null },
+  has_modal: { type: Boolean, default: false },
   items: { type: Object, default: null },
   saran: { type: Object, default: null },
   filters: { type: Object, default: () => ({}) },
@@ -29,6 +30,9 @@ const saranData = computed(() => props.saran || {});
 const saranRows = computed(() => saranData.value.rows || []);
 
 const isRetail = computed(() => props.profile_type === "retail");
+// Modal & margin tampil kapan pun server punya sumber-modal (cost_source):
+// retail → grosir/gudang, grosir → gudang. Saran-keterangan tetap retail saja.
+const showModal = computed(() => props.has_modal);
 
 const typeName = { gudang: "Gudang", grosir: "Grosir", retail: "Toko Retail" };
 
@@ -208,7 +212,7 @@ async function openRiwayat(item) {
         <span class="text-ink-muted">Database aktif:</span>
         <span class="font-semibold text-ink">{{ active?.name || "—" }}</span>
         <Badge v-if="active" variant="brand">{{ typeName[active.db_type] || active.db_type }}</Badge>
-        <Badge v-if="isRetail" variant="success">Margin dihitung otomatis</Badge>
+        <Badge v-if="showModal" variant="success">Modal &amp; margin dari sumber</Badge>
         <span class="text-xs text-ink-subtle">Ganti database lewat menu Koneksi di kanan atas.</span>
       </div>
       <div class="flex flex-col gap-3 sm:flex-row sm:items-end">
@@ -320,12 +324,20 @@ async function openRiwayat(item) {
                   <span v-if="row.satuan.length > 0" class="text-xs font-medium text-ink-subtle">/{{ row.satuan[0].satuan || row.satuan[0].kd_satuan }}</span>
                 </p>
                 <span
-                  v-if="isRetail && margin(row) !== null"
+                  v-if="showModal && margin(row) !== null"
                   :class="['shrink-0 text-xs font-semibold', margin(row) < 0 ? 'text-danger-600' : 'text-success-700']"
                 >
                   {{ margin(row).toFixed(1) }}%
                 </span>
               </div>
+
+              <p
+                v-if="showModal && row.satuan.length > 0 && row.satuan[0].modal > 0"
+                class="mt-0.5 text-[11px] text-ink-muted"
+              >
+                Modal: <span class="font-semibold tabular-nums text-ink">{{ rupiah(row.satuan[0].modal) }}</span>
+                <span class="text-ink-subtle">/{{ row.satuan[0].satuan || row.satuan[0].kd_satuan }}</span>
+              </p>
 
               <div v-if="row.satuan.length > 0" class="mt-2 grid grid-cols-2 gap-2 text-[11px]">
                 <div>

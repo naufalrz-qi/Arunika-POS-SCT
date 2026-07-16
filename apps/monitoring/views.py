@@ -367,6 +367,7 @@ def update_barang_index(request):
         props={
             "active": profile.as_dict() if profile else None,
             "profile_type": profile.db_type if profile else None,
+            "has_modal": bool(mssql.get_cost_source(profile)) if profile else False,
             "items": defer(load_items),
             "saran": defer(load_saran, group="saran"),
             "filters": {"search": search},

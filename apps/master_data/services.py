@@ -216,21 +216,25 @@ def list_barang_edit(profile, search: str = "") -> list[dict]:
         divisi_by = _cached(profile, "divisi_status", _build_divisi_status)
 
     is_retail = _is_retail(profile)
+    # Modal per satuan = harga_jual server sumber-modal (cost_source): retail →
+    # grosir/gudang, grosir → gudang. Diisi kapan pun cost_source diset (grosir
+    # "bergantung gudang" = punya cost_source gudang); tanpa cost_source, modal
+    # tak diisi.
+    cost = mssql.get_cost_source(profile)
+    has_modal = bool(cost)
     modal_all: dict[str, dict] = {}
-    if is_retail:
-        cost = mssql.get_cost_source(profile)
-        if cost:
-            def _build_cost_satuan_price():
-                with mssql.cursor(cost) as cost_cur:
-                    cost_cur.execute("SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan")
-                    by_barang: dict[str, dict] = {}
-                    for r in _dictify(cost_cur):
-                        by_barang.setdefault(_st(r["kd_barang"]), {})[_st(r["kd_satuan"])] = _f(r["harga_jual"])
-                    return by_barang
+    if cost:
+        def _build_cost_satuan_price():
+            with mssql.cursor(cost) as cost_cur:
+                cost_cur.execute("SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan")
+                by_barang: dict[str, dict] = {}
+                for r in _dictify(cost_cur):
+                    by_barang.setdefault(_st(r["kd_barang"]), {})[_st(r["kd_satuan"])] = _f(r["harga_jual"])
+                return by_barang
 
-            # Keyed by the cost-source profile itself: multiple retail profiles
-            # sharing one grosir/gudang source reuse a single cached read.
-            modal_all = _cached(cost, "cost_satuan_price", _build_cost_satuan_price)
+        # Keyed by the cost-source profile itself: multiple profiles sharing one
+        # grosir/gudang source reuse a single cached read.
+        modal_all = _cached(cost, "cost_satuan_price", _build_cost_satuan_price)
 
     out = []
     for b in barang:
@@ -248,7 +252,7 @@ def list_barang_edit(profile, search: str = "") -> list[dict]:
                 "margin": _f(s["margin"]),
                 "status": _st(s["status"]),
             }
-            if is_retail:
+            if has_modal:
                 m = modal_map.get(ks, 0.0)
                 unit["modal"] = m
                 unit["margin"] = _margin(harga, m)
@@ -271,6 +275,7 @@ def list_barang_edit(profile, search: str = "") -> list[dict]:
             "satuan": units,
             "divisi": divisi,
             "is_retail": is_retail,
+            "has_modal": has_modal,
         })
     return out
 
