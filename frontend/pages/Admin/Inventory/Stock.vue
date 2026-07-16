@@ -8,7 +8,7 @@ import Input from "@/components/ui/Input.vue";
 import Select from "@/components/ui/Select.vue";
 import Banner from "@/components/ui/Banner.vue";
 import DataTable from "@/components/ui/DataTable.vue";
-import Spinner from "@/components/ui/Spinner.vue";
+import TableSkeleton from "@/components/ui/TableSkeleton.vue";
 import DateRangeFilter from "@/components/report/DateRangeFilter.vue";
 import { useReportFilters } from "@/composables/useReportFilters";
 import { downloadXlsx, stamp } from "@/utils/xlsx";
@@ -90,10 +90,7 @@ const columns = [
 
     <Deferred data="stok">
       <template #fallback>
-        <Card class="flex items-center justify-center gap-3 py-16">
-          <Spinner />
-          <span class="text-sm text-ink-muted">Mengambil data stok dari server…</span>
-        </Card>
+        <TableSkeleton />
       </template>
 
     <div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end">
@@ -111,7 +108,7 @@ const columns = [
       </div>
     </div>
 
-    <DataTable :columns="columns" row-key="kd_barang" :rows="displayed" :per-page="20" empty-message="Tidak ada data stok.">
+    <DataTable :columns="columns" row-key="kd_barang" :rows="displayed" :per-page="100" empty-message="Tidak ada data stok.">
       <template #cell-stok_akhir="{ value }">
         <span :class="value <= 0 ? 'font-semibold text-danger-600' : 'font-semibold'">{{ num(value) }}</span>
       </template>

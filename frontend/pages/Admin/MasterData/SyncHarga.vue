@@ -146,7 +146,7 @@ const columns = [
       :columns="columns"
       :rows="rows"
       row-key="_key"
-      :per-page="30"
+      :per-page="100"
       empty-message="Semua harga sudah sama."
     >
       <template #cell-sel="{ row }">

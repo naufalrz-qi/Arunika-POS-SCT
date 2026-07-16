@@ -135,7 +135,7 @@ const columns = computed(() => [
       :columns="columns"
       :rows="rows"
       row-key="_key"
-      :per-page="30"
+      :per-page="100"
       empty-message="Semua data sudah sama."
     >
       <template #cell-sel="{ row }">

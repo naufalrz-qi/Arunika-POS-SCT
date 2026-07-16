@@ -84,7 +84,7 @@ const actionVariant = (a) => {
       </FilterSection>
     </FilterPanel>
 
-    <DataTable :columns="columns" :rows="filtered" :per-page="15" empty-message="Tidak ada log untuk filter ini.">
+    <DataTable :columns="columns" :rows="filtered" :per-page="100" empty-message="Tidak ada log untuk filter ini.">
       <template #cell-action="{ value }">
         <Badge :variant="actionVariant(value)">{{ value }}</Badge>
       </template>

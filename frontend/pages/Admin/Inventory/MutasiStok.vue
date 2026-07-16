@@ -99,7 +99,7 @@ const columns = [
         :columns="columns"
         row-key="kd_barang"
         :rows="displayed"
-        :per-page="25"
+        :per-page="100"
         empty-message="Tidak ada mutasi pada rentang ini."
       >
         <template #cell-masuk="{ value }">{{ value ? num(value) : "—" }}</template>

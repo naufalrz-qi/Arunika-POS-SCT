@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import Pagination from "@/components/ui/Pagination.vue";
 import EmptyState from "@/components/ui/EmptyState.vue";
 const props = defineProps({
@@ -36,6 +36,17 @@ function toggleSort(col) {
   emit("sort-change", { key: col.key, dir });
 }
 
+const columnMenuOpen = ref(false);
+const hiddenKeys = ref(new Set());
+const visibleColumns = computed(() => props.columns.filter((c) => !hiddenKeys.value.has(c.key)));
+
+function toggleColumn(key) {
+  const next = new Set(hiddenKeys.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  if (next.size < props.columns.length) hiddenKeys.value = next;
+}
+
 function onKey(e) {
   if (e.key === "/" && !/input|textarea|select/i.test(e.target.tagName)) {
     e.preventDefault();
@@ -50,12 +61,38 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 <template>
   <div class="panel-cut-frame">
     <div class="overflow-hidden panel-cut bg-surface">
+      <div class="flex justify-end border-b border-border-default bg-surface-2 px-3 py-1.5">
+        <div class="relative">
+          <button
+            type="button"
+            class="rounded-md border border-border-default px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-3"
+            @click="columnMenuOpen = !columnMenuOpen"
+            @blur="columnMenuOpen = false"
+          >
+            Kolom ({{ visibleColumns.length }}/{{ columns.length }})
+          </button>
+          <div
+            v-if="columnMenuOpen"
+            class="absolute right-0 z-20 mt-1 w-56 max-h-72 overflow-y-auto rounded-lg border border-border-default bg-surface p-1.5 shadow-lg"
+            @mousedown.prevent
+          >
+            <label
+              v-for="col in columns"
+              :key="col.key"
+              class="flex items-center gap-2 rounded px-2 py-1.5 text-sm text-ink hover:bg-surface-3"
+            >
+              <input type="checkbox" :checked="!hiddenKeys.has(col.key)" @change="toggleColumn(col.key)" />
+              {{ col.label }}
+            </label>
+          </div>
+        </div>
+      </div>
       <div class="overflow-x-auto scroll-slim">
         <table class="w-full min-w-[720px] text-sm tabular-nums">
           <thead class="sticky top-0 z-10 bg-surface-3">
             <tr>
               <th
-                v-for="col in columns"
+                v-for="col in visibleColumns"
                 :key="col.key"
                 scope="col"
                 :role="col.sortable ? 'button' : undefined"
@@ -77,7 +114,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           </thead>
           <tbody>
             <tr v-if="!rows.length">
-              <td :colspan="columns.length">
+              <td :colspan="visibleColumns.length">
                 <EmptyState :message="emptyMessage" />
               </td>
             </tr>
@@ -86,7 +123,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
               :key="row[rowKey]"
               class="border-t border-border-default even:bg-surface-2/60 hover:bg-surface-3"
             >
-              <td v-for="col in columns" :key="col.key" :class="[alignClass(col), 'px-3 py-1.5 leading-snug text-ink']">
+              <td v-for="col in visibleColumns" :key="col.key" :class="[alignClass(col), 'px-3 py-1.5 leading-snug text-ink']">
                 <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
                   {{ fmt(row[col.key], col) }}
                 </slot>

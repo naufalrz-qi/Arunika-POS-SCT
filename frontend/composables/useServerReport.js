@@ -21,7 +21,7 @@ export function useServerReport(url, initial = {}, filterKeys = []) {
     sort: "tanggal",
     sort_dir: "desc",
     page: 1,
-    per_page: 50,
+    per_page: 100,
     ...Object.fromEntries(filterKeys.map((k) => [k, ""])),
     ...formInitial,
   });
@@ -50,7 +50,7 @@ export function useServerReport(url, initial = {}, filterKeys = []) {
   function reset() {
     for (const k of Object.keys(form)) {
       if (k === "page") form[k] = 1;
-      else if (k === "per_page") form[k] = 50;
+      else if (k === "per_page") form[k] = 100;
       else if (k === "sort") form[k] = "tanggal";
       else if (k === "sort_dir") form[k] = "desc";
       else if (k === "date_mode") form[k] = "range";

@@ -148,7 +148,7 @@ const columns = [
         </div>
       </div>
 
-      <DataTable :columns="columns" row-key="no_transaksi" :rows="displayed" :per-page="25" empty-message="Tidak ada data histori.">
+      <DataTable :columns="columns" row-key="no_transaksi" :rows="displayed" :per-page="100" empty-message="Tidak ada data histori.">
         <template #cell-transaksi="{ value }"><Badge :variant="transVariant(value)">{{ value }}</Badge></template>
         <template #cell-debet="{ value }">{{ value ? num(value) : "—" }}</template>
         <template #cell-kredit="{ value }">{{ value ? num(value) : "—" }}</template>

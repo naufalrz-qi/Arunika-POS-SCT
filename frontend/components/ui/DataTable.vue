@@ -10,13 +10,25 @@ const props = defineProps({
   rows: { type: Array, default: () => [] },
   rowKey: { type: String, default: "id" },
   loading: { type: Boolean, default: false },
-  perPage: { type: Number, default: 10 },
+  perPage: { type: Number, default: 100 },
   emptyMessage: { type: String, default: "Tidak ada data." },
 });
 
 const sortKey = ref(null);
 const sortDir = ref("asc");
 const page = ref(1);
+const columnMenuOpen = ref(false);
+const hiddenKeys = ref(new Set());
+
+const visibleColumns = computed(() => props.columns.filter((c) => !hiddenKeys.value.has(c.key)));
+
+function toggleColumn(key) {
+  const next = new Set(hiddenKeys.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  // Keep at least one column visible.
+  if (next.size < props.columns.length) hiddenKeys.value = next;
+}
 
 // Reset to first page whenever the underlying (filtered) rows change.
 watch(
@@ -76,12 +88,42 @@ function formatCell(value, col) {
 <template>
   <div class="panel-cut-frame">
     <div class="overflow-hidden panel-cut bg-surface">
+    <div class="flex justify-end border-b border-border-default bg-surface-2 px-3 py-1.5">
+      <div class="relative">
+        <button
+          type="button"
+          class="rounded-md border border-border-default px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-3"
+          @click="columnMenuOpen = !columnMenuOpen"
+          @blur="columnMenuOpen = false"
+        >
+          Kolom ({{ visibleColumns.length }}/{{ columns.length }})
+        </button>
+        <div
+          v-if="columnMenuOpen"
+          class="absolute right-0 z-20 mt-1 w-56 max-h-72 overflow-y-auto rounded-lg border border-border-default bg-surface p-1.5 shadow-lg"
+          @mousedown.prevent
+        >
+          <label
+            v-for="col in columns"
+            :key="col.key"
+            class="flex items-center gap-2 rounded px-2 py-1.5 text-sm text-ink hover:bg-surface-3"
+          >
+            <input
+              type="checkbox"
+              :checked="!hiddenKeys.has(col.key)"
+              @change="toggleColumn(col.key)"
+            />
+            {{ col.label }}
+          </label>
+        </div>
+      </div>
+    </div>
     <div class="overflow-x-auto">
-      <table class="min-w-[720px] divide-y divide-border-default text-sm tabular-nums">
+      <table class="w-full min-w-[720px] divide-y divide-border-default text-sm tabular-nums">
         <thead class="bg-surface-2 sticky top-0 z-10">
           <tr>
             <th
-              v-for="col in columns"
+              v-for="col in visibleColumns"
               :key="col.key"
               scope="col"
               :role="col.sortable ? 'button' : undefined"
@@ -107,12 +149,12 @@ function formatCell(value, col) {
         </thead>
         <tbody class="divide-y divide-border-default">
           <tr v-if="loading">
-            <td :colspan="columns.length" class="py-12">
+            <td :colspan="visibleColumns.length" class="py-12">
               <div class="flex justify-center"><Spinner /></div>
             </td>
           </tr>
           <tr v-else-if="pagedRows.length === 0">
-            <td :colspan="columns.length">
+            <td :colspan="visibleColumns.length">
               <EmptyState :message="emptyMessage" />
             </td>
           </tr>
@@ -123,7 +165,7 @@ function formatCell(value, col) {
             class="even:bg-surface-2/60 hover:bg-surface-3"
           >
             <td
-              v-for="col in columns"
+              v-for="col in visibleColumns"
               :key="col.key"
               :class="['px-3 py-1.5 leading-snug text-ink', alignClass(col.align)]"
             >

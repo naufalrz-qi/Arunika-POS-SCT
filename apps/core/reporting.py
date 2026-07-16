@@ -10,7 +10,7 @@ from decimal import Decimal
 
 from django.http import HttpResponse
 
-DEFAULT_PER_PAGE = 50
+DEFAULT_PER_PAGE = 100
 MAX_PER_PAGE = 200
 MAX_RANGE_DAYS = 92        # ~3 months; longer ranges are clamped (PRD §10)
 EXPORT_CAP = 100_000       # hard cap on exported rows (PRD §10)
