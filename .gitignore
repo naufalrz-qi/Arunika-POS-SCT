@@ -30,3 +30,6 @@ strukturdatabase_GrosirPusat.txt
 scripts/output/
 temp_schema.py
 
+demos/
+graphify-out/
+.obsidian/
