@@ -22,12 +22,15 @@ const props = defineProps({
   has_modal: { type: Boolean, default: false },
   items: { type: Object, default: null },
   saran: { type: Object, default: null },
+  pecahan: { type: Object, default: null },
   filters: { type: Object, default: () => ({}) },
 });
 
 const data = computed(() => props.items || {});
 const saranData = computed(() => props.saran || {});
 const saranRows = computed(() => saranData.value.rows || []);
+const pecahanData = computed(() => props.pecahan || {});
+const pecahanRows = computed(() => pecahanData.value.rows || []);
 
 const isRetail = computed(() => props.profile_type === "retail");
 // Modal & margin tampil kapan pun server punya sumber-modal (cost_source):
@@ -144,6 +147,7 @@ function openEdit(item) {
 const editLoadingKd = ref(null);
 async function openEditByCode(kd_barang) {
   showSuggest.value = false;
+  showPecahan.value = false;
   editLoadingKd.value = kd_barang;
   try {
     const { data: res } = await axios.get("/admin-panel/master/update-barang/detail", {
@@ -159,9 +163,66 @@ async function openEditByCode(kd_barang) {
 }
 
 // --- Saran Harga (retail): nominal dari kolom keterangan, katalog penuh ---
-// Bukan tombol "terapkan" — cuma daftar untuk dibaca, penerapan harus lewat
-// modal Edit Barang secara manual (lihat BarangEditModal.vue).
+// Bisa diterapkan massal (pilih baris -> Terapkan) atau satu per satu lewat
+// modal Edit Barang (lihat BarangEditModal.vue).
 const showSuggest = ref(false);
+const showPecahan = ref(false);
+
+// --- Terapkan massal (Saran Harga / Harga Berpecahan) ---------------------
+// Satu mesin seleksi dipakai dua modal; `rowId` menyatukan kunci baris supaya
+// tidak ada dua implementasi checkbox yang harus dijaga seragam.
+const rowId = (r) => `${r.kd_barang}|${r.kd_satuan}`;
+// Objek reaktif berkunci, BUKAN dua ref: template Vue meng-unwrap ref otomatis,
+// jadi ref yang dioper sebagai argumen ke handler sampai sebagai Set mentah dan
+// penugasan `.value` di dalamnya tidak pernah kena reaktivitas.
+const sel = reactive({ saran: new Set(), pecahan: new Set() });
+const applying = ref(false);
+const confirmApply = ref(null); // { rows, judul } | null
+
+function toggleRow(which, r) {
+  const next = new Set(sel[which]);
+  if (next.has(rowId(r))) next.delete(rowId(r));
+  else next.add(rowId(r));
+  sel[which] = next;
+}
+
+function toggleAll(which, rows) {
+  sel[which] = sel[which].size === rows.length ? new Set() : new Set(rows.map(rowId));
+}
+
+// Baris terpilih -> payload endpoint massal. `harga` diambil dari field yang
+// berbeda per sumber (saran: harga_baru, pecahan: harga_saran).
+function selectedRows(which, rows, hargaKey) {
+  return rows
+    .filter((r) => sel[which].has(rowId(r)))
+    .map((r) => ({
+      kd_barang: r.kd_barang,
+      kd_satuan: r.kd_satuan,
+      nama: r.nama,
+      harga: r[hargaKey],
+    }));
+}
+
+function applySelected() {
+  const payload = confirmApply.value?.rows || [];
+  if (!payload.length) return;
+  applying.value = true;
+  router.post(
+    "/admin-panel/master/update-barang/harga-massal",
+    { items: payload, redirect_to: "/admin-panel/master/update-barang" },
+    {
+      preserveScroll: true,
+      onFinish: () => {
+        applying.value = false;
+        confirmApply.value = null;
+        sel.saran = new Set();
+        sel.pecahan = new Set();
+        showSuggest.value = false;
+        showPecahan.value = false;
+      },
+    },
+  );
+}
 
 // Badge per kartu: pakai data yang sudah ada di kartu (row), bukan katalog
 // penuh — cukup untuk kartu yang sedang dirender.
@@ -247,6 +308,10 @@ async function openRiwayat(item) {
             <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
           </svg>
           Saran Harga<span v-if="saranRows.length" class="ml-1 rounded-full bg-rx-yellow px-1.5 text-[10px] font-bold text-ink">{{ saranRows.length }}</span>
+        </Button>
+        <!-- Hanya muncul kalau memang ada temuan — tak ada gunanya tombol kosong. -->
+        <Button v-if="pecahanRows.length" variant="danger" @click="showPecahan = true">
+          Harga Berpecahan<span class="ml-1 rounded-full bg-surface px-1.5 text-[10px] font-bold text-danger-fg">{{ pecahanRows.length }}</span>
         </Button>
         <span class="text-sm text-ink-muted whitespace-nowrap">{{ filtered.length }} barang</span>
       </div>
@@ -418,9 +483,9 @@ async function openRiwayat(item) {
       </template>
     </Modal>
 
-    <!-- Saran Harga (retail) — daftar baca-saja, katalog penuh. Prioritas: -->
-    <!-- keterangan yang eksplisit sebut %/margin duluan (lihat backend). -->
-    <!-- Tidak ada tombol terapkan — ubah harga lewat Edit Barang secara manual. -->
+    <!-- Saran Harga (retail) — katalog penuh. Prioritas: keterangan yang -->
+    <!-- eksplisit sebut %/margin duluan (lihat backend). Seleksi baris lalu -->
+    <!-- Terapkan menulis lewat endpoint massal (tetap divalidasi update_harga). -->
     <Modal :show="showSuggest" title="Saran Harga dari Keterangan" size="lg" @close="showSuggest = false">
       <div v-if="!props.saran" class="flex items-center justify-center gap-3 py-10">
         <Spinner />
@@ -430,12 +495,21 @@ async function openRiwayat(item) {
       <div v-else-if="saranRows.length" class="space-y-3">
         <Banner
           variant="info"
-          message="Harga saran diambil dari nominal di kolom keterangan tiap barang, diurutkan barang dengan %/margin eksplisit duluan. Ubah harga lewat Edit Barang secara manual."
+          message="Harga saran diambil dari nominal di kolom keterangan tiap barang, diurutkan barang dengan %/margin eksplisit duluan. Centang baris lalu Terapkan, atau ubah satu per satu lewat Edit Barang."
         />
         <div class="max-h-[55vh] overflow-y-auto scroll-slim">
           <table class="w-full text-sm">
             <thead class="sticky top-0 bg-surface">
               <tr class="text-left text-ink-muted">
+                <th class="py-1.5 w-8">
+                  <input
+                    type="checkbox"
+                    :checked="sel.saran.size === saranRows.length && saranRows.length > 0"
+                    :indeterminate.prop="sel.saran.size > 0 && sel.saran.size < saranRows.length"
+                    aria-label="Pilih semua saran harga"
+                    @change="toggleAll('saran', saranRows)"
+                  />
+                </th>
                 <th class="py-1.5">Barang</th>
                 <th class="py-1.5">Keterangan</th>
                 <th class="py-1.5 text-right">Sekarang</th>
@@ -446,6 +520,14 @@ async function openRiwayat(item) {
             </thead>
             <tbody>
               <tr v-for="s in saranRows" :key="s.kd_barang + s.kd_satuan" class="border-t border-border-default">
+                <td class="py-1.5">
+                  <input
+                    type="checkbox"
+                    :checked="sel.saran.has(rowId(s))"
+                    :aria-label="`Pilih ${s.kd_barang}`"
+                    @change="toggleRow('saran', s)"
+                  />
+                </td>
                 <td class="py-1.5">
                   <p class="font-mono text-[11px] text-ink-muted">{{ s.kd_barang }} · {{ s.satuan }}</p>
                   <p class="font-medium text-ink">{{ s.nama }}</p>
@@ -470,7 +552,124 @@ async function openRiwayat(item) {
         Semua harga sudah sesuai nominal di keterangan — tidak ada saran perubahan.
       </p>
       <template #footer>
+        <span v-if="sel.saran.size" class="mr-auto text-sm text-ink-muted">{{ sel.saran.size }} baris dipilih</span>
         <Button variant="ghost" @click="showSuggest = false">Tutup</Button>
+        <Button
+          variant="primary"
+          :disabled="!sel.saran.size"
+          @click="confirmApply = { judul: 'Saran Harga', rows: selectedRows('saran', saranRows, 'harga_baru') }"
+        >
+          Terapkan{{ sel.saran.size ? ` (${sel.saran.size})` : "" }}
+        </Button>
+      </template>
+    </Modal>
+
+    <!-- Audit harga berpecahan — data lama yang masuk sebelum validasi harga -->
+    <!-- bulat ada. Baca-saja: kolom "Saran" cuma pembulatan ke terdekat, tidak -->
+    <!-- ditulis otomatis. Perbaikan tetap per barang lewat Edit Barang. -->
+    <Modal :show="showPecahan" title="Harga Berpecahan (perlu dibulatkan)" size="lg" @close="showPecahan = false">
+      <div v-if="!props.pecahan" class="flex items-center justify-center gap-3 py-10">
+        <Spinner />
+        <span class="text-sm text-ink-muted">Memeriksa harga…</span>
+      </div>
+      <Banner v-else-if="pecahanData.conn_error" variant="warning" :message="pecahanData.conn_error" />
+      <div v-else-if="pecahanRows.length" class="space-y-3">
+        <Banner
+          variant="danger"
+          :message="`${pecahanRows.length} harga tersimpan mengandung pecahan rupiah (mis. Rp3.000,001). Kolom Saran adalah pembulatan ke nilai terdekat — periksa dulu, lalu perbaiki lewat Edit Barang. Tidak ada yang diubah otomatis.`"
+        />
+        <div class="max-h-[55vh] overflow-y-auto scroll-slim">
+          <table class="w-full text-sm">
+            <thead class="sticky top-0 bg-surface">
+              <tr class="text-left text-ink-muted">
+                <th class="py-1.5 w-8">
+                  <input
+                    type="checkbox"
+                    :checked="sel.pecahan.size === pecahanRows.length && pecahanRows.length > 0"
+                    :indeterminate.prop="sel.pecahan.size > 0 && sel.pecahan.size < pecahanRows.length"
+                    aria-label="Pilih semua harga berpecahan"
+                    @change="toggleAll('pecahan', pecahanRows)"
+                  />
+                </th>
+                <th class="py-1.5">Barang</th>
+                <th class="py-1.5 text-right">Tersimpan</th>
+                <th class="py-1.5 text-right">Saran</th>
+                <th class="py-1.5"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="p in pecahanRows" :key="p.kd_barang + p.kd_satuan" class="border-t border-border-default">
+                <td class="py-1.5">
+                  <input
+                    type="checkbox"
+                    :checked="sel.pecahan.has(rowId(p))"
+                    :aria-label="`Pilih ${p.kd_barang}`"
+                    @change="toggleRow('pecahan', p)"
+                  />
+                </td>
+                <td class="py-1.5">
+                  <p class="font-mono text-[11px] text-ink-muted">{{ p.kd_barang }} · {{ p.satuan }}</p>
+                  <p class="font-medium text-ink">{{ p.nama }}</p>
+                </td>
+                <td class="py-1.5 text-right font-medium text-danger-fg tabular-nums">
+                  {{ p.harga_jual.toLocaleString("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 4 }) }}
+                </td>
+                <td class="py-1.5 text-right font-semibold text-ink tabular-nums">{{ rupiah(p.harga_saran) }}</td>
+                <td class="py-1.5 text-right">
+                  <Button size="sm" variant="yellow-outline" :loading="editLoadingKd === p.kd_barang" @click="openEditByCode(p.kd_barang)">
+                    Edit
+                  </Button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p v-else class="py-8 text-center text-sm text-ink-muted">
+        Semua harga sudah bilangan bulat rupiah.
+      </p>
+      <template #footer>
+        <span v-if="sel.pecahan.size" class="mr-auto text-sm text-ink-muted">{{ sel.pecahan.size }} baris dipilih</span>
+        <Button variant="ghost" @click="showPecahan = false">Tutup</Button>
+        <Button
+          variant="primary"
+          :disabled="!sel.pecahan.size"
+          @click="confirmApply = { judul: 'Harga Berpecahan', rows: selectedRows('pecahan', pecahanRows, 'harga_saran') }"
+        >
+          Bulatkan{{ sel.pecahan.size ? ` (${sel.pecahan.size})` : "" }}
+        </Button>
+      </template>
+    </Modal>
+
+    <!-- Konfirmasi terakhir sebelum menulis ke DB aktif. Daftar ditampilkan -->
+    <!-- penuh supaya user melihat persis apa yang berubah, bukan cuma jumlah. -->
+    <Modal :show="!!confirmApply" :title="`Terapkan ${confirmApply?.judul || ''}?`" size="lg" @close="confirmApply = null">
+      <Banner
+        variant="warning"
+        :message="`${confirmApply?.rows.length || 0} harga akan langsung ditulis ke ${active?.name || 'server aktif'} dan berlaku untuk transaksi berikutnya. Perubahan tercatat di Riwayat Update Barang.`"
+      />
+      <div class="max-h-[45vh] overflow-y-auto scroll-slim">
+        <table class="w-full text-sm">
+          <thead class="sticky top-0 bg-surface">
+            <tr class="text-left text-ink-muted">
+              <th class="py-1.5">Barang</th>
+              <th class="py-1.5 text-right">Harga baru</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in confirmApply?.rows || []" :key="r.kd_barang + r.kd_satuan" class="border-t border-border-default">
+              <td class="py-1.5">
+                <p class="font-mono text-[11px] text-ink-muted">{{ r.kd_barang }} · {{ r.kd_satuan }}</p>
+                <p class="font-medium text-ink">{{ r.nama }}</p>
+              </td>
+              <td class="py-1.5 text-right font-semibold text-ink tabular-nums">{{ rupiah(r.harga) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <template #footer>
+        <Button variant="ghost" :disabled="applying" @click="confirmApply = null">Batal</Button>
+        <Button variant="danger" :loading="applying" @click="applySelected">Ya, terapkan</Button>
       </template>
     </Modal>
   </AdminLayout>

@@ -17,6 +17,8 @@ const props = defineProps({
 const sortKey = ref(null);
 const sortDir = ref("asc");
 const page = ref(1);
+// `perPage` prop is the initial value; the picker below owns it after that.
+const perPage = ref(props.perPage);
 const columnMenuOpen = ref(false);
 const hiddenKeys = ref(new Set());
 
@@ -62,9 +64,14 @@ const sortedRows = computed(() => {
 });
 
 const pagedRows = computed(() => {
-  const start = (page.value - 1) * props.perPage;
-  return sortedRows.value.slice(start, start + props.perPage);
+  const start = (page.value - 1) * perPage.value;
+  return sortedRows.value.slice(start, start + perPage.value);
 });
+
+function setPerPage(n) {
+  perPage.value = Number(n);
+  page.value = 1;
+}
 
 const alignClass = (a) =>
   a === "right" ? "text-right" : a === "center" ? "text-center" : "text-left";
@@ -118,7 +125,9 @@ function formatCell(value, col) {
         </div>
       </div>
     </div>
-    <div class="overflow-x-auto">
+    <!-- Tinggi dibatasi supaya tabel tidak memanjang sampai bawah laman:
+         badan tabel yang di-scroll, header sticky di dalam kontainer ini. -->
+    <div class="max-h-[65vh] overflow-auto scroll-slim">
       <table class="w-full min-w-[720px] divide-y divide-border-default text-sm tabular-nums">
         <thead class="bg-surface-2 sticky top-0 z-10">
           <tr>
@@ -177,8 +186,29 @@ function formatCell(value, col) {
         </tbody>
       </table>
     </div>
-    <div v-if="!loading && sortedRows.length > perPage" class="border-t border-border-default px-3 bg-surface-2">
-      <Pagination v-model:page="page" :total="sortedRows.length" :per-page="perPage" />
+    <div
+      v-if="!loading && sortedRows.length"
+      class="flex flex-wrap items-center justify-between gap-2 border-t border-border-default bg-surface-2 px-3 py-1.5"
+    >
+      <div class="flex items-center gap-2">
+        <label class="text-xs text-ink-muted">Per halaman:</label>
+        <select
+          :value="perPage"
+          @change="setPerPage($event.target.value)"
+          class="h-8 rounded border border-border-strong bg-surface px-2 text-sm text-ink"
+        >
+          <option value="25">25</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+        </select>
+      </div>
+      <Pagination
+        v-if="sortedRows.length > perPage"
+        v-model:page="page"
+        :total="sortedRows.length"
+        :per-page="perPage"
+      />
+      <span v-else class="text-sm text-ink-muted">Menampilkan semua {{ sortedRows.length }} data</span>
     </div>
     </div>
   </div>

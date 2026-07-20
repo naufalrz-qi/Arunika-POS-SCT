@@ -74,6 +74,30 @@ const priceDiff = computed(() => {
     .filter((d) => d.lama !== d.baru);
 });
 
+// Harga wajib bilangan bulat rupiah. Nilai seperti 3000.001 diterima kolom
+// pecahan di DB tapi tampil "Rp3.000,001" dan merusak pembulatan di kasir.
+// Backend (update_harga) tetap penjaga terakhir; ini supaya user tahu lebih awal.
+const hargaBulat = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 && Number.isInteger(n);
+};
+
+// Satuan yang harga BARU-nya (hasil ketikan) belum bulat — memblokir Simpan.
+const hargaInvalid = computed(() => {
+  if (!props.item) return [];
+  return props.item.satuan
+    .filter((u) => !hargaBulat(priceForm.prices[u.kd_satuan]))
+    .map((u) => u.satuan || u.kd_satuan);
+});
+
+// Satuan yang harga TERSIMPAN-nya sudah berpecahan — pengecekan data lama.
+const hargaLamaPecahan = computed(() => {
+  if (!props.item) return [];
+  return props.item.satuan
+    .filter((u) => !Number.isInteger(Number(u.harga_jual)))
+    .map((u) => `${u.satuan || u.kd_satuan}: ${rupiah(u.harga_jual)}`);
+});
+
 const liveMargin = (unit) => {
   const harga = Number(priceForm.prices[unit.kd_satuan]) || 0;
   const modal = unit.modal || 0;
@@ -125,6 +149,18 @@ function saveStatus(table) {
       <!-- Harga per satuan -->
       <div>
         <h4 class="mb-1 text-xs font-semibold text-ink">Harga Jual per Satuan</h4>
+        <Banner
+          v-if="hargaLamaPecahan.length"
+          variant="warning"
+          :message="`Harga tersimpan mengandung pecahan rupiah — ${hargaLamaPecahan.join('; ')}. Bulatkan lalu Simpan.`"
+          class="mb-1.5"
+        />
+        <Banner
+          v-if="hargaInvalid.length"
+          variant="danger"
+          :message="`Harga harus bilangan bulat rupiah (tanpa koma) dan tidak negatif — cek satuan: ${hargaInvalid.join(', ')}.`"
+          class="mb-1.5"
+        />
         <div class="space-y-1.5">
           <div
             v-for="u in item.satuan"
@@ -181,6 +217,7 @@ function saveStatus(table) {
               variant="success"
               size="sm"
               :loading="priceForm.processing"
+              :disabled="hargaInvalid.length > 0"
               @click="confirmOpen = true"
             >
               Simpan
@@ -239,7 +276,7 @@ function saveStatus(table) {
     <p v-if="!priceDiff.length" class="text-sm text-ink-muted">Tidak ada perubahan harga.</p>
     <template #footer>
       <Button variant="ghost" @click="confirmOpen = false">Batal</Button>
-      <Button variant="primary" :disabled="!priceDiff.length" @click="confirmSave">Simpan</Button>
+      <Button variant="primary" :disabled="!priceDiff.length || hargaInvalid.length > 0" @click="confirmSave">Simpan</Button>
     </template>
   </Modal>
 </template>

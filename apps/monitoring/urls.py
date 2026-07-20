@@ -14,6 +14,7 @@ urlpatterns = [
     path("master/sync-history", views.sync_history_index, name="sync_history"),
     path("master/update-barang", views.update_barang_index, name="update_barang"),
     path("master/update-barang/harga", views.update_barang_harga, name="update_barang_harga"),
+    path("master/update-barang/harga-massal", views.update_barang_harga_massal, name="update_barang_harga_massal"),
     path("master/update-barang/status", views.update_barang_status, name="update_barang_status"),
     path("master/update-barang/riwayat", views.update_barang_riwayat, name="update_barang_riwayat"),
     path("master/update-barang/detail", views.update_barang_detail, name="update_barang_detail"),

@@ -87,7 +87,9 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           </div>
         </div>
       </div>
-      <div class="overflow-x-auto scroll-slim">
+      <!-- Tinggi dibatasi supaya tabel tidak memanjang sampai bawah laman:
+           badan tabel yang di-scroll, header sticky di dalam kontainer ini. -->
+      <div class="max-h-[65vh] overflow-auto scroll-slim">
         <table class="w-full min-w-[720px] text-sm tabular-nums">
           <thead class="sticky top-0 z-10 bg-surface-3">
             <tr>

@@ -5,6 +5,7 @@ PRD §5.3: table-level access only; joins & calculations done here in Python
 """
 from __future__ import annotations
 
+import math
 import re
 from decimal import Decimal
 
@@ -37,8 +38,61 @@ def _is_retail(profile) -> bool:
 
 
 def _margin(harga_jual: float, modal: float) -> float:
-    """Markup atas modal, dalam persen. 0 bila modal tak valid."""
-    return round((harga_jual - modal) / modal * 100, 4) if modal and modal > 0 else 0.0
+    """Markup atas modal, dalam persen. 0 bila modal tak valid.
+
+    JANGAN dibulatkan. Aplikasi POS lama memakai margin sebagai acuan dan
+    menurunkan harga darinya (harga = modal * (1 + margin/100)); margin yang
+    dipotong ke 4 desimal tidak cukup untuk mengembalikan harga bulat semula,
+    sehingga harga tertulis balik jadi berpecahan (mis. 9200 -> 9200,0019).
+    Presisi penuh float membuat perhitungan itu mendarat tepat di harga bulat.
+    Tampilan yang butuh angka pendek memformat sendiri (toFixed/format).
+    """
+    return (harga_jual - modal) / modal * 100 if modal and modal > 0 else 0.0
+
+
+class HargaTidakBulat(ValueError):
+    """Harga jual mengandung pecahan rupiah (mis. 3000,001). Ditolak sebelum ditulis."""
+
+
+def _cek_harga_bulat(prices: dict) -> dict:
+    """Validasi {kd_satuan: harga} — harga wajib bilangan bulat rupiah dan >= 0.
+
+    Kolom harga_jual di legacy schema bertipe pecahan, jadi nilai seperti
+    3000.001 diterima DB tapi tampil sebagai "Rp3.000,001" dan merusak
+    pembulatan di kasir. Ditolak di sini, bukan di view, supaya semua pemanggil
+    update_harga ikut terlindungi.
+
+    Return dict harga yang sudah dinormalkan ke float bulat.
+    """
+    bersih: dict = {}
+    salah: list[str] = []
+    for kd_satuan, harga in prices.items():
+        ks = _st(kd_satuan)
+        # None ditolak eksplisit: _f(None) -> 0.0, jadi field `harga` yang hilang
+        # dari payload akan lolos sebagai "harga nol" dan menghapus harga barang.
+        # bool ditolak juga karena True lolos int-check sebagai 1.
+        if harga is None or isinstance(harga, bool):
+            salah.append(f"{ks}: harga kosong")
+            continue
+        try:
+            nilai = _f(harga)
+        except (TypeError, ValueError):
+            salah.append(f"{ks}: '{harga}' bukan angka")
+            continue
+        if not math.isfinite(nilai):
+            # json.loads menerima NaN/Infinity; int(nan) melempar dan jadi 500.
+            salah.append(f"{ks}: '{harga}' bukan angka")
+        elif nilai < 0:
+            salah.append(f"{ks}: {nilai} negatif")
+        elif nilai != int(nilai):
+            salah.append(f"{ks}: {nilai}")
+        else:
+            bersih[ks] = float(int(nilai))
+    if salah:
+        raise HargaTidakBulat(
+            "Harga harus bilangan bulat rupiah (tanpa koma) dan tidak negatif — " + "; ".join(salah)
+        )
+    return bersih
 
 
 def list_products(profile, search: str = "", kd_kategori: str = "") -> list[dict]:
@@ -357,13 +411,52 @@ def list_saran_harga(profile) -> list[dict]:
     return out
 
 
+def list_harga_pecahan(profile) -> list[dict]:
+    """Audit: baris m_barang_satuan yang harga_jual-nya mengandung pecahan rupiah.
+
+    Data lama yang masuk sebelum _cek_harga_bulat ada — mis. 3000,001 dari
+    pembulatan margin yang meleset. Read-only; `harga_saran` cuma usulan
+    (pembulatan ke terdekat), penulisan tetap lewat update_harga per barang.
+    """
+    with mssql.cursor(profile) as cur:
+        cur.execute(
+            "SELECT bs.kd_barang, b.nama, bs.kd_satuan, s.nama AS satuan, bs.harga_jual "
+            "FROM m_barang_satuan bs "
+            "LEFT JOIN m_barang b ON bs.kd_barang = b.kd_barang "
+            "LEFT JOIN m_satuan s ON bs.kd_satuan = s.kd_satuan "
+            "WHERE bs.harga_jual % 1 <> 0 "
+            "ORDER BY bs.kd_barang, bs.kd_satuan"
+        )
+        rows = _dictify(cur)
+
+    out = []
+    for r in rows:
+        harga = _f(r["harga_jual"])
+        out.append({
+            "kd_barang": _st(r["kd_barang"]),
+            "nama": _st(r["nama"]),
+            "kd_satuan": _st(r["kd_satuan"]),
+            "satuan": _st(r["satuan"]) or _st(r["kd_satuan"]),
+            "harga_jual": harga,
+            # Pembulatan ke terdekat, .5 ke atas (bukan bankers rounding Python).
+            "harga_saran": float(math.floor(harga + 0.5)),
+        })
+    return out
+
+
 def update_harga(profile, kd_barang: str, prices: dict) -> list[dict]:
     """Update harga_jual (dan margin) per satuan. `prices`: {kd_satuan: harga_jual}.
 
-    Retail: margin = markup atas modal (harga_jual server sumber-modal). Lain: margin=0.
+    Retail: margin = markup atas modal (harga_jual server sumber-modal). Non-retail:
+    kolom margin tidak disentuh — tidak ada sumber-modal untuk menghitungnya, dan
+    UI menampilkannya read-only sehingga menimpanya dengan 0 = kehilangan data.
     Return daftar perubahan aktual: [{kd_satuan, harga_lama, harga_baru}, ...] (hanya yang
     nilainya benar-benar berubah) — dipakai caller untuk mencatat riwayat (BarangUpdateLog).
+
+    Raise HargaTidakBulat bila ada harga berpecahan; divalidasi lebih dulu supaya
+    tidak ada satuan yang terlanjur tertulis saat satuan lain ditolak.
     """
+    prices = _cek_harga_bulat(prices)
     modal: dict = {}
     is_retail = _is_retail(profile)
     if is_retail:
@@ -382,11 +475,19 @@ def update_harga(profile, kd_barang: str, prices: dict) -> list[dict]:
             ks = _st(kd_satuan)
             harga = _f(harga)
             lama = harga_lama.get(ks, 0.0)
-            margin = _margin(harga, modal.get(ks, 0.0)) if is_retail else 0.0
-            cur.execute(
-                "UPDATE m_barang_satuan SET harga_jual = ?, margin = ? WHERE kd_barang = ? AND kd_satuan = ?",
-                [harga, margin, kd_barang, kd_satuan],
-            )
+            if is_retail:
+                cur.execute(
+                    "UPDATE m_barang_satuan SET harga_jual = ?, margin = ? WHERE kd_barang = ? AND kd_satuan = ?",
+                    [harga, _margin(harga, modal.get(ks, 0.0)), kd_barang, kd_satuan],
+                )
+            else:
+                # Non-retail tidak punya sumber-modal untuk menghitung margin, jadi
+                # kolomnya tidak disentuh sama sekali. Sebelumnya ditulis 0 dan itu
+                # menghapus margin tersimpan padahal UI menampilkannya read-only.
+                cur.execute(
+                    "UPDATE m_barang_satuan SET harga_jual = ? WHERE kd_barang = ? AND kd_satuan = ?",
+                    [harga, kd_barang, kd_satuan],
+                )
             if cur.rowcount and lama != harga:
                 changes.append({"kd_satuan": ks, "harga_lama": lama, "harga_baru": harga})
         cur.connection.commit()

@@ -361,6 +361,15 @@ def update_barang_index(request):
         except pyodbc.Error as exc:
             return {"rows": [], "conn_error": f"Gagal membaca saran harga: {exc.args[-1] if exc.args else exc}"}
 
+    # Audit harga berpecahan — grup sendiri supaya tidak menahan `items`.
+    def load_pecahan():
+        if not profile:
+            return {"rows": [], "conn_error": CONN_ERROR}
+        try:
+            return {"rows": master.list_harga_pecahan(profile), "conn_error": None}
+        except pyodbc.Error as exc:
+            return {"rows": [], "conn_error": f"Gagal membaca audit harga: {exc.args[-1] if exc.args else exc}"}
+
     return render(
         request,
         "Admin/MasterData/UpdateBarang",
@@ -370,6 +379,7 @@ def update_barang_index(request):
             "has_modal": bool(mssql.get_cost_source(profile)) if profile else False,
             "items": defer(load_items),
             "saran": defer(load_saran, group="saran"),
+            "pecahan": defer(load_pecahan, group="pecahan"),
             "filters": {"search": search},
         },
     )
@@ -399,8 +409,76 @@ def update_barang_harga(request):
         )
         log_activity(request, "barang", f"Update harga {kd_barang} ({profile.name}): {len(changes)} satuan")
         request.session["flash_success"] = f"Harga {kd_barang} diperbarui ({len(changes)} satuan)."
+    except master.HargaTidakBulat as exc:
+        request.session["flash_error"] = f"Harga {kd_barang} ditolak. {exc}"
     except pyodbc.Error as exc:
         request.session["flash_error"] = f"Gagal update harga: {exc.args[-1] if exc.args else exc}"
+    return _redirect_back(data, "/admin-panel/master/update-barang")
+
+
+def update_barang_harga_massal(request):
+    """Terapkan banyak harga sekaligus (Saran Harga / Harga Berpecahan).
+
+    Tetap lewat master.update_harga per barang supaya validasi harga bulat,
+    hitung margin, invalidasi cache, dan BarangUpdateLog ikut jalan — tidak ada
+    jalur tulis harga kedua yang perlu dijaga terpisah.
+    """
+    profile = _active()
+    data = get_data(request)
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return _redirect_back(data, "/admin-panel/master/update-barang")
+
+    # items: [{kd_barang, kd_satuan, harga, nama?}] -> {kd_barang: {kd_satuan: harga}}
+    per_barang: dict = {}
+    nama_map: dict = {}
+    items = data.get("items")
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict):
+            continue
+        kb = (it.get("kd_barang") or "").strip()
+        ks = (it.get("kd_satuan") or "").strip()
+        if not kb or not ks:
+            continue
+        per_barang.setdefault(kb, {})[ks] = it.get("harga")
+        nama_map.setdefault(kb, (it.get("nama") or "").strip())
+
+    if not per_barang:
+        request.session["flash_error"] = "Tidak ada baris yang dipilih."
+        return _redirect_back(data, "/admin-panel/master/update-barang")
+
+    # ponytail: satu transaksi per barang (update_harga sudah atomic per barang).
+    # Kalau jumlah baris tumbuh sampai ribuan, baru pertimbangkan batch tunggal.
+    total, gagal = 0, []
+    for kb, prices in per_barang.items():
+        try:
+            changes = master.update_harga(profile, kb, prices)
+        except master.HargaTidakBulat as exc:
+            gagal.append(f"{kb} ({exc})")
+            continue
+        except pyodbc.Error as exc:
+            gagal.append(f"{kb} ({exc.args[-1] if exc.args else exc})")
+            continue
+        total += len(changes)
+        log_barang_updates(
+            request, profile, kb, nama_map.get(kb, ""),
+            [
+                (BarangUpdateLog.Field.HARGA, c["kd_satuan"], c["harga_lama"], c["harga_baru"])
+                for c in changes
+            ],
+        )
+
+    log_activity(
+        request, "barang",
+        f"Terapkan harga massal ({profile.name}): {total} satuan pada {len(per_barang) - len(gagal)} barang",
+    )
+    if gagal:
+        request.session["flash_error"] = (
+            f"{total} satuan diperbarui. {len(gagal)} barang gagal: " + "; ".join(gagal[:5])
+            + (" …" if len(gagal) > 5 else "")
+        )
+    else:
+        request.session["flash_success"] = f"{total} satuan harga diperbarui pada {len(per_barang)} barang."
     return _redirect_back(data, "/admin-panel/master/update-barang")
 
 
