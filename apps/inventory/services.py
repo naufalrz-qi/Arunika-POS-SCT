@@ -117,7 +117,7 @@ def _unit_factors(cur) -> dict:
 
 # --- Movement set (the 9 UNION ALL sources, table-level) --------------------
 
-def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date_from=None, snapshot_date=None, snapshot_table=SNAPSHOT_TABLE):
+def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date_from=None, snapshot_date=None, snapshot_table=SNAPSHOT_TABLE, reverse=False):
     """Build the UNION ALL movement query + params. Optional filters are applied
     inside every source so the DB can seek instead of scanning.
 
@@ -131,16 +131,27 @@ def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date
     from m_barang_divisi + full history since closing, and the transaction
     sources are bounded to `tanggal > snapshot_date` instead of `> closing`.
     Net result is identical (snapshot saldo already folds in movement
-    closing..snapshot_date) but the delta window shrinks to a few days."""
+    closing..snapshot_date) but the delta window shrinks to a few days.
+
+    `reverse` (opt): for `date_to` BEFORE `closing` the forward window
+    (closing, date_to] is empty, so the plain query silently returns bare
+    stok_awal. With reverse the transaction blocks cover (date_to, closing]
+    with debet/kredit swapped, giving stok_awal - movement = saldo at date_to."""
     params: list = []
     # Transaction sources start just after the opening balance point: snapshot
     # date when using the snapshot, else the book-closing date.
     txn_boundary = snapshot_date if snapshot_date else closing
+    upper = date_to
+    if reverse:
+        # Saldo di date_to = stok_awal (jangkar closing) MINUS pergerakan
+        # (date_to, closing]. Blok transaksi dibalik arahnya oleh wrapper di
+        # bawah, jadi di sini cukup geser jendelanya.
+        txn_boundary, upper = date_to, closing
 
     def trans_filters(tcol, dcol, divcol):
         """Common WHERE tail for transaction-based sources (closing/date/div/barang)."""
-        clause = f" AND {tcol} <= ?" if date_to else ""
-        p = [date_to] if date_to else []
+        clause = f" AND {tcol} <= ?" if upper else ""
+        p = [upper] if upper else []
         if date_from:
             clause += f" AND {tcol} >= ?"
             p.append(date_from)
@@ -181,7 +192,12 @@ def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date
             "FROM m_barang_divisi bd "
             "INNER JOIN m_barang b ON bd.kd_barang = b.kd_barang "
             "INNER JOIN m_kategori k ON b.kd_kategori = k.kd_kategori AND k.status <> 2 "
-            "INNER JOIN m_barang_satuan bs ON bd.kd_barang = bs.kd_barang AND bs.jumlah = 1 "
+            # Satu baris satuan dasar per barang: sebagian barang punya >1 satuan
+            # ber-jumlah 1 (mis. PENAL02 -> SAA000 & SAA006), dan join langsung
+            # menggandakan baris stok_awal-nya. Faktornya sama-sama 1, jadi pilih
+            # satu saja.
+            "INNER JOIN (SELECT kd_barang, MIN(kd_satuan) AS kd_satuan FROM m_barang_satuan "
+            "WHERE jumlah = 1 GROUP BY kd_barang) bs ON bd.kd_barang = bs.kd_barang "
             "WHERE 1=1"
         )
         params.append(closing)
@@ -267,7 +283,20 @@ def _movement_sql(closing, *, kd_barang=None, kd_divisi=None, date_to=None, date
     )
     params += [txn_boundary] + p
 
-    return "\nUNION ALL\n".join(blocks), params
+    if not reverse:
+        return "\nUNION ALL\n".join(blocks), params
+    # Blok [0] tetap apa adanya (stok_awal berjangkar di closing); blok transaksi
+    # [1]-[8] ditukar debet<->kredit oleh satu wrapper, sehingga hasilnya
+    # stok_awal - pergerakan(date_to, closing] = saldo di date_to. Derived table
+    # butuh daftar kolom eksplisit karena blok-blok itu tak beralias.
+    tail = "\nUNION ALL\n".join(blocks[1:])
+    rev = (
+        "SELECT kd_divisi, tanggal, no_transaksi, transaksi, kd_barang, "
+        "kredit AS debet, debet AS kredit, kd_satuan, harga, jenis "
+        f"FROM (\n{tail}\n) rev "
+        "(kd_divisi, tanggal, no_transaksi, transaksi, kd_barang, debet, kredit, kd_satuan, harga, jenis)"
+    )
+    return blocks[0] + "\nUNION ALL\n" + rev, params
 
 
 def _fetch_movements(cur, *, kd_barang=None, kd_divisi=None, date_to=None, date_from=None) -> list[dict]:
@@ -279,7 +308,7 @@ def _fetch_movements(cur, *, kd_barang=None, kd_divisi=None, date_to=None, date_
     return _dictify(cur)
 
 
-def _movement_sums(cur, *, kd_divisi=None, date_from=None, date_to=None, use_snapshot=True,
+def _movement_sums(cur, *, kd_barang=None, kd_divisi=None, date_from=None, date_to=None, use_snapshot=True,
                    snapshot_date=None, snapshot_table=SNAPSHOT_TABLE) -> list[dict]:
     """Movement UNION aggregated IN SQL per (kd_divisi, kd_barang), in base units.
 
@@ -301,9 +330,14 @@ def _movement_sums(cur, *, kd_divisi=None, date_from=None, date_to=None, use_sna
     snap_date = snapshot_date
     if snap_date is None and use_snapshot:
         snap_date = _snapshot_date_if_usable(cur, date_from, date_to)
+    # date_to sebelum tutup buku: jendela (closing, date_to] kosong, jadi tanpa
+    # ini hasilnya diam-diam cuma stok_awal untuk tanggal historis apa pun.
+    # Hanya untuk saldo titik-waktu (date_from None) — jalur periode seperti
+    # mutasi_stok butuh pergerakan asli, bukan pembalikannya.
+    reverse = date_to is not None and date_from is None and snap_date is None and date_to < closing
     inner, params = _movement_sql(
-        closing, kd_divisi=kd_divisi, date_to=date_to,
-        snapshot_date=snap_date, snapshot_table=snapshot_table,
+        closing, kd_barang=kd_barang, kd_divisi=kd_divisi, date_to=date_to,
+        snapshot_date=snap_date, snapshot_table=snapshot_table, reverse=reverse,
     )
     boundary = date_from or dt.datetime(1900, 1, 1)
     # MAX(jumlah) dedupes (kd_barang, kd_satuan); missing factor falls back to 1
@@ -378,8 +412,13 @@ def snapshot_stok_base(profile) -> dict:
     Recompute PENUH sejak tutup buku (`use_snapshot=False`) — berat tapi jarang
     (hanya saat bulan base bergeser). Region ini immutable, jadi hasilnya stabil.
     Return {"rows": n, "base_date": base_dt}."""
-    base_dt = _base_date()
     with mssql.report_cursor(profile) as rcur:
+        # Opening block [0] membaca m_barang_divisi.stok_awal, yang berjangkar di
+        # tanggal tutup buku — base beku tak boleh mulai sebelum itu. Bila lebih
+        # awal, jendela transaksi (closing, base_dt] kosong sehingga base berisi
+        # stok_awal mentah tapi bertanggal base_dt, lalu lapisan live menambah
+        # ulang pergerakan (base_dt, closing] yang sudah terkandung di stok_awal.
+        base_dt = max(_base_date(), _closing_date(rcur))
         sums = _movement_sums(rcur, date_to=base_dt, use_snapshot=False)
     rows = _sums_to_rows(sums, base_dt)
     _write_snapshot(profile, SNAPSHOT_BASE_TABLE, rows)
@@ -481,6 +520,9 @@ def stock_card(profile, kd_barang, kd_divisi=None, date_from=None, date_to=None)
 def stok_awal_barang(profile, cutoff=None) -> list[dict]:
     """Stok awal per barang, ditotal lintas divisi.
 
+    Menampilkan seluruh kode barang di m_barang tanpa kecuali, termasuk yang
+    stok awalnya 0.
+
     - cutoff None       -> saldo awal seed tersimpan (m_barang_divisi.stok_awal),
                            yaitu baris 'Stok Awal' [0] di kartu stok.
     - cutoff (datetime) -> saldo berjalan tepat SEBELUM cutoff, identik dengan
@@ -507,10 +549,11 @@ def stok_awal_barang(profile, cutoff=None) -> list[dict]:
                 kb = _k(m["kd_barang"])
                 agg[kb] = agg.get(kb, 0.0) + _f(m["stok_awal"])
 
+    # Seluruh kode barang ditampilkan tanpa kecuali — `meta` sudah berisi semua
+    # baris m_barang, jadi barang tanpa seed/saldo awal tetap muncul dengan 0.
     out = []
-    for kb, stok in agg.items():
-        if not stok:  # buang barang stok awal 0 (sama seperti app)
-            continue
+    for kb in sorted(set(meta) | set(agg)):
+        stok = agg.get(kb, 0.0)
         info = meta.get(kb, {})
         out.append({
             "kd_barang": kb.strip() if isinstance(kb, str) else kb,
@@ -738,13 +781,34 @@ def _purchase_prices(cur, tanggal) -> tuple[dict, dict, dict]:
     return avg_map, last_map, init_map
 
 
+def _barang_universe(cur, kd_divisi=None) -> list[tuple]:
+    """All (kd_divisi, kd_barang) pairs for the Stok Akhir listing — every row of
+    m_barang without exception, including barang with no m_barang_divisi
+    assignment (kd_divisi ''). Needed because _movement_sums drops all-zero rows
+    via its HAVING clause, hiding every zero-stock barang."""
+    sql = (
+        "SELECT COALESCE(bd.kd_divisi, '') AS kd_divisi, b.kd_barang FROM m_barang b "
+        "LEFT JOIN m_barang_divisi bd ON b.kd_barang = bd.kd_barang "
+        "WHERE 1=1"
+    )
+    params = []
+    if kd_divisi:
+        sql += " AND bd.kd_divisi = ?"
+        params.append(kd_divisi)
+    cur.execute(sql, params)
+    return [(_k(r[0]), _k(r[1])) for r in cur.fetchall()]
+
+
 def stok_akhir_per_tanggal(profile, tanggal, kd_divisi=None) -> list[dict]:
-    """Stok akhir per (divisi, barang) at tanggal — matches api_GetStokAkhirPerTanggal schema."""
+    """Stok akhir per (divisi, barang) at tanggal — matches api_GetStokAkhirPerTanggal schema.
+
+    Lists every barang in m_barang without exception, zero-stock included."""
     if isinstance(tanggal, dt.date) and not isinstance(tanggal, dt.datetime):
         tanggal = dt.datetime(tanggal.year, tanggal.month, tanggal.day, 23, 59, 59)
 
     with mssql.report_cursor(profile) as cur:
         sums = _movement_sums(cur, kd_divisi=kd_divisi or None, date_to=tanggal)
+        universe = _barang_universe(cur, kd_divisi=kd_divisi or None)
         divisi = {_k(r["kd_divisi"]): r for r in _div_rows_full(cur)}
         meta = _cached(profile, "meta", lambda: _barang_meta(cur))
         harga_jual = _cached(profile, "harga_jual", lambda: _harga_jual_map(cur))
@@ -755,17 +819,18 @@ def stok_akhir_per_tanggal(profile, tanggal, kd_divisi=None) -> list[dict]:
         key = (_k(m["kd_divisi"]), _k(m["kd_barang"]))
         agg[key] = agg.get(key, 0.0) + _f(m["masuk"]) - _f(m["keluar"]) + _f(m["stok_awal"])
 
+    # Union with agg keys: a barang can carry movement under a divisi it was never
+    # assigned to in m_barang_divisi — those rows must not vanish either.
     out = []
-    for (kd_div, kb), stok in agg.items():
-        if stok == 0:
-            continue
+    for kd_div, kb in sorted(set(universe) | set(agg.keys())):
+        stok = agg.get((kd_div, kb), 0.0)
         info = meta.get(kb, {})
         harga_avg = avg_map.get(kb) or init_map.get(kb, 0.0)
         harga_beli = last_map.get(kb) or init_map.get(kb, 0.0)
         div_info = divisi.get(kd_div, {})
         out.append({
             "kd_divisi": (kd_div or "").strip(),
-            "divisi": (div_info.get("nama", "") or "").strip(),
+            "divisi": (div_info.get("nama", "") or "").strip() or ("(Tanpa Divisi)" if not kd_div else (kd_div or "").strip()),
             "kd_barang": (kb or "").strip(),
             "barang": info.get("nama", ""),
             "kategori": info.get("kategori", ""),
@@ -784,7 +849,8 @@ def stok_akhir_per_tanggal(profile, tanggal, kd_divisi=None) -> list[dict]:
 
 
 def barang_histori(profile, kd_barang=None, kd_divisi=None, date_from=None, date_to=None) -> list[dict]:
-    """Movements list matching api_v_barang_histori view schema."""
+    """Movements list matching api_v_barang_histori view schema, plus a running
+    base-unit `saldo` per (divisi, barang)."""
     if not any([kd_barang, kd_divisi, date_from, date_to]):
         return []
 
@@ -796,6 +862,17 @@ def barang_histori(profile, kd_barang=None, kd_divisi=None, date_from=None, date
             date_to=date_to,
             date_from=date_from,
         )
+        # Saldo berjalan harus mulai dari saldo SEBELUM date_from. Diambil sebagai
+        # agregat SQL (satu baris per SKU, kolom stok_awal) alih-alih ikut menarik
+        # tiap baris pergerakan lama ke Python — lihat catatan row-transfer di
+        # _movement_sums.
+        saldo: dict = {}
+        if date_from:
+            for m in _movement_sums(
+                cur, kd_barang=kd_barang or None, kd_divisi=kd_divisi or None,
+                date_from=date_from, date_to=date_to,
+            ):
+                saldo[(_k(m["kd_divisi"]), _k(m["kd_barang"]))] = _f(m["stok_awal"])
         factors = _cached(profile, "factors", lambda: _unit_factors(cur))
         divisi = {_k(r["kd_divisi"]): r for r in _div_rows_full(cur)}
         satuan = {_k(r["kd_satuan"]): r["nama"] for r in _satuan_rows(cur)}
@@ -811,6 +888,15 @@ def barang_histori(profile, kd_barang=None, kd_divisi=None, date_from=None, date
         div_info = divisi.get(_k(m["kd_divisi"]), {})
         factor = factors.get((_k(m["kd_barang"]), _k(m["kd_satuan"])), 1.0)
         debet, kredit = _f(m["debet"]), _f(m["kredit"])
+        # Saldo berjalan per (divisi, barang) — deret terpisah tiap SKU, bukan
+        # satu kumulatif gabungan (listing bisa lintas barang). Blok [0] Stok Awal
+        # tak pernah difilter tanggal, jadi saat date_from aktif ia muncul di
+        # listing PADAHAL sudah termasuk di agregat saldo awal — jangan dijumlah
+        # lagi. Barisnya tetap tampil sebagai penanda saldo awal periode.
+        key = (_k(m["kd_divisi"]), _k(m["kd_barang"]))
+        saldo.setdefault(key, 0.0)  # agregat membuang grup bersaldo nol
+        if not (date_from and m["transaksi"] == "Stok Awal"):
+            saldo[key] += factor * (debet - kredit)
         rows.append({
             "kd_divisi": (m["kd_divisi"] or "").strip(),
             "divisi": (div_info.get("nama", "") or "").strip(),
@@ -827,6 +913,8 @@ def barang_histori(profile, kd_barang=None, kd_divisi=None, date_from=None, date
             "harga": _f(m["harga"]),
             # base-unit net for a correct cross-satuan saldo summary
             "qty_base": round(factor * (debet - kredit), 3),
+            # saldo berjalan per (divisi, barang), satuan terkecil
+            "saldo": round(saldo[key], 3),
         })
     return rows
 

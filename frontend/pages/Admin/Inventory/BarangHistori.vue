@@ -87,6 +87,9 @@ const columns = [
   { key: "kredit", label: "Kredit", align: "right" },
   { key: "satuan", label: "Satuan", align: "center" },
   { key: "harga", label: "Harga", align: "right" },
+  // Saldo berjalan per (divisi, barang) — selalu satuan terkecil, tidak seperti
+  // debet/kredit yang mengikuti satuan barisnya.
+  { key: "saldo", label: "Saldo (terkecil)", align: "right" },
 ];
 </script>
 
@@ -153,6 +156,9 @@ const columns = [
         <template #cell-debet="{ value }">{{ value ? num(value) : "—" }}</template>
         <template #cell-kredit="{ value }">{{ value ? num(value) : "—" }}</template>
         <template #cell-harga="{ value }">{{ value ? rupiah(value) : "—" }}</template>
+        <template #cell-saldo="{ value }">
+          <span :class="value < 0 ? 'font-medium text-danger-600' : 'font-medium'">{{ num(value) }}</span>
+        </template>
       </DataTable>
     </div>
 
