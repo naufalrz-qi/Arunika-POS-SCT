@@ -30,6 +30,14 @@ strukturdatabase_GrosirPusat.txt
 scripts/output/
 temp_schema.py
 
+# Ad-hoc DB probes + their dumps. Unlike scripts/output/ above, the SCRIPTS are
+# ignored too: they embed the SA connection string inline, so committing one
+# leaks a live credential into history where deleting it later does not help.
+scripts/analyze_*.py
+scripts/*_out*.json
+scripts/func_def*.txt
+scripts/view_def*.txt
+
 demos/
 graphify-out/
 .obsidian/
