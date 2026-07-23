@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from "vue";
-import { Deferred } from "@inertiajs/vue3";
+import { Deferred, Link } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import Card from "@/components/ui/Card.vue";
 import Badge from "@/components/ui/Badge.vue";
@@ -67,8 +67,34 @@ const chartData = computed(() =>
       </Card>
     </div>
 
-    <!-- Recent activity -->
-    <div class="mt-6">
+    <!-- Fast moving + recent activity -->
+    <div class="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <Card title="Fast Moving Bulan Ini" subtitle="Top 10 qty terjual — barang tanpa harga jual dikecualikan">
+        <table v-if="(data.fast_movers || []).length" class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-xs text-ink-muted">
+              <th class="py-1.5 font-medium">Barang</th>
+              <th class="py-1.5 text-right font-medium">Qty</th>
+              <th class="py-1.5 text-right font-medium">Nilai</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border-default">
+            <tr v-for="m in data.fast_movers" :key="m.kd_barang">
+              <td class="py-1.5 pr-2 text-ink">{{ m.nama }}</td>
+              <td class="py-1.5 text-right text-ink">{{ (m.qty ?? 0).toLocaleString("id-ID") }}</td>
+              <td class="py-1.5 text-right text-ink">{{ rupiah(m.nilai) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="text-sm text-ink-muted">Belum ada penjualan bulan ini.</p>
+        <Link
+          href="/admin-panel/analitik/fmi-penjualan"
+          class="mt-3 inline-block text-xs font-medium text-brand-500 hover:underline"
+        >
+          Lihat semua (analisis Pareto) →
+        </Link>
+      </Card>
+
       <Card title="Aktivitas Terbaru">
         <ul class="divide-y divide-border-default">
           <li v-for="a in data.recent_activity || []" :key="a.id" class="flex items-center justify-between py-3">

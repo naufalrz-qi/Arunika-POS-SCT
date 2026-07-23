@@ -22,8 +22,12 @@ const columns = [
   { key: "barang", label: "Barang" },
   { key: "kategori", label: "Kategori" },
   { key: "qty_terjual", label: "Qty Terjual", align: "right", format: "number" },
+  { key: "kontribusi_qty", label: "Kontribusi Qty", align: "right", format: "persen" },
+  { key: "akumulasi_qty", label: "Akumulasi Qty", align: "right", format: "persen" },
   { key: "nilai", label: "Nilai", align: "right", format: "rupiah" },
-  { key: "kelas", label: "Kelas" },
+  { key: "kontribusi_nilai", label: "Kontribusi Nilai", align: "right", format: "persen" },
+  { key: "akumulasi_nilai", label: "Akumulasi Nilai", align: "right", format: "persen" },
+  { key: "kelas", label: "Kelas (Pareto)" },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);

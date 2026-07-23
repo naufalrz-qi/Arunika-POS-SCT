@@ -119,6 +119,7 @@ waitress-serve --threads=32 --listen=0.0.0.0:8000 config.wsgi:application
 ## Troubleshooting
 
 - **UI tak muncul dari device lain / `ERR_CONNECTION_REFUSED localhost:5173`** → pakai Mode B (`DJANGO_VITE_DEV=0` + `npm run build`). Mode dev hardcode `localhost:5173`.
+- **Frontend blank saat produksi (`DEBUG=0` / waitress), 404 `static/assets/*`** — padahal dev HMR normal → `staticfiles/` kosong, `collectstatic` belum jalan. Saat `DEBUG=0`, Django berhenti auto-serve static; hanya **WhiteNoise** yang serve, dan dia baca dari `staticfiles/` (bukan `frontend/dist/`). Waitress sama sekali tak serve static sendiri. Fix: `python manage.py collectstatic --noinput` sebelum start server. **Ulangi tiap `npm run build`** — `staticfiles/` cuma salinan, bukan live.
 - **`Blocked request ... not allowed`** → tambah host ke `ALLOWED_HOSTS` di `.env`.
 - **Data koneksi kosong / kolom kosong** → cek koneksi aktif di navbar; koneksi pertama kali lambat (build index background + cache master 10 mnt).
 - **Port 8000 dipakai** → `Get-NetTCPConnection -LocalPort 8000 | Stop-Process` (lihat `PRODUCTION.md`).

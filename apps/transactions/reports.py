@@ -6,7 +6,6 @@ Each report contributes:
 - `SUMMARY_<NAME>` -> select list for aggregates (jml_baris, total_qty, total_nilai)
 """
 import datetime as dt
-from apps.core import reporting
 
 
 def _line_net(price_col: str, alias: str = "d") -> str:
@@ -567,7 +566,7 @@ def piutang(f):
 
 
 # --- Pengeluaran / Biaya Operasional --
-# t_biaya_operasional today only feeds kas_harian_rows()'s UNION (Biaya: arm);
+# t_biaya_operasional today only feeds kas_harian()'s UNION (Biaya: arm);
 # this adds a standalone detail + per-kategori rollup. Label mapping verified
 # directly against the mon_m_biaya view definition (not called — reimplemented
 # as a CASE, per project convention); live data only has status 1/2 in use
@@ -645,12 +644,14 @@ def opname(f):
 # t_arus_kas doesn't exist. Real cash-affecting sources: t_penambahan_kas
 # (top-up), t_pendapatan (revenue), t_biaya_operasional (expense), t_mutasi_kas
 # (transfer between two kas accounts — sumber=out, tujuan=in), and cash sales
-# (t_penjualan where kd_kas is filled). `saldo` is a running balance across
-# the WHOLE selected range, so this can't use the generic run_paged/_report_view
-# pagination (SQL OFFSET/FETCH would break the running total across pages) —
-# see kas_harian_rows() below, called directly from a bespoke view.
+# (t_penjualan where kd_kas is filled). `saldo` = saldo berjalan per kas,
+# dihitung DI SQL via window function (SUM OVER PARTITION BY kd_kas ORDER BY
+# tanggal) — dulunya loop Python atas seluruh rentang (list-of-dict penuh).
+# Karena saldo kini melekat per baris (independen dari urutan tampil), inner
+# ini kompatibel run_paged (COUNT + OFFSET/FETCH) dan sort desc aman; Python
+# tak pernah memegang rentang penuh lagi.
 
-SORTS_KAS = {"tanggal": "tanggal"}  # only sort supported — saldo needs chronological order
+SORTS_KAS = {"tanggal": "tanggal"}  # only sort supported — kolom lain tak bermakna utk arus kas
 
 
 def _kas_union(pred: str) -> str:
@@ -685,74 +686,66 @@ def _kas_union(pred: str) -> str:
     )
 
 
-def kas_harian_rows(cur, f):
-    """Rows (chronological, with running `saldo` per kd_kas) + summary dict.
+def kas_harian(f):
+    """Inner SQL kas harian (kolom: tanggal, kas, keterangan, masuk, keluar,
+    saldo) — saldo berjalan per kas via window function, cocok utk run_paged.
 
-    Caller (apps/monitoring/views.py) owns pagination: slice the returned
-    rows in Python after this, and reverse for sort_dir=desc.
-    """
-    from apps.inventory.services import _k
-
-    period_sql = _kas_union("{col} >= ? AND {col} <= ?")
-    pre_sql = (
-        "SELECT RTRIM(kd_kas) AS kd_kas, SUM(masuk) - SUM(keluar) AS net "
-        "FROM (" + _kas_union("{col} < ?") + ") u GROUP BY kd_kas"
+    Perbandingan kd_kas mengandalkan collation SQL Server (CI + abaikan spasi
+    ekor) — setara normalisasi _k() versi Python lama."""
+    period = _kas_union("{col} >= ? AND {col} <= ?")
+    pre = _kas_union("{col} < ?")
+    kas_where = " WHERE u.kd_kas = ?" if f.get("kd_kas") else ""
+    inner = (
+        "SELECT u.tanggal, "
+        "COALESCE(NULLIF(LTRIM(RTRIM(mk.keterangan)), ''), NULLIF(LTRIM(RTRIM(mk.kd_index)), ''), RTRIM(u.kd_kas)) AS kas, "
+        "u.keterangan, u.masuk, u.keluar, "
+        # saldo = saldo_awal master + net pergerakan sebelum date_from + kumulatif
+        # dalam rentang. Tiebreaker keterangan di ORDER BY window supaya urutan
+        # (dan saldo antar baris se-tanggal) deterministik.
+        "ROUND(COALESCE(mk.saldo_awal, 0) + COALESCE(pre.net, 0) + SUM(u.masuk - u.keluar) "
+        "OVER (PARTITION BY u.kd_kas ORDER BY u.tanggal, u.keterangan ROWS UNBOUNDED PRECEDING), 2) AS saldo "
+        f"FROM ({period}) u "
+        "LEFT JOIN m_kas mk ON mk.kd_kas = u.kd_kas "
+        f"LEFT JOIN (SELECT kd_kas, SUM(masuk) - SUM(keluar) AS net FROM ({pre}) p GROUP BY kd_kas) pre "
+        "ON pre.kd_kas = u.kd_kas"
+        + kas_where
     )
+    params = [f["date_from"], f["date_to"]] * 6 + [f["date_from"]] * 6
+    if f.get("kd_kas"):
+        params.append(f["kd_kas"])
+    return inner, params
 
-    cur.execute("SELECT kd_kas, kd_index, keterangan, saldo_awal FROM m_kas")
-    kas_rows = reporting.dictify(cur)
-    cur.execute(pre_sql, [f["date_from"]] * 6)
-    pre = reporting.dictify(cur)
-    cur.execute(period_sql, [f["date_from"], f["date_to"]] * 6)
-    moves = reporting.dictify(cur)
 
-    def _fl(v):
-        return float(v) if v is not None else 0.0
-
-    kas_name, saldo = {}, {}
-    for r in kas_rows:
-        kk = _k(r["kd_kas"])
-        kas_name[kk] = (r["keterangan"] or r["kd_index"] or r["kd_kas"] or "").strip()
-        saldo[kk] = _fl(r["saldo_awal"])
-    for r in pre:  # net movement before date_from, on top of m_kas.saldo_awal
-        kk = _k(r["kd_kas"])
-        saldo[kk] = saldo.get(kk, 0.0) + _fl(r["net"])
-
-    want = _k(f["kd_kas"]) if f.get("kd_kas") else None
-    saldo_awal = saldo.get(want, 0.0) if want else sum(saldo.values())
-
-    moves.sort(key=lambda m: m["tanggal"])
-    rows, total_masuk, total_keluar = [], 0.0, 0.0
-    for m in moves:
-        kk = _k(m["kd_kas"])
-        masuk, keluar = _fl(m["masuk"]), _fl(m["keluar"])
-        saldo[kk] = saldo.get(kk, 0.0) + masuk - keluar
-        if want and kk != want:
-            continue
-        total_masuk += masuk
-        total_keluar += keluar
-        rows.append({
-            "tanggal": m["tanggal"].strftime("%Y-%m-%d %H:%M") if hasattr(m["tanggal"], "strftime") else str(m["tanggal"]),
-            "kas": kas_name.get(kk, (m["kd_kas"] or "").strip()),
-            "keterangan": (m["keterangan"] or "").strip(),
-            "masuk": masuk,
-            "keluar": keluar,
-            "saldo": round(saldo[kk], 2),
-        })
-
-    if f.get("sort_dir") == "desc":
-        rows = rows[::-1]
-    for i, r in enumerate(rows):
-        r["_rid"] = i + 1
-
-    summary = {
-        "jml_baris": len(rows),
-        "saldo_awal": round(saldo_awal, 2),
-        "total_masuk": round(total_masuk, 2),
-        "total_keluar": round(total_keluar, 2),
-        "saldo_akhir": round(saldo_awal + total_masuk - total_keluar, 2),
-    }
-    return rows, summary
+def kas_summary(f):
+    """(sql, params) summary kas: jml_baris/total_masuk/total_keluar atas rentang
+    (terfilter kd_kas bila ada) + saldo_awal (= m_kas.saldo_awal + net pergerakan
+    sebelum date_from) + saldo_akhir. Semua agregasi di SQL."""
+    period = _kas_union("{col} >= ? AND {col} <= ?")
+    pre = _kas_union("{col} < ?")
+    kw_u = " WHERE u.kd_kas = ?" if f.get("kd_kas") else ""
+    kw_mk = " WHERE kd_kas = ?" if f.get("kd_kas") else ""
+    kw_p = " WHERE p.kd_kas = ?" if f.get("kd_kas") else ""
+    sql = (
+        "SELECT x.jml_baris, x.total_masuk, x.total_keluar, y.saldo_awal, "
+        "ROUND(y.saldo_awal + x.total_masuk - x.total_keluar, 2) AS saldo_akhir "
+        "FROM (SELECT COUNT(*) AS jml_baris, ROUND(COALESCE(SUM(u.masuk), 0), 2) AS total_masuk, "
+        f"ROUND(COALESCE(SUM(u.keluar), 0), 2) AS total_keluar FROM ({period}) u{kw_u}) x "
+        "CROSS JOIN (SELECT ROUND("
+        f"COALESCE((SELECT SUM(saldo_awal) FROM m_kas{kw_mk}), 0) + "
+        f"COALESCE((SELECT SUM(p.masuk) - SUM(p.keluar) FROM ({pre}) p{kw_p}), 0)"
+        ", 2) AS saldo_awal) y"
+    )
+    # Urutan param HARUS ikut posisi ? kiri-ke-kanan dalam teks SQL:
+    # period (12) -> filter kd_kas subquery x -> kd_kas subquery m_kas ->
+    # pre (6) -> kd_kas subquery pre.
+    params = [f["date_from"], f["date_to"]] * 6
+    if f.get("kd_kas"):
+        params.append(f["kd_kas"])
+        params.append(f["kd_kas"])
+    params += [f["date_from"]] * 6
+    if f.get("kd_kas"):
+        params.append(f["kd_kas"])
+    return sql, params
 
 
 # --- Shift / Pegawai Ganti Shift (B17) --
@@ -840,23 +833,34 @@ def voucher(f):
     return inner, params
 
 
-# --- FMI Penjualan (B20) - Fast Moving Items by quantity sold --
-
-SORTS_FMI_PENJUALAN = {"qty_terjual": "qty_terjual", "nilai": "nilai", "kelas": "kelas"}
+# --- FMI Penjualan (B20) - Fast Moving Items, analisis Pareto (ABC) --
+# Kelas ditentukan HUKUM PARETO atas kontribusi NILAI (bukan ambang qty keras
+# lama qty>100->A/>50->B yang arbitrer): item diurut nilai desc, akumulasi
+# kontribusi <=80% -> A, <=95% -> B, sisanya C. kontribusi (share thd total) &
+# akumulasi (kumulatif) disediakan utk NILAI dan QTY sekaligus.
+#
+# Dua penyaringan penting:
+# 1. Barang tanpa harga jual di master (mis. kresek/packaging — tak ada baris
+#    m_barang_satuan.harga_jual > 0) dibuang: nilainya 0, cuma mengotori ranking.
+# 2. Hanya barang yang PUNYA penjualan pada periode (HAVING qty_terjual > 0) —
+#    Pareto penjualan tak bermakna utk katalog mati; kalau ingin lihat barang
+#    priced-tapi-tak-terjual, itu ranah FMI Stok. Filter tanggal/divisi tetap DI
+#    DALAM subquery penjualan (predikat pd sisi nullable LEFT JOIN diam-diam
+#    mengubahnya jadi inner join).
+SORTS_FMI_PENJUALAN = {
+    "qty_terjual": "qty_terjual", "nilai": "nilai", "kelas": "kelas",
+    "kontribusi_nilai": "kontribusi_nilai", "akumulasi_nilai": "akumulasi_nilai",
+    "kontribusi_qty": "kontribusi_qty", "akumulasi_qty": "akumulasi_qty",
+}
 SUMMARY_FMI_PENJUALAN = (
     "COUNT(DISTINCT kd_barang) AS jml_barang, COALESCE(SUM(qty_terjual), 0) AS total_qty, COALESCE(SUM(nilai), 0) AS total_nilai"
 )
 
 def fmi_penjualan(f):
-    # The date/divisi filter must live INSIDE the joined sales subquery, not in
-    # the outer WHERE: a WHERE predicate on the nullable side of the LEFT JOIN
-    # would silently turn it into an inner join and drop items with no sales in
-    # the period — exactly the slow movers the ELSE 'C' class is meant to show.
     where, params = _base_where(f)
-    inner = (
+    grouped = (
         "SELECT b.kd_barang, b.nama AS barang, COALESCE(k.nama, '') AS kategori, "
-        "COALESCE(SUM(s.qty), 0) AS qty_terjual, COALESCE(SUM(s.nilai), 0) AS nilai, "
-        "CASE WHEN COALESCE(SUM(s.qty), 0) > 100 THEN 'A' WHEN COALESCE(SUM(s.qty), 0) > 50 THEN 'B' ELSE 'C' END AS kelas "
+        "COALESCE(SUM(s.qty), 0) AS qty_terjual, COALESCE(SUM(s.nilai), 0) AS nilai "
         "FROM m_barang b "
         "LEFT JOIN m_kategori k ON b.kd_kategori = k.kd_kategori "
         "LEFT JOIN ("
@@ -865,64 +869,44 @@ def fmi_penjualan(f):
         "INNER JOIN t_penjualan h ON d.no_transaksi = h.no_transaksi "
         f"WHERE {' AND '.join(where)}"
         ") s ON b.kd_barang = s.kd_barang "
-        "GROUP BY b.kd_barang, b.nama, k.nama"
+        "WHERE EXISTS (SELECT 1 FROM m_barang_satuan bs "
+        "WHERE bs.kd_barang = b.kd_barang AND bs.harga_jual > 0) "
+        "GROUP BY b.kd_barang, b.nama, k.nama "
+        "HAVING COALESCE(SUM(s.qty), 0) > 0"
+    )
+    # Window functions dihitung atas SELURUH set hasil grouped (bukan per-halaman)
+    # — run_paged membungkus dgn SELECT * ... ORDER BY ... OFFSET/FETCH, jadi
+    # akumulasi tetap benar & terbaca menaik selama default_sort = nilai desc.
+    # Tiebreaker kd_barang membuat kunci ORDER BY unik (RANGE == ROWS, deterministik).
+    tot_nilai = "NULLIF(SUM(g.nilai) OVER (), 0)"
+    tot_qty = "NULLIF(SUM(g.qty_terjual) OVER (), 0)"
+    cum_nilai = "SUM(g.nilai) OVER (ORDER BY g.nilai DESC, g.kd_barang)"
+    cum_qty = "SUM(g.qty_terjual) OVER (ORDER BY g.qty_terjual DESC, g.kd_barang)"
+    inner = (
+        "SELECT g.*, "
+        f"ROUND(100.0 * g.nilai / {tot_nilai}, 2) AS kontribusi_nilai, "
+        f"ROUND(100.0 * {cum_nilai} / {tot_nilai}, 2) AS akumulasi_nilai, "
+        f"ROUND(100.0 * g.qty_terjual / {tot_qty}, 2) AS kontribusi_qty, "
+        f"ROUND(100.0 * {cum_qty} / {tot_qty}, 2) AS akumulasi_qty, "
+        f"CASE WHEN 100.0 * {cum_nilai} / {tot_nilai} <= 80 THEN 'A' "
+        f"WHEN 100.0 * {cum_nilai} / {tot_nilai} <= 95 THEN 'B' ELSE 'C' END AS kelas "
+        f"FROM ({grouped}) g"
     )
     return inner, params
 
 
 # --- FMI Stok (B21) - Stock velocity analysis --
-# t_stok doesn't exist and m_barang has no harga_beli column. Real live stock
-# snapshot is m_barang_stok_akhir (kd_divisi, kd_barang, stok_akhir); cost
-# price comes from m_barang_divisi.harga_beli_awal (same fallback used by
-# apps/inventory/services.py's _purchase_prices). The stock snapshot itself
-# is point-in-time (no tanggal column), but "terjual"/"rasio"/"status" are
-# computed against how much sold in the requested date_from-date_to window,
-# to give an actual velocity read instead of a bare in-stock/out-of-stock flag.
+# m_barang_stok_akhir (cache stok legacy) RUSAK — berhenti terisi dan angkanya
+# menyimpang jauh dari realita — jadi stok TIDAK lagi dibaca dari sana. Baris
+# FMI Stok kini dihitung di apps/monitoring/views.py::_fmi_stok_rows lewat
+# engine stok asli (apps/inventory/services.stok_akhir_per_tanggal — movement
+# engine + snapshot). Modul ini tinggal menyimpan whitelist sort + ambang
+# klasifikasi velocity.
 
-_FMI_STOK_KRITIS_HARI = 7      # < this many days of stock left at current pace -> Kritis
-_FMI_STOK_OVERSTOCK_HARI = 90  # > this many days of stock left (or never sold) -> Overstock
+_FMI_STOK_KRITIS_HARI = 7      # < sisa hari stok pada laju jual sekarang -> Kritis
+_FMI_STOK_OVERSTOCK_HARI = 90  # > sisa hari stok (atau tak pernah laku) -> Overstock
 
 SORTS_FMI_STOK = {"qty_stok": "qty_stok", "nilai_stok": "nilai_stok", "terjual": "terjual", "rasio": "rasio"}
-SUMMARY_FMI_STOK = (
-    "COUNT(DISTINCT kd_barang) AS jml_barang, COALESCE(SUM(qty_stok), 0) AS total_qty, "
-    "COALESCE(SUM(nilai_stok), 0) AS total_nilai, COALESCE(SUM(terjual), 0) AS total_terjual"
-)
-
-def fmi_stok(f):
-    where, params = ["1=1"], []
-    if f.get("kd_divisi"):
-        where.append("s.kd_divisi = ?")
-        params.append(f["kd_divisi"])
-    _search(where, params, f, ["b.kd_barang", "b.nama"])
-
-    days = max((f["date_to"].date() - f["date_from"].date()).days + 1, 1)
-    sold_params = [f["date_from"], f["date_to"]]
-
-    base = (
-        "SELECT b.kd_barang, b.nama AS barang, COALESCE(k.nama, '') AS kategori, "
-        "COALESCE(SUM(s.stok_akhir), 0) AS qty_stok, "
-        "COALESCE(SUM(s.stok_akhir * bd.harga_beli_awal), 0) AS nilai_stok, "
-        "COALESCE(MAX(sold.terjual), 0) AS terjual "
-        "FROM m_barang b "
-        "LEFT JOIN m_kategori k ON b.kd_kategori = k.kd_kategori "
-        "LEFT JOIN m_barang_stok_akhir s ON b.kd_barang = s.kd_barang "
-        "LEFT JOIN m_barang_divisi bd ON s.kd_barang = bd.kd_barang AND s.kd_divisi = bd.kd_divisi "
-        "LEFT JOIN (SELECT d.kd_barang, SUM(d.qty) AS terjual FROM t_penjualan_detail d "
-        "INNER JOIN t_penjualan h ON d.no_transaksi = h.no_transaksi "
-        "WHERE h.tanggal >= ? AND h.tanggal <= ? GROUP BY d.kd_barang) sold ON b.kd_barang = sold.kd_barang "
-        f"WHERE {' AND '.join(where)} "
-        "GROUP BY b.kd_barang, b.nama, k.nama"
-    )
-    inner = (
-        "SELECT x.*, ROUND(x.terjual / NULLIF(x.qty_stok, 0), 2) AS rasio, "
-        "CASE "
-        "WHEN x.terjual = 0 AND x.qty_stok > 0 THEN 'Overstock' "
-        f"WHEN x.terjual > 0 AND x.qty_stok / (x.terjual / {days}.0) < {_FMI_STOK_KRITIS_HARI} THEN 'Kritis' "
-        f"WHEN x.terjual > 0 AND x.qty_stok / (x.terjual / {days}.0) > {_FMI_STOK_OVERSTOCK_HARI} THEN 'Overstock' "
-        "ELSE 'Sehat' END AS status "
-        f"FROM ({base}) x"
-    )
-    return inner, sold_params + params
 
 
 # --- Transaksi Barang (transaksi seluruh barang, semua jenis) --------------

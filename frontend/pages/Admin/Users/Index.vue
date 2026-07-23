@@ -13,7 +13,8 @@ import Icon from "@/components/nav/Icon.vue";
 
 const props = defineProps({
   users: { type: Array, default: () => [] },
-  can_manage_admin: { type: Boolean, default: false },
+  assignable_roles: { type: Array, default: () => ["kasir", "supervisor"] },
+  me: { type: Number, default: null },
 });
 
 const search = ref("");
@@ -33,14 +34,10 @@ const columns = [
   { key: "actions", label: "", align: "right" },
 ];
 
-const roleOptions = computed(() => {
-  const base = [
-    { value: "kasir", label: "Kasir" },
-    { value: "supervisor", label: "Supervisor" },
-  ];
-  if (props.can_manage_admin) base.push({ value: "admin", label: "Admin" });
-  return base;
-});
+const ROLE_LABELS = { kasir: "Kasir", supervisor: "Supervisor", admin: "Admin", superadmin: "Superadmin" };
+const roleOptions = computed(() =>
+  props.assignable_roles.map((r) => ({ value: r, label: ROLE_LABELS[r] || r })),
+);
 
 // --- Create / edit modal ---
 const showForm = ref(false);
@@ -81,6 +78,14 @@ function confirmReset() {
 }
 
 // --- Activate / deactivate (toggle) ---
+const toggleTarget = ref(null);
+function confirmToggle() {
+  router.post(`/admin-panel/users/${toggleTarget.value.id}/toggle`, {}, {
+    onFinish: () => (toggleTarget.value = null),
+  });
+}
+
+// --- Hapus permanen ---
 const deleteTarget = ref(null);
 function confirmDelete() {
   router.delete(`/admin-panel/users/${deleteTarget.value.id}/delete`, {
@@ -102,7 +107,7 @@ function confirmDelete() {
 
       <DataTable :columns="columns" :rows="filtered" empty-message="Tidak ada user.">
         <template #cell-role="{ value }">
-          <Badge :variant="value === 'admin' ? 'warning' : value === 'supervisor' ? 'brand' : 'neutral'" class="capitalize">{{ value }}</Badge>
+          <Badge :variant="value === 'superadmin' ? 'danger' : value === 'admin' ? 'warning' : value === 'supervisor' ? 'brand' : 'neutral'" class="capitalize">{{ value }}</Badge>
         </template>
         <template #cell-is_active="{ value }">
           <Badge :variant="value ? 'success' : 'danger'">{{ value ? "Aktif" : "Nonaktif" }}</Badge>
@@ -111,7 +116,11 @@ function confirmDelete() {
           <div class="flex justify-end gap-1">
             <Button variant="ghost" size="sm" aria-label="Edit user" title="Edit user" @click="openEdit(row)"><Icon name="pencil" size="h-4 w-4" /></Button>
             <Button variant="ghost" size="sm" aria-label="Reset password" title="Reset password" @click="openReset(row)"><Icon name="key" size="h-4 w-4" /></Button>
-            <Button variant="ghost" size="sm" :aria-label="row.is_active ? 'Nonaktifkan user' : 'Aktifkan user'" :title="row.is_active ? 'Nonaktifkan user' : 'Aktifkan user'" @click="deleteTarget = row"><Icon name="power" size="h-4 w-4" /></Button>
+            <!-- Toggle & hapus disembunyikan untuk akun sendiri (backend juga menolak) -->
+            <template v-if="row.id !== me">
+              <Button variant="ghost" size="sm" :aria-label="row.is_active ? 'Nonaktifkan user' : 'Aktifkan user'" :title="row.is_active ? 'Nonaktifkan user' : 'Aktifkan user'" @click="toggleTarget = row"><Icon name="power" size="h-4 w-4" /></Button>
+              <Button variant="ghost" size="sm" aria-label="Hapus user" title="Hapus user (permanen)" @click="deleteTarget = row"><Icon name="trash" size="h-4 w-4" /></Button>
+            </template>
           </div>
         </template>
       </DataTable>
@@ -152,20 +161,33 @@ function confirmDelete() {
     </Modal>
 
     <!-- Activate / deactivate -->
-    <Modal :show="!!deleteTarget" :title="deleteTarget?.is_active ? 'Nonaktifkan User' : 'Aktifkan User'" size="sm" @close="deleteTarget = null">
+    <Modal :show="!!toggleTarget" :title="toggleTarget?.is_active ? 'Nonaktifkan User' : 'Aktifkan User'" size="sm" @close="toggleTarget = null">
       <p class="text-sm text-ink-muted">
-        <template v-if="deleteTarget?.is_active">
-          Nonaktifkan akun <strong>{{ deleteTarget?.name }}</strong>? User tidak akan bisa login.
+        <template v-if="toggleTarget?.is_active">
+          Nonaktifkan akun <strong>{{ toggleTarget?.name }}</strong>? User tidak akan bisa login.
         </template>
         <template v-else>
-          Aktifkan kembali akun <strong>{{ deleteTarget?.name }}</strong>?
+          Aktifkan kembali akun <strong>{{ toggleTarget?.name }}</strong>?
         </template>
       </p>
       <template #footer>
-        <Button variant="secondary" @click="deleteTarget = null">Batal</Button>
-        <Button :variant="deleteTarget?.is_active ? 'danger' : 'primary'" @click="confirmDelete">
-          {{ deleteTarget?.is_active ? "Nonaktifkan" : "Aktifkan" }}
+        <Button variant="secondary" @click="toggleTarget = null">Batal</Button>
+        <Button :variant="toggleTarget?.is_active ? 'danger' : 'primary'" @click="confirmToggle">
+          {{ toggleTarget?.is_active ? "Nonaktifkan" : "Aktifkan" }}
         </Button>
+      </template>
+    </Modal>
+
+    <!-- Hapus permanen -->
+    <Modal :show="!!deleteTarget" title="Hapus User" size="sm" @close="deleteTarget = null">
+      <p class="text-sm text-ink-muted">
+        Hapus <strong>{{ deleteTarget?.name }}</strong> ({{ deleteTarget?.username }}) secara
+        <strong>permanen</strong>? Aksi ini tidak bisa dibatalkan — untuk sekadar memblokir login,
+        gunakan Nonaktifkan.
+      </p>
+      <template #footer>
+        <Button variant="secondary" @click="deleteTarget = null">Batal</Button>
+        <Button variant="danger" @click="confirmDelete">Hapus Permanen</Button>
       </template>
     </Modal>
   </AdminLayout>

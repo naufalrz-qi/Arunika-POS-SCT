@@ -49,6 +49,35 @@ def dashboard_summary(profile, day: dt.date | None = None) -> dict:
         )
         counts_by_hour = {int(r["hour"]): int(r["count"]) for r in _dictify(cur)}
 
+        # Fast movers bulan berjalan (top 10 by qty). Barang tanpa harga jual di
+        # master (kresek/packaging) dikecualikan — filter EXISTS yang sama dgn
+        # FMI Penjualan (apps/transactions/reports.py::fmi_penjualan). Nilai =
+        # pola _line_net: diskon1-4 rupiah flat per unit, bukan persen.
+        month_start = dt.datetime(day.year, day.month, 1)
+        cur.execute(
+            "SELECT TOP 10 b.kd_barang, b.nama, SUM(d.qty) AS qty_terjual, "
+            "SUM(d.qty * (d.harga_jual - COALESCE(d.diskon1, 0) - COALESCE(d.diskon2, 0) "
+            "- COALESCE(d.diskon3, 0) - COALESCE(d.diskon4, 0))) AS nilai "
+            "FROM t_penjualan_detail d "
+            "JOIN t_penjualan h ON d.no_transaksi = h.no_transaksi "
+            "JOIN m_barang b ON d.kd_barang = b.kd_barang "
+            "WHERE h.tanggal >= ? AND h.tanggal < ? "
+            "AND EXISTS (SELECT 1 FROM m_barang_satuan bs "
+            "WHERE bs.kd_barang = b.kd_barang AND bs.harga_jual > 0) "
+            "GROUP BY b.kd_barang, b.nama "
+            "ORDER BY SUM(d.qty) DESC",
+            [month_start, end],
+        )
+        fast_movers = [
+            {
+                "kd_barang": (r["kd_barang"] or "").strip(),
+                "nama": (r["nama"] or "").strip(),
+                "qty": round(_f(r["qty_terjual"])),
+                "nilai": round(_f(r["nilai"])),
+            }
+            for r in _dictify(cur)
+        ]
+
     hourly = [
         {"hour": f"{h:02d}", "count": counts_by_hour.get(h, 0)}
         for h in range(24)
@@ -60,5 +89,6 @@ def dashboard_summary(profile, day: dt.date | None = None) -> dict:
         "total_items": round(_f(agg["items"])),
         "revenue": round(_f(agg["revenue"])),
         "hourly_transactions": hourly,
+        "fast_movers": fast_movers,
     }
 

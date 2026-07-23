@@ -17,10 +17,12 @@ const emit = defineEmits(["page-change", "sort-change", "per-page-change"]);
 
 const nf = new Intl.NumberFormat("id-ID");
 const rp = new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 });
+const pf = new Intl.NumberFormat("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 function fmt(value, col) {
   if (value === null || value === undefined || value === "") return "-";
   if (col.format === "number") return nf.format(value);
   if (col.format === "rupiah") return rp.format(value);
+  if (col.format === "persen") return `${pf.format(value)}%`;
   if (col.format === "date") {
     const d = new Date(value);
     return isNaN(d) ? value : d.toLocaleDateString("id-ID");
@@ -147,6 +149,9 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             <option value="25">25</option>
             <option value="50">50</option>
             <option value="100">100</option>
+            <option value="200">200</option>
+            <option value="500">500</option>
+            <option value="1000">1000</option>
           </select>
         </div>
         <Pagination

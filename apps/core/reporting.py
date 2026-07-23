@@ -6,15 +6,25 @@ Contract with the frontend (planing/frontend_tasks.md):
 - GET <page-url>/export?<same query> answers with an XLSX file.
 """
 import datetime as dt
+import os
 from decimal import Decimal
 
 from django.http import HttpResponse
 
-DEFAULT_PER_PAGE = 100
-MAX_PER_PAGE = 200
-MAX_RANGE_DAYS = 92        # ~3 months; longer ranges are clamped (PRD §10)
-EXPORT_CAP = 100_000       # hard cap on exported rows (PRD §10)
-RECENT_LIMIT = 100        # rows shown on first load, before any filter is set
+
+def _env_int(name, default):
+    try:
+        return int(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+
+
+# Semua batas bisa ditune lewat env (mis. REPORT_MAX_PER_PAGE) tanpa ubah kode.
+DEFAULT_PER_PAGE = _env_int("REPORT_DEFAULT_PER_PAGE", 100)
+MAX_PER_PAGE = _env_int("REPORT_MAX_PER_PAGE", 1000)     # plafon page-size di layar (dulu 200)
+MAX_RANGE_DAYS = _env_int("REPORT_MAX_RANGE_DAYS", 92)   # ~3 bln; hanya clamp jalur INTERAKTIF, export dilepas
+EXPORT_CAP = _env_int("REPORT_EXPORT_CAP", 100_000)      # cap XLSX (buffer RAM); CSV streaming TIDAK dibatasi ini
+RECENT_LIMIT = _env_int("REPORT_RECENT_LIMIT", 100)      # rows shown on first load, before any filter is set
 
 RANGE_WARNING = (
     "Rentang tanggal dibatasi maksimal {d} hari — tanggal mulai disesuaikan otomatis."
@@ -63,8 +73,9 @@ def parse_report_params(
         date_from = _parse_date(g.get("date_from")) or month_start(today)
         date_to = _parse_date(g.get("date_to")) or dt.datetime(today.year, today.month, today.day)
 
+    # max_range_days=None -> tanpa clamp (jalur export/CSV: akses rentang berapapun).
     warning = None
-    if (date_to - date_from).days > max_range_days:
+    if max_range_days is not None and (date_to - date_from).days > max_range_days:
         date_from = date_to - dt.timedelta(days=max_range_days)
         warning = RANGE_WARNING.format(d=max_range_days)
 
@@ -290,6 +301,35 @@ def xlsx_response(filename, columns, rows):
     ws.append([c["label"] for c in columns])
     for r in rows[:EXPORT_CAP]:
         ws.append([r.get(c["key"]) for c in columns])
+    resp = HttpResponse(
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M")
+    resp["Content-Disposition"] = f'attachment; filename="{filename}-{stamp}.xlsx"'
+    wb.save(resp)
+    return resp
+
+
+def xlsx_stream_response(filename, columns, cur, chunk=2000):
+    """Bangun XLSX dgn STREAMING cursor (yg sudah di-execute caller) baris per
+    baris ke openpyxl write_only — TAK pernah menumpuk seluruh baris jadi
+    list-of-dict di RAM (beda `run_all` + `xlsx_response`). Baris diambil sbg
+    tuple langsung dari cursor lalu dipetakan ke kolom lewat index. Output XLSX,
+    memori app datar walau ratusan ribu baris.
+    """
+    from openpyxl import Workbook
+
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("Data")
+    ws.append([c["label"] for c in columns])
+    pos = {name: i for i, name in enumerate(d[0] for d in cur.description)}
+    idxs = [pos.get(c["key"]) for c in columns]
+    while True:
+        batch = cur.fetchmany(chunk)
+        if not batch:
+            break
+        for row in batch:
+            ws.append([_clean(row[i]) if i is not None else None for i in idxs])
     resp = HttpResponse(
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )

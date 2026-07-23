@@ -7,6 +7,7 @@ urlpatterns = [
     path("users", views.users_index, name="users"),
     path("users/save", views.users_save, name="users_save"),
     path("users/<int:user_id>/reset-password", views.users_reset_password, name="users_reset_password"),
+    path("users/<int:user_id>/toggle", views.users_toggle, name="users_toggle"),
     path("users/<int:user_id>/delete", views.users_delete, name="users_delete"),
     path("master/products", views.products_index, name="products"),
     path("master/customers", views.customers_index, name="customers"),

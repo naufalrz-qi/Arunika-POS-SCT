@@ -14,7 +14,7 @@ from inertia import defer, render
 from apps.auth_app.models import Role, User
 from apps.connections.models import ServerProfile
 from apps.core.http import get_data
-from apps.core.menus import assignable_menus
+from apps.core.menus import SECTION_LABELS, SECTIONS, assignable_menus
 from apps.core.models import (
     ActivityLog,
     BarangHargaChange,
@@ -82,7 +82,8 @@ def dashboard(request):
         ]
 
         profile = _active()
-        summary = {"total_transactions": 0, "total_items": 0, "revenue": 0, "hourly_transactions": []}
+        summary = {"total_transactions": 0, "total_items": 0, "revenue": 0,
+                   "hourly_transactions": [], "fast_movers": []}
         conn_error = None
         if profile:
             try:
@@ -103,6 +104,7 @@ def dashboard(request):
                 "servers_total": len(servers),
             },
             "hourly_transactions": summary["hourly_transactions"],
+            "fast_movers": summary.get("fast_movers", []),
             "recent_activity": recent,
             "conn_error": conn_error,
         }
@@ -127,15 +129,27 @@ def _user_dict(u):
     }
 
 
-# PRD §4 — operational-account management. A plain Admin manages kasir/supervisor;
-# a Superadmin additionally manages Admin accounts. Superadmin accounts are NEVER
-# managed here (a superadmin edits their own account via /profile) — the actor's
-# managed-role set gates both the accepted `role` value and the reachable targets,
-# blocking privilege escalation via the save/delete/reset endpoints.
+# PRD §4 — operational-account management.
+# Superadmin: kelola SEMUA user tanpa kecuali, termasuk mengangkat superadmin baru.
+# Admin: kelola kasir/supervisor/admin (termasuk sesama admin), tapi tidak bisa
+# membuat superadmin ataupun menyentuh akun superadmin. Set ini menjadi gerbang
+# ganda — role target yang boleh dijangkau DAN nilai role yang boleh diberikan —
+# sehingga eskalasi privilege via endpoint save/delete/reset tetap terblokir.
 def _managed_roles(user):
     if user.role == Role.SUPERADMIN:
-        return [Role.KASIR, Role.SUPERVISOR, Role.ADMIN]
-    return [Role.KASIR, Role.SUPERVISOR]
+        return [Role.KASIR, Role.SUPERVISOR, Role.ADMIN, Role.SUPERADMIN]
+    return [Role.KASIR, Role.SUPERVISOR, Role.ADMIN]
+
+
+def _last_superadmin_guard(target, new_role=None, deactivate=False):
+    """Pesan error bila aksi menghilangkan superadmin aktif terakhir (demosi /
+    hapus / nonaktif), else None — kunci sistem tak boleh lenyap."""
+    if target.role != Role.SUPERADMIN:
+        return None
+    if not (deactivate or (new_role is not None and new_role != Role.SUPERADMIN)):
+        return None
+    others = User.objects.filter(role=Role.SUPERADMIN, is_active=True).exclude(pk=target.pk).count()
+    return "Tidak bisa: ini superadmin aktif terakhir." if others == 0 else None
 
 
 def users_index(request):
@@ -143,7 +157,8 @@ def users_index(request):
     users = User.objects.filter(role__in=roles).order_by("role", "username")
     return render(request, "Admin/Users/Index", props={
         "users": [_user_dict(u) for u in users],
-        "can_manage_admin": request.user.role == Role.SUPERADMIN,
+        "assignable_roles": roles,
+        "me": request.user.id,
     })
 
 
@@ -159,11 +174,20 @@ def users_save(request):
         request.session["flash_error"] = "Role tidak valid atau di luar wewenang Anda."
         return redirect("/admin-panel/users")
 
+    username = (data.get("username") or "").strip()
     if user_id:
         user = get_object_or_404(User, pk=user_id, role__in=managed)
+        if (err := _last_superadmin_guard(user, new_role=role)):
+            request.session["flash_error"] = err
+            return redirect("/admin-panel/users")
+        # Username ikut bisa diedit (dulu diabaikan diam-diam pada jalur edit).
+        if username and username != user.username:
+            if User.objects.filter(username__iexact=username).exclude(pk=user.pk).exists():
+                request.session["flash_error"] = "Username sudah dipakai."
+                return redirect("/admin-panel/users")
+            user.username = username
         user.first_name, user.last_name, user.role = first, last, role
     else:
-        username = (data.get("username") or "").strip()
         if not username:
             request.session["flash_error"] = "Username wajib diisi."
             return redirect("/admin-panel/users")
@@ -206,13 +230,37 @@ def users_reset_password(request, user_id):
     return redirect("/admin-panel/users")
 
 
-def users_delete(request, user_id):
+def users_toggle(request, user_id):
+    """Aktif/nonaktif (soft) — dulunya menempati endpoint 'delete'."""
     user = get_object_or_404(User, pk=user_id, role__in=_managed_roles(request.user))
+    if user.pk == request.user.pk:
+        request.session["flash_error"] = "Tidak bisa menonaktifkan akun sendiri."
+        return redirect("/admin-panel/users")
+    if user.is_active and (err := _last_superadmin_guard(user, deactivate=True)):
+        request.session["flash_error"] = err
+        return redirect("/admin-panel/users")
     user.is_active = not user.is_active
     user.save(update_fields=["is_active"])
     state = "diaktifkan" if user.is_active else "dinonaktifkan"
     log_activity(request, "user", f"User {user.username} {state}")
     request.session["flash_success"] = f"User {state}."
+    return redirect("/admin-panel/users")
+
+
+def users_delete(request, user_id):
+    """Hapus PERMANEN (bug lama: endpoint ini cuma toggle nonaktif, hapus
+    sungguhan tidak pernah ada)."""
+    user = get_object_or_404(User, pk=user_id, role__in=_managed_roles(request.user))
+    if user.pk == request.user.pk:
+        request.session["flash_error"] = "Tidak bisa menghapus akun sendiri."
+        return redirect("/admin-panel/users")
+    if (err := _last_superadmin_guard(user, deactivate=True)):
+        request.session["flash_error"] = err
+        return redirect("/admin-panel/users")
+    username = user.username
+    user.delete()
+    log_activity(request, "user", f"User {username} dihapus permanen")
+    request.session["flash_success"] = f"User {username} dihapus."
     return redirect("/admin-panel/users")
 
 
@@ -965,6 +1013,13 @@ def menus_index(request):
                 for u in users
             ],
             "menus": assignable_menus(),
+            # Urutan + label section untuk pengelompokan di UI (hanya section
+            # yang punya menu assignable).
+            "sections": [
+                {"key": s, "label": SECTION_LABELS[s]}
+                for s in SECTIONS
+                if any(m["section"] == s for m in assignable_menus())
+            ],
         },
     )
 
@@ -1033,6 +1088,9 @@ def _spec_params(request, spec, export=False):
     # first-load cap, which only applies to the on-screen table.
     f = reporting.parse_report_params(
         request, spec["sorts"], spec["default_sort"],
+        # Export (XLSX/CSV) melepas clamp 92 hari — akses rentang berapapun; jalur
+        # interaktif tetap di-clamp supaya tak sengaja scan seluruh histori di layar.
+        max_range_days=None if export else reporting.MAX_RANGE_DAYS,
         enable_recent=spec.get("enable_recent", False) and not export,
         recent_sort=spec.get("recent_sort"),
     )
@@ -1110,21 +1168,27 @@ def _report_export(spec):
             return redirect(spec["url"])
         inner, params = spec["inner"](f)
         inner, params = reporting.apply_column_filters(inner, params, f)
-        rows, last_exc = None, None
-        # Prefer the replica, fall back to the primary if it's unreachable
-        # (same read-offload-with-fallback policy as _report_view).
+
+        # Export = STREAMING XLSX: query di-execute lalu ditulis baris-per-baris
+        # ke openpyxl write_only (tuple langsung dari cursor, TANPA numpuk
+        # list-of-dict di RAM). Replica dulu, fallback primary (sama spt
+        # _report_view). TOP EXPORT_CAP jaga batas baris Excel (~1jt); clamp
+        # rentang tanggal sudah dilepas di _spec_params(export=True).
+        order_sql = f"SELECT TOP {reporting.EXPORT_CAP} * FROM ({inner}) AS q ORDER BY {f['order_by']}"
+        resp, last_exc = None, None
         for read_profile in mssql.report_read_profiles(profile):
             try:
                 with mssql.report_cursor(read_profile) as cur:
-                    rows = reporting.run_all(cur, inner, params, f)
+                    cur.execute(order_sql, params)
+                    resp = reporting.xlsx_stream_response(spec["filename"], spec["columns"], cur)
                 break
             except pyodbc.Error as exc:
                 last_exc = exc
-        if rows is None:
+        if resp is None:
             request.session["flash_error"] = f"Gagal export: {last_exc.args[-1] if last_exc.args else last_exc}"
             return redirect(spec["url"])
-        log_activity(request, "export", f"Export {spec['filename']}: {len(rows)} baris")
-        return reporting.xlsx_response(spec["filename"], spec["columns"], rows)
+        log_activity(request, "export", f"Export {spec['filename']}")
+        return resp
 
     return view
 
@@ -1682,21 +1746,25 @@ def transaksi_barang_export(request):
         request.session["flash_error"] = CONN_ERROR
         return redirect("/admin-panel/inventory/transaksi")
     inner, params = _transaksi_inner(p)
-    rows, last_exc = None, None
+    # Streaming XLSX (pola _report_export): tuple langsung dari cursor, tanpa
+    # menumpuk list-of-dict rentang penuh di RAM.
+    order_sql = f"SELECT TOP {reporting.EXPORT_CAP} * FROM ({inner}) AS q ORDER BY {p['order_by']}"
+    resp, last_exc = None, None
     for read_profile in mssql.report_read_profiles(profile):
         try:
             with mssql.report_cursor(read_profile) as cur:
-                rows = reporting.run_all(cur, inner, params, p)
+                cur.execute(order_sql, params)
+                resp = reporting.xlsx_stream_response("transaksi-barang", _TRANSAKSI_COLUMNS, cur)
             break
         except pyodbc.Error as exc:
             last_exc = exc
-    if rows is None:
+    if resp is None:
         # Same policy as _report_export: surface the failure instead of
         # silently downloading an empty sheet.
         request.session["flash_error"] = f"Gagal export: {last_exc.args[-1] if last_exc.args else last_exc}"
         return redirect("/admin-panel/inventory/transaksi")
-    log_activity(request, "export", f"Export transaksi-barang: {len(rows)} baris")
-    return reporting.xlsx_response("transaksi-barang", _TRANSAKSI_COLUMNS, rows)
+    log_activity(request, "export", "Export transaksi-barang")
+    return resp
 
 
 _OPNAME = {
@@ -1751,35 +1819,154 @@ _FMI_PENJUALAN = {
     "url": "/admin-panel/analitik/fmi-penjualan",
     "inner": rpt.fmi_penjualan,
     "sorts": rpt.SORTS_FMI_PENJUALAN,
-    "default_sort": "qty_terjual",
+    "default_sort": "nilai",
     "summary": rpt.SUMMARY_FMI_PENJUALAN,
     "filter_keys": ["kd_divisi"],
     "options": lambda p: {"divisi": _opt_divisi(p)},
     "filename": "fmi-penjualan",
-    "columns": [{"key": "kd_barang", "label": "Kode"}, {"key": "barang", "label": "Barang"}, {"key": "kategori", "label": "Kategori"}, {"key": "qty_terjual", "label": "Qty Terjual", "align": "right", "format": "number"}, {"key": "nilai", "label": "Nilai", "align": "right", "format": "rupiah"}, {"key": "kelas", "label": "Kelas"}],
+    "columns": [{"key": "kd_barang", "label": "Kode"}, {"key": "barang", "label": "Barang"}, {"key": "kategori", "label": "Kategori"}, {"key": "qty_terjual", "label": "Qty Terjual", "align": "right", "format": "number"}, {"key": "kontribusi_qty", "label": "Kontribusi Qty", "align": "right", "format": "persen"}, {"key": "akumulasi_qty", "label": "Akumulasi Qty", "align": "right", "format": "persen"}, {"key": "nilai", "label": "Nilai", "align": "right", "format": "rupiah"}, {"key": "kontribusi_nilai", "label": "Kontribusi Nilai", "align": "right", "format": "persen"}, {"key": "akumulasi_nilai", "label": "Akumulasi Nilai", "align": "right", "format": "persen"}, {"key": "kelas", "label": "Kelas (Pareto)"}],
 }
 fmi_penjualan = _report_view(_FMI_PENJUALAN)
 fmi_penjualan_export = _report_export(_FMI_PENJUALAN)
 
-_FMI_STOK = {
-    "component": "Admin/Analytics/FmiStok",
-    "url": "/admin-panel/analitik/fmi-stok",
-    "inner": rpt.fmi_stok,
-    "sorts": rpt.SORTS_FMI_STOK,
-    "default_sort": "qty_stok",
-    "summary": rpt.SUMMARY_FMI_STOK,
-    "filter_keys": ["kd_divisi"],
-    "options": lambda p: {"divisi": _opt_divisi(p)},
-    "filename": "fmi-stok",
-    "columns": [{"key": "kd_barang", "label": "Kode"}, {"key": "barang", "label": "Barang"}, {"key": "kategori", "label": "Kategori"}, {"key": "qty_stok", "label": "Qty Stok", "align": "right", "format": "number"}, {"key": "nilai_stok", "label": "Nilai Stok", "align": "right", "format": "rupiah"}, {"key": "terjual", "label": "Terjual", "align": "right", "format": "number"}, {"key": "rasio", "label": "Rasio", "align": "right", "format": "number"}, {"key": "status", "label": "Status"}],
-}
-fmi_stok = _report_view(_FMI_STOK)
-fmi_stok_export = _report_export(_FMI_STOK)
+# FMI Stok: bespoke (bukan _report_view) — stok dihitung engine asli
+# (inv.stok_akhir_per_tanggal: movement engine + snapshot), BUKAN
+# m_barang_stok_akhir yang sudah rusak/berhenti terisi. Angka "terjual" tetap
+# SQL atas t_penjualan dalam rentang; join stok<->terjual di Python via _k.
+_FMI_STOK_COLUMNS = [
+    {"key": "kd_barang", "label": "Kode"}, {"key": "barang", "label": "Barang"},
+    {"key": "kategori", "label": "Kategori"},
+    {"key": "qty_stok", "label": "Qty Stok", "align": "right", "format": "number"},
+    {"key": "nilai_stok", "label": "Nilai Stok", "align": "right", "format": "rupiah"},
+    {"key": "terjual", "label": "Terjual", "align": "right", "format": "number"},
+    {"key": "rasio", "label": "Rasio", "align": "right", "format": "number"},
+    {"key": "status", "label": "Status"},
+]
+
+
+def _fmi_stok_rows(profile, f):
+    """Baris FMI Stok terurut sesuai f — stok real per tanggal f['date_to'],
+    velocity vs penjualan f['date_from']..f['date_to']. Barang tanpa harga jual
+    (kresek/packaging) dan katalog mati (stok 0 & terjual 0) dikecualikan —
+    konsisten aturan analisis FMI Penjualan."""
+    from apps.inventory.services import _k
+
+    levels = inv.stok_akhir_per_tanggal(
+        profile, tanggal=f["date_to"], kd_divisi=f["kd_divisi"] or None)
+
+    where = "h.tanggal >= ? AND h.tanggal <= ?"
+    params = [f["date_from"], f["date_to"]]
+    if f["kd_divisi"]:
+        where += " AND h.kd_divisi = ?"
+        params.append(f["kd_divisi"])
+    with mssql.report_cursor(profile) as cur:
+        cur.execute(
+            "SELECT d.kd_barang, SUM(d.qty) AS terjual FROM t_penjualan_detail d "
+            "INNER JOIN t_penjualan h ON d.no_transaksi = h.no_transaksi "
+            f"WHERE {where} GROUP BY d.kd_barang", params)
+        sold = {_k(r["kd_barang"]): float(r["terjual"] or 0) for r in reporting.dictify(cur)}
+
+    days = max((f["date_to"].date() - f["date_from"].date()).days + 1, 1)
+    agg = {}
+    for r in levels:
+        if r["harga_jual"] <= 0:
+            continue  # barang non-jual — bukan objek analisis
+        a = agg.setdefault(_k(r["kd_barang"]), {
+            "kd_barang": r["kd_barang"], "barang": r["barang"],
+            "kategori": r["kategori"], "qty_stok": 0.0, "nilai_stok": 0.0,
+        })
+        a["qty_stok"] += r["stok_akhir"]
+        a["nilai_stok"] += r["nominal"]
+
+    q = f["search"].lower()
+    rows = []
+    for kb, a in agg.items():
+        terjual = sold.get(kb, 0.0)
+        if a["qty_stok"] == 0 and terjual == 0:
+            continue  # katalog mati — noise
+        if q and q not in a["barang"].lower() and q not in a["kd_barang"].lower():
+            continue
+        a["terjual"] = terjual
+        a["rasio"] = round(terjual / a["qty_stok"], 2) if a["qty_stok"] else None
+        if terjual == 0:
+            a["status"] = "Overstock"
+        else:
+            sisa_hari = a["qty_stok"] / (terjual / days)
+            a["status"] = ("Kritis" if sisa_hari < rpt._FMI_STOK_KRITIS_HARI
+                           else "Overstock" if sisa_hari > rpt._FMI_STOK_OVERSTOCK_HARI
+                           else "Sehat")
+        a["qty_stok"] = round(a["qty_stok"], 3)
+        a["nilai_stok"] = round(a["nilai_stok"], 2)
+        rows.append(a)
+
+    key = f["sort"]
+    rows.sort(key=lambda r: (r.get(key) is None, r.get(key) or 0),
+              reverse=f["sort_dir"] == "desc")
+    return rows
+
+
+def fmi_stok(request):
+    f = reporting.parse_report_params(request, rpt.SORTS_FMI_STOK, "qty_stok")
+    f["kd_divisi"] = (request.GET.get("kd_divisi") or "").strip()
+
+    def load_report():
+        rows, total, summary, options, conn_error = [], 0, {}, {}, None
+        profile = _active()
+        if profile:
+            try:
+                all_rows = _fmi_stok_rows(profile, f)
+                total = len(all_rows)
+                summary = {
+                    "jml_barang": total,
+                    "total_qty": round(sum(r["qty_stok"] for r in all_rows), 3),
+                    "total_nilai": round(sum(r["nilai_stok"] for r in all_rows), 2),
+                    "total_terjual": round(sum(r["terjual"] for r in all_rows), 3),
+                }
+                start = (f["page"] - 1) * f["per_page"]
+                rows = all_rows[start:start + f["per_page"]]
+                for i, r in enumerate(rows):
+                    r["_rid"] = start + i + 1
+                options = {"divisi": _opt_divisi(profile)}
+            except pyodbc.Error as exc:
+                conn_error = f"Gagal membaca FMI stok: {exc.args[-1] if exc.args else exc}"
+        else:
+            conn_error = CONN_ERROR
+        if f["warning"]:
+            conn_error = f["warning"] if not conn_error else f"{conn_error} {f['warning']}"
+        return {"rows": rows, "total": total, "summary": summary,
+                "options": options, "conn_error": conn_error}
+
+    return render(request, "Admin/Analytics/FmiStok", props={
+        "report": defer(load_report),
+        "filters": {
+            "date_from": f["date_from_s"], "date_to": f["date_to_s"],
+            "date_mode": f["date_mode"], "search": f["search"],
+            "sort": f["sort"], "sort_dir": f["sort_dir"],
+            "page": f["page"], "per_page": f["per_page"],
+            "recent": False, "kd_divisi": f["kd_divisi"],
+        },
+    })
+
+
+def fmi_stok_export(request):
+    f = reporting.parse_report_params(request, rpt.SORTS_FMI_STOK, "qty_stok", max_range_days=None)
+    f["kd_divisi"] = (request.GET.get("kd_divisi") or "").strip()
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect("/admin-panel/analitik/fmi-stok")
+    try:
+        rows = _fmi_stok_rows(profile, f)
+    except pyodbc.Error as exc:
+        request.session["flash_error"] = f"Gagal export: {exc.args[-1] if exc.args else exc}"
+        return redirect("/admin-panel/analitik/fmi-stok")
+    log_activity(request, "export", f"Export fmi-stok: {len(rows)} baris")
+    return reporting.xlsx_response("fmi-stok", _FMI_STOK_COLUMNS, rows)
 
 # Kas & Shift
-# Kas Harian has a running `saldo` column across the whole selected range, so
-# it can't reuse the generic _report_view (SQL-level OFFSET/FETCH pagination
-# would break the running total) — see rpt.kas_harian_rows().
+# Kas Harian: saldo berjalan kini dihitung window function di SQL
+# (rpt.kas_harian) sehingga paginasi OFFSET/FETCH aman; view tetap bespoke
+# hanya karena summary-nya (saldo_awal pre-range) bukan agregat inner biasa.
 _KAS_COLUMNS = [
     {"key": "tanggal", "label": "Tanggal"},
     {"key": "kas", "label": "Kas"},
@@ -1793,18 +1980,22 @@ _KAS_COLUMNS = [
 def kas_harian(request):
     f = reporting.parse_report_params(request, rpt.SORTS_KAS, "tanggal")
     f["kd_kas"] = (request.GET.get("kd_kas") or "").strip()
+    # tanggal tidak unik — tambah tiebreaker (sinkron dgn ORDER BY window di
+    # rpt.kas_harian) supaya paginasi OFFSET stabil antar halaman.
+    f["order_by"] = f"q.tanggal {f['sort_dir'].upper()}, q.kas, q.keterangan"
 
     def load_report():
         rows, total, summary, options, conn_error = [], 0, {}, {}, None
         profile = _active()
         if profile:
             try:
+                inner, params = rpt.kas_harian(f)
                 with mssql.cursor(profile) as cur:
-                    all_rows, summary = rpt.kas_harian_rows(cur, f)
+                    rows, total = reporting.run_paged(cur, inner, params, f)
+                    ssql, sparams = rpt.kas_summary(f)
+                    cur.execute(ssql, sparams)
+                    summary = reporting.clean_rows(reporting.dictify(cur))[0]
                     options = {"kas": _opt_kas(profile)}
-                total = len(all_rows)
-                start = (f["page"] - 1) * f["per_page"]
-                rows = all_rows[start:start + f["per_page"]]
             except pyodbc.Error as exc:
                 conn_error = f"Gagal membaca kas: {exc.args[-1] if exc.args else exc}"
         else:
@@ -1823,20 +2014,26 @@ def kas_harian(request):
 
 
 def kas_harian_export(request):
-    f = reporting.parse_report_params(request, rpt.SORTS_KAS, "tanggal")
+    # max_range_days=None: jalur export lepas clamp 92 hari (konsisten
+    # _spec_params(export=True) pada laporan generik).
+    f = reporting.parse_report_params(request, rpt.SORTS_KAS, "tanggal", max_range_days=None)
     f["kd_kas"] = (request.GET.get("kd_kas") or "").strip()
+    f["order_by"] = f"q.tanggal {f['sort_dir'].upper()}, q.kas, q.keterangan"
     profile = _active()
     if not profile:
         request.session["flash_error"] = CONN_ERROR
         return redirect("/admin-panel/kas/harian")
+    inner, params = rpt.kas_harian(f)
+    order_sql = f"SELECT TOP {reporting.EXPORT_CAP} * FROM ({inner}) AS q ORDER BY {f['order_by']}"
     try:
         with mssql.cursor(profile) as cur:
-            rows, _summary = rpt.kas_harian_rows(cur, f)
+            cur.execute(order_sql, params)
+            resp = reporting.xlsx_stream_response("kas-harian", _KAS_COLUMNS, cur)
     except pyodbc.Error as exc:
         request.session["flash_error"] = f"Gagal export: {exc.args[-1] if exc.args else exc}"
         return redirect("/admin-panel/kas/harian")
-    log_activity(request, "export", f"Export kas-harian: {len(rows)} baris")
-    return reporting.xlsx_response("kas-harian", _KAS_COLUMNS, rows)
+    log_activity(request, "export", "Export kas-harian")
+    return resp
 
 _SHIFT = {
     "component": "Admin/Cash/Shift",
