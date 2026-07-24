@@ -33,6 +33,29 @@ HDR_DISKON = (
 )
 
 
+def _ghb(price: str, diskon: list[str], pajak: str = "0", ppnbm: str = "0") -> str:
+    """Emulasi UDF dbo.GetHargaBersih sbg satu ekspresi SQL (PRD §5.3: no UDF call).
+
+    Tiap diskon1-4 diterapkan berurutan atas nilai berjalan dgn semantik UDF
+    (dual-mode): nilai di (-1,1) = persen (v*(1-d)), |nilai|>=1 = rupiah flat
+    (v-d). Lalu pajak & ppnbm ditambah sbg fraksi (v*(1+p)). Guard UDF
+    `IF @harga_bersih > 0` direplikasi: nilai dihitung lalu dibuang bila price
+    awal <= 0.
+
+    Kunci: tiap langkah ditulis `v*mult(d) - sub(d)` sehingga nilai berjalan `v`
+    muncul TEPAT SEKALI per langkah (mult/sub hanya bergantung pd konstanta d,
+    bukan v). Bentuk CASE naif (v muncul 3x tiap cabang) membuat SQL Server
+    meng-inline-ulang tiap langkah 3x saat optimasi -> ledakan ekspresi 3^4 per
+    GHB (error 8632 'expression services limit'). Bentuk once-only ini flat linear."""
+    v = f"({price})"
+    for d in diskon:
+        mult = f"(CASE WHEN {d} > -1 AND {d} < 1 THEN 1 - ({d}) ELSE 1 END)"
+        sub = f"(CASE WHEN {d} > -1 AND {d} < 1 THEN 0 ELSE ({d}) END)"
+        v = f"({v} * {mult} - {sub})"
+    v = f"({v} * (1 + {pajak}) * (1 + {ppnbm}))"
+    return f"(CASE WHEN ({price}) > 0 THEN {v} ELSE ({price}) END)"
+
+
 def _search(where: list, params: list, f: dict, cols: list) -> None:
     """Append LIKE clause when f['search'] is set."""
     if f["search"]:
@@ -138,6 +161,110 @@ def penjualan_detail(f):
         "LEFT JOIN m_pegawai p ON d.kd_pegawai = p.kd_pegawai "
         "LEFT JOIN m_satuan st ON d.kd_satuan = st.kd_satuan "
         f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
+
+
+# --- Laba per Barang (HPP) — replikasi VIEW mon_t_penjualan_per_barang_harga_pokok --
+# VIEW legacy tak boleh dipanggil (PRD §5.3); logikanya ditulis ulang table-level.
+# "harga pokok" = harga beli net pembelian TERAKHIR per unit dasar (subquery cost,
+# ROW_NUMBER), fallback MAX(harga_beli_awal) m_barang_divisi (opening). UDF
+# GetHargaBersih diemulasi _ghb_apply (dual-mode diskon + pajak, semantik fraksi).
+# Join master pakai LEFT (konvensi sibling report), beda dari VIEW yg INNER —
+# baris dgn customer/divisi hilang tetap tampil, bukan didrop. `opening` INNER
+# meniru VIEW `bdiv`: barang tanpa baris m_barang_divisi memang tereksklusi.
+SORTS_PENJUALAN_HPP = {
+    "tanggal": "tanggal", "no_transaksi": "no_transaksi", "barang": "barang",
+    "kategori": "kategori", "harga_pokok": "harga_pokok",
+    "total_bersih": "total_bersih", "total_harga_pokok": "total_harga_pokok",
+    "laba": "laba", "margin": "margin",
+}
+SUMMARY_PENJUALAN_HPP = (
+    "COUNT(*) AS jml_baris, COALESCE(SUM(q.total_bersih), 0) AS total_bersih, "
+    "COALESCE(SUM(q.total_harga_pokok), 0) AS total_harga_pokok, "
+    "COALESCE(SUM(q.laba), 0) AS total_laba, "
+    "ROUND(COALESCE(SUM(q.laba), 0) / NULLIF(SUM(q.total_harga_pokok), 0) * 100, 2) AS margin_total"
+)
+FILTERS_PENJUALAN_HPP = {
+    "no_transaksi": ("no_transaksi", "text"),
+    "customer": ("customer", "text"),
+    "barang": ("barang", "text"),
+    "kd_barang": ("kd_barang", "text"),
+    "kategori": ("kategori", "text"),
+    "laba": ("laba", "number_range"),
+    "margin": ("margin", "number_range"),
+    "total_bersih": ("total_bersih", "number_range"),
+}
+
+
+def penjualan_hpp(f):
+    where, params = _base_where(f)
+    _search(where, params, f, ["h.no_transaksi", "b.nama", "c.nama"])
+
+    # Net jual per unit terjual: GHB item (diskon baris, tanpa pajak) -> GHB
+    # header (diskon nota + pajak). Dua guard `harga>0` dipertahankan bertingkat.
+    item_net = _ghb("d.harga_jual",
+                    ["COALESCE(d.diskon1,0)", "COALESCE(d.diskon2,0)",
+                     "COALESCE(d.diskon3,0)", "COALESCE(d.diskon4,0)"])
+    harga_net = _ghb(item_net,
+                     ["COALESCE(h.diskon1,0)", "COALESCE(h.diskon2,0)",
+                      "COALESCE(h.diskon3,0)", "COALESCE(h.diskon4,0)"],
+                     pajak="COALESCE(h.pajak,0)")
+
+    # Cost per unit dasar: pembelian terakhir (net dari diskon+pajak+ppnbm beli).
+    cost_net = _ghb("pd.harga_beli",
+                    ["COALESCE(pd.diskon1,0)", "COALESCE(pd.diskon2,0)",
+                     "COALESCE(pd.diskon3,0)", "COALESCE(pd.diskon4,0)"],
+                    pajak="COALESCE(pb.pajak,0)", ppnbm="COALESCE(pb.ppnbm,0)")
+    cost_sub = (
+        "SELECT kd_barang, harga_net_cost FROM ("
+        "SELECT pd.kd_barang, "
+        f"({cost_net}) / NULLIF(brg.jumlah, 0) AS harga_net_cost, "
+        "ROW_NUMBER() OVER (PARTITION BY pd.kd_barang ORDER BY pb.tanggal DESC, pb.no_transaksi DESC) AS rn "
+        "FROM t_pembelian_detail pd "
+        "INNER JOIN t_pembelian pb ON pd.no_transaksi = pb.no_transaksi "
+        "INNER JOIN m_barang_satuan brg ON brg.kd_barang = pd.kd_barang AND brg.kd_satuan = pd.kd_satuan "
+        "WHERE pd.harga_beli > 0"
+        ") z WHERE z.rn = 1"
+    )
+
+    # bst = satuan baris terjual: konv (bst.jumlah) melayani /konv (Harga per unit
+    # dasar) sekaligus *konv (Total HPP). VIEW menjoin m_barang_satuan dua kali
+    # untuk itu; satu join cukup (predikat identik).
+    base = (
+        "SELECT h.no_transaksi, h.tanggal, COALESCE(dv.nama, '') AS divisi, "
+        "COALESCE(c.nama, '') AS customer, d.kd_barang, COALESCE(b.nama, '') AS barang, "
+        "COALESCE(kt.nama, '') AS kategori, d.qty, COALESCE(st.nama, '') AS satuan, "
+        "COALESCE(pg.nama, '') AS petugas, bst.jumlah AS konv, "
+        f"({harga_net}) AS harga_net, "
+        "ISNULL(cost.harga_net_cost, opening.harga_beli_awal) AS harga_pokok "
+        "FROM t_penjualan h "
+        "INNER JOIN t_penjualan_detail d ON h.no_transaksi = d.no_transaksi "
+        "INNER JOIN m_barang b ON d.kd_barang = b.kd_barang "
+        "LEFT JOIN m_customer c ON h.kd_customer = c.kd_customer "
+        "LEFT JOIN m_divisi dv ON h.kd_divisi = dv.kd_divisi "
+        "LEFT JOIN m_kategori kt ON b.kd_kategori = kt.kd_kategori "
+        "LEFT JOIN m_userx pg ON h.kd_user = pg.kd_user "
+        "LEFT JOIN m_satuan st ON d.kd_satuan = st.kd_satuan "
+        "INNER JOIN m_barang_satuan bst ON bst.kd_barang = d.kd_barang AND bst.kd_satuan = d.kd_satuan "
+        f"LEFT JOIN ({cost_sub}) cost ON cost.kd_barang = d.kd_barang "
+        "INNER JOIN (SELECT kd_barang, MAX(harga_beli_awal) AS harga_beli_awal "
+        "FROM m_barang_divisi GROUP BY kd_barang) opening ON opening.kd_barang = d.kd_barang "
+        f"WHERE {' AND '.join(where)}"
+    )
+
+    inner = (
+        "SELECT x.no_transaksi, x.tanggal, x.divisi, x.customer, x.kd_barang, x.barang, "
+        "x.kategori, x.qty, x.satuan, x.petugas, "
+        "ROUND(x.harga_net / NULLIF(x.konv, 0), 2) AS harga, "
+        "ROUND(x.harga_pokok, 2) AS harga_pokok, "
+        "ROUND(x.harga_net * x.qty, 2) AS total_bersih, "
+        "ROUND(x.harga_pokok * x.qty * x.konv, 2) AS total_harga_pokok, "
+        "ROUND(x.harga_net * x.qty - x.harga_pokok * x.qty * x.konv, 2) AS laba, "
+        "ROUND((x.harga_net * x.qty - x.harga_pokok * x.qty * x.konv) / "
+        "(CASE WHEN x.harga_pokok * x.qty * x.konv = 0 THEN 1 "
+        "ELSE x.harga_pokok * x.qty * x.konv END) * 100, 2) AS margin "
+        f"FROM ({base}) x"
     )
     return inner, params
 

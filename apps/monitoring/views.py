@@ -1237,6 +1237,41 @@ _PENJUALAN_ALL = {
 }
 penjualan_all = _report_view(_PENJUALAN_ALL)
 penjualan_all_export = _report_export(_PENJUALAN_ALL)
+
+_PENJUALAN_HPP = {
+    "component": "Admin/Reports/PenjualanHpp",
+    "url": "/admin-panel/laporan/penjualan-hpp",
+    "inner": rpt.penjualan_hpp,
+    "sorts": rpt.SORTS_PENJUALAN_HPP,
+    "default_sort": "tanggal",
+    "summary": rpt.SUMMARY_PENJUALAN_HPP,
+    "filter_keys": ["kd_divisi"],
+    "filters": rpt.FILTERS_PENJUALAN_HPP,
+    "enable_recent": True,
+    "recent_sort": "tanggal",
+    "options": lambda p: {"divisi": _opt_divisi(p)},
+    "filename": "laba-per-barang",
+    "columns": [
+        {"key": "no_transaksi", "label": "No. Transaksi"},
+        {"key": "tanggal", "label": "Tanggal"},
+        {"key": "divisi", "label": "Divisi"},
+        {"key": "customer", "label": "Customer"},
+        {"key": "kd_barang", "label": "Kode Barang"},
+        {"key": "barang", "label": "Barang"},
+        {"key": "kategori", "label": "Kategori"},
+        {"key": "qty", "label": "Qty", "align": "right", "format": "number"},
+        {"key": "satuan", "label": "Satuan"},
+        {"key": "harga", "label": "Harga", "align": "right", "format": "rupiah"},
+        {"key": "harga_pokok", "label": "Harga Pokok", "align": "right", "format": "rupiah"},
+        {"key": "total_bersih", "label": "Total Bersih", "align": "right", "format": "rupiah"},
+        {"key": "total_harga_pokok", "label": "Total HPP", "align": "right", "format": "rupiah"},
+        {"key": "laba", "label": "Laba", "align": "right", "format": "rupiah"},
+        {"key": "margin", "label": "Margin %", "align": "right", "format": "persen"},
+    ],
+}
+penjualan_hpp = _report_view(_PENJUALAN_HPP)
+penjualan_hpp_export = _report_export(_PENJUALAN_HPP)
+
 _PENJUALAN_NOTA = {
     "component": "Admin/Reports/PenjualanNota",
     "url": "/admin-panel/laporan/penjualan-nota",

@@ -39,6 +39,8 @@ urlpatterns = [
     # Laporan penjualan / pembelian
     path("laporan/penjualan", views.penjualan_all, name="penjualan_all"),
     path("laporan/penjualan/export", views.penjualan_all_export, name="penjualan_all_export"),
+    path("laporan/penjualan-hpp", views.penjualan_hpp, name="penjualan_hpp"),
+    path("laporan/penjualan-hpp/export", views.penjualan_hpp_export, name="penjualan_hpp_export"),
     path("laporan/penjualan-nota", views.penjualan_nota, name="penjualan_nota"),
     path("laporan/penjualan-nota/export", views.penjualan_nota_export, name="penjualan_nota_export"),
     path("laporan/penjualan-customer", views.penjualan_customer, name="penjualan_customer"),
