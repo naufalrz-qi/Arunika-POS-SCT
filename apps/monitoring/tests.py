@@ -1,9 +1,28 @@
 """Security regression tests: user management hardening + per-menu RBAC."""
+import io
+
 from django.test import TestCase
 
 from apps.auth_app.models import Role, User
+from apps.core import reporting
 from apps.core.menus import menu_key_for_path
 from apps.core.middleware import _menu_allowed
+
+
+class XlsxIllegalCharTests(TestCase):
+    """Regresi: teks legacy MS SQL berkarakter kontrol bikin openpyxl melempar
+    IllegalCharacterError (lolos `except pyodbc.Error` -> 500 saat export)."""
+
+    def test_clean_buang_karakter_kontrol_dan_trim(self):
+        self.assertEqual(reporting._clean("bad\x00te\x1fxt "), "badtext")
+        self.assertEqual(reporting._clean("\tok\n"), "\tok\n".strip())  # tab/LF sah
+
+    def test_xlsx_response_tak_error_untuk_teks_kotor(self):
+        cols = [{"key": "nama", "label": "Nama"}]
+        resp = reporting.xlsx_response("t", cols, [{"nama": "PT ABC\x00 \x07Jaya"}])
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(resp.content))
+        self.assertEqual(wb["Data"].cell(row=2, column=1).value, "PT ABC Jaya")
 
 
 class UsersSaveHardeningTests(TestCase):

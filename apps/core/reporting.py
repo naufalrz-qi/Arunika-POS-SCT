@@ -7,9 +7,17 @@ Contract with the frontend (planing/frontend_tasks.md):
 """
 import datetime as dt
 import os
+import re
 from decimal import Decimal
 
 from django.http import HttpResponse
+
+# Karakter kontrol yg ditolak XML 1.0 -> openpyxl melempar IllegalCharacterError
+# (bukan pyodbc.Error, jadi lolos dari `except pyodbc.Error` di view = 500).
+# Teks legacy MS SQL (keterangan/nama/alamat) sering bawa byte ini. Cermin dari
+# openpyxl.cell.cell.ILLEGAL_CHARACTERS_RE; didefinisikan lokal agar openpyxl tak
+# ikut ter-import di tiap request (dipakai di _clean, hot loop per-sel).
+_ILLEGAL_XML = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
 def _env_int(name, default):
@@ -130,7 +138,7 @@ def _clean(v):
     if isinstance(v, dt.date):
         return v.strftime("%Y-%m-%d")
     if isinstance(v, str):
-        return v.strip()
+        return _ILLEGAL_XML.sub("", v).strip()
     return v
 
 
@@ -300,7 +308,9 @@ def xlsx_response(filename, columns, rows):
     ws = wb.create_sheet("Data")
     ws.append([c["label"] for c in columns])
     for r in rows[:EXPORT_CAP]:
-        ws.append([r.get(c["key"]) for c in columns])
+        # _clean = buang karakter kontrol ilegal (openpyxl menolaknya) + normalisasi
+        # Decimal/tanggal; jalur stream sudah lewat _clean, samakan di sini.
+        ws.append([_clean(r.get(c["key"])) for c in columns])
     resp = HttpResponse(
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
