@@ -10,11 +10,14 @@ debet, kredit, kd_satuan, harga, jenis.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import os
 from decimal import Decimal
 
 from core import mssql
 from core.cache import _cached, invalidate_master_cache  # noqa: F401 (re-exported)
+
+log = logging.getLogger(__name__)
 from apps.core.reporting import dictify as _dictify
 
 # Rolling stock-balance snapshot: SATU set baris terkini per server (bukan
@@ -99,12 +102,16 @@ def _snapshot_date_if_usable(cur, date_from, date_to):
     tak bisa dilayani → fallback. Juga fallback bila snapshot basi (> N hari)."""
     snap = _snapshot_meta(cur)
     if snap is None:
+        log.info("stok: snapshot belum ada -> jalur lambat")
         return None
     if (dt.datetime.now() - snap).days > _snapshot_max_age_days():
+        log.info("stok: snapshot basi (%s) -> jalur lambat", snap)
         return None
     if date_to is not None and date_to < snap:
+        log.info("stok: date_to %s < snapshot %s -> jalur lambat", date_to, snap)
         return None
     if date_from is not None and date_from < snap:
+        log.info("stok: date_from %s < snapshot %s -> jalur lambat", date_from, snap)
         return None
     return snap
 
@@ -449,12 +456,33 @@ def snapshot_stok(profile) -> dict:
 # --- Public services -------------------------------------------------------
 
 def list_divisi(profile) -> list[dict]:
+    """Daftar divisi aktif untuk dropdown filter.
+
+    Dicache: dipanggil di samping stock_levels, yang membuka koneksi ODBC-nya
+    sendiri — tanpa cache tiap load halaman membuka dua koneksi hanya untuk
+    membaca m_divisi dua kali. WHERE-nya beda dari _div_rows (status <> 0 vs
+    semua) jadi keduanya tetap terpisah, cuma sama-sama dicache.
+    """
+    def build():
+        with mssql.report_cursor(profile) as cur:
+            cur.execute("SELECT kd_divisi, nama FROM m_divisi WHERE status <> 0 ORDER BY nama")
+            return [
+                {"kd_divisi": (r["kd_divisi"] or "").strip(), "nama": (r["nama"] or "").strip()}
+                for r in _dictify(cur)
+            ]
+
+    return _cached(profile, "divisi_list", build)
+
+
+def snapshot_status(profile) -> dict:
+    """Tanggal ringkasan stok harian + apakah masih segar.
+
+    Dipakai UI untuk memberi tahu pengguna saat perhitungan terpaksa lewat
+    jalur lambat (angka tetap benar, hanya lebih lama)."""
     with mssql.report_cursor(profile) as cur:
-        cur.execute("SELECT kd_divisi, nama FROM m_divisi WHERE status <> 0 ORDER BY nama")
-        return [
-            {"kd_divisi": (r["kd_divisi"] or "").strip(), "nama": (r["nama"] or "").strip()}
-            for r in _dictify(cur)
-        ]
+        snap = _snapshot_meta(cur)
+    fresh = bool(snap and (dt.datetime.now() - snap).days <= _snapshot_max_age_days())
+    return {"tanggal": snap.strftime("%d-%m-%Y %H:%M") if snap else None, "fresh": fresh}
 
 
 def search_barang(profile, search="", limit=50) -> list[dict]:
@@ -615,20 +643,21 @@ def stock_levels(profile, kd_divisi=None, date_from=None, date_to=None, search="
     date_to = date_to or dt.datetime.now()
     with mssql.report_cursor(profile) as cur:
         sums = _movement_sums(cur, kd_divisi=kd_divisi or None, date_from=date_from, date_to=date_to)
-        divisi = {_k(r["kd_divisi"]): r["nama"] for r in _div_rows(cur)}
+        divisi = _cached(profile, "divisi_names", lambda: {_k(r["kd_divisi"]): r["nama"] for r in _div_rows(cur)})
         # kd_barang -> {nama, kategori, kd_kategori, jenis, supplier, status}
         meta = _cached(profile, "meta", lambda: _barang_meta(cur))
         stok_min = _cached(profile, "stok_min", lambda: _stok_min_map(cur))
 
+    # group key: per barang, or per (divisi, barang) when a specific divisi is chosen
+    per_divisi = bool(kd_divisi)
     # stok_min is per (divisi, barang) in the legacy schema; when aggregating
     # across all divisions there is no single threshold, so sum it — a
     # combined "org-wide" minimum makes more sense than dropping the badge.
-    stok_min_by_kb: dict = {}
-    for (_d, _kb), _v in stok_min.items():
-        stok_min_by_kb[_kb] = stok_min_by_kb.get(_kb, 0.0) + _v
-
-    # group key: per barang, or per (divisi, barang) when a specific divisi is chosen
-    per_divisi = bool(kd_divisi)
+    # Only built for the aggregate view, and cached: rebuilding it per request
+    # walked the whole (divisi, barang) map even when the result was discarded.
+    stok_min_by_kb = None if per_divisi else _cached(
+        profile, "stok_min_kb", lambda: _sum_by_barang(stok_min)
+    )
     agg: dict = {}
     for m in sums:
         key = (_k(m["kd_divisi"]), _k(m["kd_barang"])) if per_divisi else (None, _k(m["kd_barang"]))
@@ -667,11 +696,22 @@ def stock_levels(profile, kd_divisi=None, date_from=None, date_to=None, search="
             }
         )
     # Return ALL items with stock or movement (no cap — client filters/searches).
+    # ponytail: tanpa cap. _movement_sums sudah membuang grup serba-nol lewat
+    # HAVING (~75% katalog). Kalau payload jadi bottleneck (bukan SQL), langkah
+    # berikutnya: pangkas kolom yang tak dirender, bukan pindah stack tabel.
     out.sort(key=lambda r: r["nama"])
     return out
 
 
 # --- small lookup helpers --------------------------------------------------
+
+def _sum_by_barang(stok_min: dict) -> dict:
+    """(divisi, barang) -> nilai  =>  barang -> total lintas divisi."""
+    out: dict = {}
+    for (_d, kb), v in stok_min.items():
+        out[kb] = out.get(kb, 0.0) + v
+    return out
+
 
 def _div_rows(cur):
     cur.execute("SELECT kd_divisi, nama FROM m_divisi")

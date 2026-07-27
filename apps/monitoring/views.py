@@ -1,6 +1,8 @@
 """Admin panel views — wired to real data (MS SQL via services, SQLite via models)."""
 import datetime as dt
 import json
+import logging
+import time
 
 import pyodbc
 from django.contrib.auth import update_session_auth_hash
@@ -45,6 +47,8 @@ def _eod(d):
     return d.replace(hour=23, minute=59, second=59) if d else None
 
 CONN_ERROR = "Tidak ada koneksi aktif, atau server tidak dapat dihubungi. Pilih koneksi di navbar."
+
+log = logging.getLogger(__name__)
 
 
 def _active():
@@ -1572,39 +1576,49 @@ retur_pembelian = _report_view(_RETUR_PEMBELIAN)
 retur_pembelian_export = _report_export(_RETUR_PEMBELIAN)
 # Inventori — real services, deferred
 def stok_divisi(request):
+    """Cek stok cepat: SELALU saldo HARI INI (point-in-time), tanpa input tanggal.
+
+    date_from WAJIB None supaya _snapshot_date_if_usable() aktif. Versi lama
+    memaksa date_from = now-30d, sehingga guard `date_from < snapshot` di
+    apps/inventory/services.py selalu gagal dan tiap load me-re-agregasi
+    SELURUH histori sejak tutup buku — ringkasan stok harian dibangun tiap
+    malam tapi tak pernah terpakai di halaman ini.
+
+    Butuh saldo per tanggal lampau? Menu "Stok Akhir" (punya filter tanggal dan
+    tetap memakai jalur snapshot).
+    """
     kd_divisi = request.GET.get("kd_divisi", "")
-    date_from = _parse_date(request.GET.get("date_from")) or dt.datetime.now() - dt.timedelta(days=30)
-    date_to = _parse_date(request.GET.get("date_to")) or dt.datetime.now()
 
     def load():
         profile = _active()
-        rows, divisi_list, conn_error = [], [], None
+        rows, divisi_list, snapshot, conn_error = [], [], None, None
         if profile:
             try:
+                t0 = time.perf_counter()
                 divisi_list = inv.list_divisi(profile)
+                snapshot = inv.snapshot_status(profile)
                 rows = inv.stock_levels(
                     profile,
                     kd_divisi=kd_divisi or None,
-                    date_from=date_from,
-                    date_to=_eod(date_to),
+                    date_to=_eod(dt.datetime.now()),
+                )
+                log.info(
+                    "stok_divisi(%s): %s baris, %.2fs",
+                    kd_divisi or "semua", len(rows), time.perf_counter() - t0,
                 )
             except pyodbc.Error as exc:
                 conn_error = mssql.friendly_error(exc, "Gagal membaca stok divisi")
         else:
             conn_error = CONN_ERROR
-        return {"rows": rows, "divisi_list": divisi_list, "conn_error": conn_error}
+        return {
+            "rows": rows, "divisi_list": divisi_list,
+            "snapshot": snapshot, "conn_error": conn_error,
+        }
 
     return render(
         request,
         "Admin/Inventory/StokDivisi",
-        props={
-            "data": defer(load),
-            "filters": {
-                "kd_divisi": kd_divisi,
-                "date_from": request.GET.get("date_from", ""),
-                "date_to": request.GET.get("date_to", ""),
-            },
-        },
+        props={"data": defer(load), "filters": {"kd_divisi": kd_divisi}},
     )
 
 def mutasi_stok(request):

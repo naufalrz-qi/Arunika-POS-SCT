@@ -21,7 +21,7 @@ const props = defineProps({
   searchPlaceholder: { type: String, default: "Cari di dalam data…" },
   exportName: { type: String, default: "laporan" },
   sheetName: { type: String, default: "Data" },
-  emptyMessage: { type: String, default: "Tidak ada data." },
+  emptyMessage: { type: String, default: "Tidak ada data untuk filter yang dipilih." },
   connError: { type: String, default: null },
 });
 

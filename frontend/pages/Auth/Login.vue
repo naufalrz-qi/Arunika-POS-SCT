@@ -43,10 +43,6 @@ function submit() {
           <Button type="submit" class="w-full" :loading="form.processing">Masuk</Button>
         </form>
       </div>
-
-      <p class="mt-4 text-center text-xs text-ink-subtle">
-        Fase frontend — autentikasi belum aktif, tekan Masuk untuk lanjut.
-      </p>
     </div>
   </div>
 </template>

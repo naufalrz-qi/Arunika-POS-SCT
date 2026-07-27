@@ -114,9 +114,24 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-# Idle session expiry (PRD §8.1) — do NOT save every request (kills SQLite concurrency).
+# Masa berlaku sesi dihitung SEJAK LOGIN (absolut), BUKAN idle: dengan
+# SESSION_SAVE_EVERY_REQUEST=False cookie-nya tak pernah diperpanjang. Aktivitas
+# terus-menerus tetap logout di jam ke-4. Menyalakan save-every-request adalah
+# killer #1 konkurensi SQLite, jadi perilakunya dipertahankan.
+# ponytail: nama env SESSION_IDLE_SECONDS dipertahankan demi kompatibilitas
+# .env yang sudah ada; yang dibetulkan komentarnya, bukan namanya.
 SESSION_COOKIE_AGE = int(os.environ.get("SESSION_IDLE_SECONDS", 60 * 60 * 4))  # 4h
 SESSION_SAVE_EVERY_REQUEST = False
+
+# Tanpa blok ini INFO tak pernah tampil, termasuk baris "jalur lambat" dari
+# apps/inventory/services.py yang jadi satu-satunya cara mendeteksi snapshot
+# stok tak terpakai.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "root": {"handlers": ["console"], "level": os.environ.get("LOG_LEVEL", "INFO")},
+}
 
 # Cookie hardening. SameSite=Lax explicit (CSRF defense-in-depth). The Secure /
 # HSTS flags stay behind env because the app also serves plain-HTTP LAN/Tailscale

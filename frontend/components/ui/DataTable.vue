@@ -11,7 +11,7 @@ const props = defineProps({
   rowKey: { type: String, default: "id" },
   loading: { type: Boolean, default: false },
   perPage: { type: Number, default: 100 },
-  emptyMessage: { type: String, default: "Tidak ada data." },
+  emptyMessage: { type: String, default: "Tidak ada data untuk filter yang dipilih." },
 });
 
 const sortKey = ref(null);

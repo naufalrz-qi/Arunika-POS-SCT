@@ -11,7 +11,7 @@ const props = defineProps({
   perPage: { type: Number, default: 50 },
   sortKey: { type: String, default: "" },
   sortDir: { type: String, default: "desc" },
-  emptyMessage: { type: String, default: "Tidak ada data." },
+  emptyMessage: { type: String, default: "Tidak ada data untuk filter yang dipilih." },
 });
 const emit = defineEmits(["page-change", "sort-change", "per-page-change"]);
 

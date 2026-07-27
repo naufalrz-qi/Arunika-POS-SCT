@@ -41,3 +41,5 @@ scripts/view_def*.txt
 demos/
 graphify-out/
 .obsidian/
+# Tool state (claude-flow daemon) — bukan bagian aplikasi.
+.claude-flow/

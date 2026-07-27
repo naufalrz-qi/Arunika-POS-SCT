@@ -1,6 +1,6 @@
 <script setup>
 defineProps({
-  message: { type: String, default: "Tidak ada data." },
+  message: { type: String, default: "Tidak ada data untuk filter yang dipilih." },
 });
 </script>
 <template>
