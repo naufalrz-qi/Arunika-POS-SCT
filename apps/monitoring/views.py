@@ -1600,6 +1600,12 @@ _RETUR_PEMBELIAN = {
 retur_pembelian = _report_view(_RETUR_PEMBELIAN)
 retur_pembelian_export = _report_export(_RETUR_PEMBELIAN)
 # Inventori — real services, deferred
+def bantuan(request):
+    # ponytail: isinya statis dan hidup di komponen Vue-nya. Tak ada query,
+    # jadi tak perlu defer dan tak perlu prop.
+    return render(request, "Admin/Bantuan", props={})
+
+
 def stok_divisi(request):
     """Cek stok cepat: SELALU saldo HARI INI (point-in-time), tanpa input tanggal.
 

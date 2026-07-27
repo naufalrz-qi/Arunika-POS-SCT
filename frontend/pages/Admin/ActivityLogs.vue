@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from "vue";
 import AdminLayout from "@/layouts/AdminLayout.vue";
+import { ACTION_LABELS } from "@/utils/labels";
 import Card from "@/components/ui/Card.vue";
 import Input from "@/components/ui/Input.vue";
 import Select from "@/components/ui/Select.vue";
@@ -86,7 +87,7 @@ const actionVariant = (a) => {
 
     <DataTable :columns="columns" :rows="filtered" :per-page="100" empty-message="Tidak ada log untuk filter ini.">
       <template #cell-action="{ value }">
-        <Badge :variant="actionVariant(value)">{{ value }}</Badge>
+        <Badge :variant="actionVariant(value)">{{ ACTION_LABELS[value] || value }}</Badge>
       </template>
     </DataTable>
   </AdminLayout>

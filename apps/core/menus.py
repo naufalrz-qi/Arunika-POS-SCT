@@ -22,6 +22,9 @@ SECTION_LABELS = {
 
 ALL_MENUS = [
     {"key": "dashboard", "label": "Dashboard", "icon": "dashboard", "href": "/admin-panel/dashboard", "section": "ringkasan"},
+    # "always": tak bisa dicabut lewat Kelola Menu. Bantuan yang bisa hilang dari
+    # sidebar justru menghilang tepat saat pengguna paling butuh.
+    {"key": "bantuan", "label": "Bantuan & Istilah", "icon": "help", "href": "/admin-panel/bantuan", "section": "ringkasan", "always": True},
     # Penjualan (laporan)
     {"key": "penjualan_all", "label": "Penjualan (Detail)", "icon": "cart", "href": "/admin-panel/laporan/penjualan", "section": "penjualan"},
     {"key": "penjualan_hpp", "label": "Laba per Barang", "icon": "trending", "href": "/admin-panel/laporan/penjualan-hpp", "section": "penjualan"},
@@ -77,8 +80,11 @@ ALL_MENUS = [
 
 
 def assignable_menus():
-    """Menus a superadmin may grant/revoke for other users (excludes superadmin-only)."""
-    return [m for m in ALL_MENUS if not m.get("superadmin_only")]
+    """Menus a superadmin may grant/revoke for other users.
+
+    Excludes superadmin-only menus and `always` menus (Bantuan) — menampilkan
+    yang tak bisa dicabut di layar Kelola Menu cuma menyesatkan."""
+    return [m for m in ALL_MENUS if not m.get("superadmin_only") and not m.get("always")]
 
 
 def menus_for(user):
@@ -93,7 +99,10 @@ def menus_for(user):
         # Default to all assignable menus when nothing is configured yet.
         keys = user.allowed_menu_keys or [m["key"] for m in assignable_menus()]
         allowed = set(keys)
-        return [m for m in ALL_MENUS if not m.get("superadmin_only") and m["key"] in allowed]
+        return [
+            m for m in ALL_MENUS
+            if not m.get("superadmin_only") and (m.get("always") or m["key"] in allowed)
+        ]
     # Kasir / supervisor don't use the admin panel in this phase.
     return []
 

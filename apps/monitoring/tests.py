@@ -178,6 +178,16 @@ class MenuRbacEnforcementTests(TestCase):
         self.client.force_login(self.admin)
         self.assertEqual(self.client.get("/admin-panel/menus").status_code, 403)
 
+    def test_bantuan_selalu_boleh_walau_tak_diberikan(self):
+        """Menu ber-`always` tak bisa dicabut: bantuan yang hilang dari sidebar
+        justru menghilang tepat saat pengguna paling butuh."""
+        self.client.force_login(self.admin)  # allowed_menu_keys = ["dashboard"] saja
+        self.assertEqual(self.client.get("/admin-panel/bantuan").status_code, 200)
+
+    def test_bantuan_tak_muncul_di_daftar_yang_bisa_dicabut(self):
+        from apps.core.menus import assignable_menus
+        self.assertNotIn("bantuan", {m["key"] for m in assignable_menus()})
+
     def test_superadmin_bebas(self):
         self.client.force_login(self.superadmin)
         self.assertEqual(self.client.get("/admin-panel/users").status_code, 200)

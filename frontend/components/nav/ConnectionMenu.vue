@@ -1,4 +1,5 @@
 <script setup>
+import { DB_TYPE_LABELS } from "@/utils/labels";
 import { computed, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { useConnectionStore } from "@/stores/connection";
@@ -8,7 +9,7 @@ const store = useConnectionStore();
 const { active, list, switching } = storeToRefs(store);
 const open = ref(false);
 
-const typeName = { gudang: "Gudang", grosir: "Grosir", retail: "Toko Retail" };
+const typeName = DB_TYPE_LABELS;
 
 const dot = (status) => (status === "online" ? "bg-success-500" : status === "offline" ? "bg-danger-500" : "bg-neutral-300");
 

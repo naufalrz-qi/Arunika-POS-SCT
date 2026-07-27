@@ -22,7 +22,7 @@ const open = ref(false);
       </div>
       <div class="hidden text-left sm:block">
         <p class="text-xs font-bold leading-none tracking-wide text-white">{{ user?.name }}</p>
-        <p class="text-[10px] uppercase tracking-wider text-white/60 mt-0.5">{{ user?.role }}</p>
+        <p class="text-[10px] uppercase tracking-wider text-white/60 mt-0.5">{{ ROLE_LABELS[user?.role] || user?.role }}</p>
       </div>
     </button>
 

@@ -2,6 +2,7 @@
 import { computed, reactive, ref } from "vue";
 import { Deferred, router } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
+import { DB_TYPE_LABELS } from "@/utils/labels";
 import TableSkeleton from "@/components/ui/TableSkeleton.vue";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
@@ -24,7 +25,7 @@ const props = defineProps({
 
 // Arah tetap: gudang = sumber data master, tujuan = server aktif/dipilih
 // (grosir/retail) — beda dari Sinkronisasi Harga yang punya 2 mode simetris.
-const typeName = { gudang: "Gudang", grosir: "Grosir", retail: "Toko Retail" };
+const typeName = DB_TYPE_LABELS;
 
 const pick = reactive({ entity: props.entity, src: props.src, dst: props.dst });
 

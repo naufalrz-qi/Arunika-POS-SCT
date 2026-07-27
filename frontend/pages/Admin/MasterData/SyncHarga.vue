@@ -2,6 +2,7 @@
 import { computed, reactive, ref } from "vue";
 import { Deferred, router } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
+import { DB_TYPE_LABELS } from "@/utils/labels";
 import TableSkeleton from "@/components/ui/TableSkeleton.vue";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
@@ -25,7 +26,7 @@ const MODES = {
   retail_retail: { src: "retail", dst: "retail", withMargin: true },
 };
 
-const typeName = { gudang: "Gudang", grosir: "Grosir", retail: "Toko Retail" };
+const typeName = DB_TYPE_LABELS;
 
 const modeOptions = [
   { value: "gudang_grosir", label: "Dari Gudang ke Grosir (harga jual)" },

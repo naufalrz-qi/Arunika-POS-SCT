@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { useForm, router } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
+import { ROLE_LABELS } from "@/utils/labels";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
 import Input from "@/components/ui/Input.vue";
@@ -34,7 +35,7 @@ const columns = [
   { key: "actions", label: "", align: "right" },
 ];
 
-const ROLE_LABELS = { kasir: "Kasir", supervisor: "Supervisor", admin: "Admin", superadmin: "Superadmin" };
+
 const roleOptions = computed(() =>
   props.assignable_roles.map((r) => ({ value: r, label: ROLE_LABELS[r] || r })),
 );
@@ -107,7 +108,7 @@ function confirmDelete() {
 
       <DataTable :columns="columns" :rows="filtered" empty-message="Tidak ada user.">
         <template #cell-role="{ value }">
-          <Badge :variant="value === 'superadmin' ? 'danger' : value === 'admin' ? 'warning' : value === 'supervisor' ? 'brand' : 'neutral'" class="capitalize">{{ value }}</Badge>
+          <Badge :variant="value === 'superadmin' ? 'danger' : value === 'admin' ? 'warning' : value === 'supervisor' ? 'brand' : 'neutral'">{{ ROLE_LABELS[value] || value }}</Badge>
         </template>
         <template #cell-is_active="{ value }">
           <Badge :variant="value ? 'success' : 'danger'">{{ value ? "Aktif" : "Nonaktif" }}</Badge>
