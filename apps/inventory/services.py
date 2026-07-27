@@ -843,7 +843,18 @@ def stok_akhir_per_tanggal(profile, tanggal, kd_divisi=None) -> list[dict]:
         divisi = {_k(r["kd_divisi"]): r for r in _div_rows_full(cur)}
         meta = _cached(profile, "meta", lambda: _barang_meta(cur))
         harga_jual = _cached(profile, "harga_jual", lambda: _harga_jual_map(cur))
-        avg_map, last_map, init_map = _purchase_prices(cur, tanggal)
+        # _purchase_prices = 3 query agregat atas t_pembelian_detail, ~0.34s dan
+        # dulu jalan di SETIAP request. Dicache hanya untuk tanggal hari ini —
+        # itu nilai default dan mayoritas kunjungan, sekaligus menjaga cache
+        # tetap satu key. Tanggal lampau tetap dihitung langsung supaya tak
+        # menumpuk key per tanggal yang dipilih pengguna (lihat catatan cache di
+        # context.md soal query berkunci parameter bebas).
+        if tanggal.date() == dt.date.today():
+            avg_map, last_map, init_map = _cached(
+                profile, "purchase_prices_hari_ini", lambda: _purchase_prices(cur, tanggal)
+            )
+        else:
+            avg_map, last_map, init_map = _purchase_prices(cur, tanggal)
 
     agg: dict = {}
     for m in sums:
