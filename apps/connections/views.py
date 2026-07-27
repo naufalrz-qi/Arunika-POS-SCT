@@ -77,7 +77,19 @@ def connections_set_default(request, conn_id):
     profile = get_object_or_404(ServerProfile, pk=conn_id)
     request.session["active_profile_id"] = profile.pk
     log_activity(request, "konfigurasi", f"Pilih koneksi {profile.db_type}: {profile.name}")
-    request.session["flash_success"] = f"Koneksi aktif: {profile.name} (untuk sesi Anda)."
+    # Cek dulu, lalu katakan apa adanya. Sebelumnya selalu flash "berhasil"
+    # walau servernya mati, dan last_status hanya pernah ditulis tombol Test —
+    # jadi titik status di navbar dan KPI "Server Online" di Dashboard basi.
+    result = mssql.test_profile(profile)
+    profile.last_status = ConnStatus.ONLINE if result["ok"] else ConnStatus.OFFLINE
+    profile.last_checked = timezone.now()
+    profile.save(update_fields=["last_status", "last_checked"])
+    if result["ok"]:
+        request.session["flash_success"] = f"Koneksi aktif: {profile.name} (untuk sesi Anda)."
+    else:
+        request.session["flash_error"] = (
+            f"Koneksi dialihkan ke {profile.name}, tapi server tidak merespons. {result['message']}"
+        )
     data = get_data(request)
     redirect_to = data.get("redirect_to") or "/admin-panel/connections"
     return redirect(redirect_to)
@@ -105,7 +117,7 @@ def connections_check_indexes(request, conn_id):
         failed, results = indexes.ensure_indexes(profile)
     except pyodbc.Error as exc:
         return JsonResponse(
-            {"id": conn_id, "ok": False, "results": [], "error": str(exc.args[-1] if exc.args else exc)},
+            {"id": conn_id, "ok": False, "results": [], "error": mssql.friendly_error(exc, "Gagal cek indexing")},
             status=502,
         )
     log_activity(request, "konfigurasi", f"Cek indexing {profile.name}")

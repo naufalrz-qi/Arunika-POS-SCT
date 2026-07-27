@@ -124,6 +124,25 @@ class BarangHistoriSaldoTest(SimpleTestCase):
         rows = self._histori(date_from=dt.datetime(2026, 1, 1), opening=[])
         self.assertEqual({(r["kd_barang"], r["no_transaksi"]): r["saldo"] for r in rows}[("B", "S1")], -3)
 
+    def test_debet_kredit_base_dikonversi_ke_satuan_terkecil(self):
+        """Total di UI/Excel wajib pakai *_base. Menjumlah debet/kredit mentah
+        lintas satuan tak ada artinya: 2 BOX (faktor 12) + 0 PCS bukan 2."""
+        rows = {(r["kd_barang"], r["no_transaksi"]): r for r in self._histori()}
+        beli = rows[("A", "P1")]                    # 2 BOX, faktor 12
+        self.assertEqual(beli["debet"], 2)          # mentah, ikut satuan barisnya
+        self.assertEqual(beli["debet_base"], 24)    # dikonversi
+        self.assertEqual(beli["kredit_base"], 0)
+        jual = rows[("A", "S2")]                    # 5 PCS, faktor 1
+        self.assertEqual(jual["kredit_base"], 5)
+        self.assertEqual(jual["debet_base"], 0)
+        # Total base-unit = saldo akhir deret A (100 stok awal + 24 - 5 = 119).
+        a = [r for k, r in rows.items() if k[0] == "A"]
+        masuk = sum(r["debet_base"] for r in a)
+        keluar = sum(r["kredit_base"] for r in a)
+        self.assertEqual(masuk - keluar, 119)
+        # Jumlah mentah akan memberi 102 - 5 = 97: itulah angka salah yang lama.
+        self.assertNotEqual(sum(r["debet"] for r in a) - sum(r["kredit"] for r in a), 119)
+
 
 class MovementSqlReverseTest(SimpleTestCase):
     """date_to sebelum closing: saldo dihitung mundur dari jangkar stok_awal."""

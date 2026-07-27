@@ -147,6 +147,15 @@ def clean_rows(rows: list[dict]) -> list[dict]:
     return [{k: _clean(v) for k, v in r.items()} for r in rows]
 
 
+def one_row(cur) -> dict:
+    """Baris pertama hasil query ringkasan, atau {} bila kosong.
+
+    Ringkasan agregat selalu mengembalikan satu baris, jadi `[0]` langsung
+    memang tak pernah meledak hari ini — tapi itu IndexError laten yang jadi
+    500, dan kelas bug yang sama pernah kejadian (lihat _ILLEGAL_XML di atas)."""
+    return (clean_rows(dictify(cur)) or [{}])[0]
+
+
 def run_paged(cur, inner_sql, params, f):
     """COUNT + OFFSET/FETCH over `inner_sql` (a full SELECT without ORDER BY).
 

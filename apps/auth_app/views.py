@@ -5,6 +5,7 @@ from django.core.cache import cache
 from django.shortcuts import redirect
 
 from apps.core.http import get_data
+from apps.auth_app.models import User
 from apps.core.models import log_activity
 
 # Brute-force throttle: lock a (username, IP) pair after N failures for a short
@@ -41,20 +42,28 @@ def login_view(request):
             return render(
                 request,
                 "Auth/Login",
-                props={"errors": {"username": "Terlalu banyak percobaan gagal. Coba lagi dalam beberapa menit."}},
+                props={"errors": {"form": (
+                    f"Terlalu banyak percobaan gagal. Tunggu sekitar {LOGIN_LOCK_SECONDS // 60} "
+                    "menit sejak percobaan gagal terakhir."
+                )}},
             )
 
         user = authenticate(request, username=username, password=password)
 
-        if user is None or not user.is_active:
+        if user is None:
+            # authenticate() juga mengembalikan None untuk akun nonaktif, jadi
+            # cabang is_active di bawah tak pernah tercapai lewat `user`.
+            # Password dicek dulu supaya pesan "dinonaktifkan" tak membocorkan
+            # akun mana yang ada ke penebak sandi.
+            cand = User.objects.filter(username__iexact=username).first()
+            if cand and not cand.is_active and cand.check_password(password):
+                msg = "Akun ini dinonaktifkan. Hubungi admin untuk mengaktifkan kembali."
+            else:
+                msg = "Username atau password salah."
             cache.set(fail_key, cache.get(fail_key, 0) + 1, LOGIN_LOCK_SECONDS)
             # Cap the logged value — a mistyped password can land in the username field.
             log_activity(request, "login_gagal", f"username={username[:32]}")
-            return render(
-                request,
-                "Auth/Login",
-                props={"errors": {"username": "Username atau password salah."}},
-            )
+            return render(request, "Auth/Login", props={"errors": {"form": msg}})
 
         cache.delete(fail_key)  # reset counter on success
         login(request, user)
@@ -62,7 +71,9 @@ def login_view(request):
 
         # Kasir/supervisor have no admin panel yet in this phase.
         if not user.is_admin_tier:
-            request.session["flash_error"] = "Akun ini belum punya halaman di fase ini."
+            request.session["flash_error"] = (
+                "Akun kasir/supervisor dipakai di aplikasi kasir, bukan panel admin ini."
+            )
             logout(request)
             return redirect("/login")
 

@@ -5,6 +5,7 @@ import { storeToRefs } from "pinia";
 import axios from "axios";
 import { useConnectionStore } from "@/stores/connection";
 import AdminLayout from "@/layouts/AdminLayout.vue";
+import { DB_TYPE_LABELS } from "@/utils/labels";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
 import Input from "@/components/ui/Input.vue";
@@ -23,7 +24,7 @@ const props = defineProps({
 const { active } = storeToRefs(useConnectionStore());
 
 const typeOptions = computed(() =>
-  props.db_types.map((t) => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) })),
+  props.db_types.map((t) => ({ value: t, label: DB_TYPE_LABELS[t] || t })),
 );
 
 const typeVariant = { gudang: "warning", grosir: "brand", retail: "success" };
@@ -150,7 +151,7 @@ function confirmDelete() {
         <template #cell-host="{ row }">{{ row.host }}:{{ row.port }}</template>
 
         <template #cell-db_type="{ value }">
-          <Badge :variant="typeVariant[value] || 'neutral'" class="capitalize">{{ value }}</Badge>
+          <Badge :variant="typeVariant[value] || 'neutral'">{{ DB_TYPE_LABELS[value] || value }}</Badge>
         </template>
 
         <template #cell-is_default="{ row }">

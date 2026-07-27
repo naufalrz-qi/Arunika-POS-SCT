@@ -11,7 +11,7 @@ const props = defineProps({
   rowKey: { type: String, default: "id" },
   loading: { type: Boolean, default: false },
   perPage: { type: Number, default: 100 },
-  emptyMessage: { type: String, default: "Tidak ada data." },
+  emptyMessage: { type: String, default: "Tidak ada data untuk filter yang dipilih." },
 });
 
 const sortKey = ref(null);
@@ -128,7 +128,7 @@ function formatCell(value, col) {
     <!-- Tinggi dibatasi supaya tabel tidak memanjang sampai bawah laman:
          badan tabel yang di-scroll, header sticky di dalam kontainer ini. -->
     <div class="max-h-[65vh] overflow-auto scroll-slim">
-      <table class="w-full min-w-[720px] divide-y divide-border-default text-sm tabular-nums">
+      <table class="w-full divide-y divide-border-default text-xs tabular-nums">
         <thead class="bg-surface-2 sticky top-0 z-10">
           <tr>
             <th
@@ -139,7 +139,7 @@ function formatCell(value, col) {
               :tabindex="col.sortable ? 0 : undefined"
               :aria-sort="col.sortable ? (sortKey === col.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none') : undefined"
               :class="[
-                'whitespace-nowrap border-b-2 border-border-strong px-3 py-2 text-[11px] font-heading font-semibold uppercase tracking-wider text-ink-muted',
+                'whitespace-nowrap border-b-2 border-border-strong px-2 py-1.5 text-[10px] font-heading font-semibold uppercase tracking-wider text-ink-muted',
                 alignClass(col.align),
                 col.sortable ? 'cursor-pointer select-none hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500' : '',
               ]"
@@ -176,10 +176,17 @@ function formatCell(value, col) {
             <td
               v-for="col in visibleColumns"
               :key="col.key"
-              :class="['px-3 py-1.5 leading-snug text-ink', alignClass(col.align)]"
+              :class="['px-2 py-1 leading-snug text-ink', alignClass(col.align)]"
             >
+              <!-- Nilai panjang (nama barang/supplier) dipotong dengan elipsis:
+                   tanpa ini satu baris saja bisa memaksa tabel melebar dan
+                   memunculkan scroll horizontal di layar 1366px. Teks utuh tetap
+                   bisa dibaca lewat tooltip. Isi slot tak disentuh — di situ ada
+                   badge/tombol yang tak boleh dipotong. -->
               <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
-                {{ formatCell(row[col.key], col) }}
+                <span class="block max-w-[26ch] truncate" :title="String(row[col.key] ?? '')">
+                  {{ formatCell(row[col.key], col) }}
+                </span>
               </slot>
             </td>
           </tr>
