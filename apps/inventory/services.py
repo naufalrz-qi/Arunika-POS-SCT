@@ -653,7 +653,10 @@ def stock_levels(profile, kd_divisi=None, date_to=None) -> list[dict]:
     per_divisi = bool(kd_divisi)
     with mssql.report_cursor(profile) as cur:
         sums = _movement_sums(cur, kd_divisi=kd_divisi or None, date_to=date_to)
-        universe = _barang_universe(cur, kd_divisi=kd_divisi or None)
+        universe = _cached(
+            profile, f"universe:{kd_divisi or ''}",
+            lambda: _barang_universe(cur, kd_divisi=kd_divisi or None),
+        )
         # kd_barang -> {nama, kategori, kd_kategori, jenis, supplier, status}
         meta = _cached(profile, "meta", lambda: _barang_meta(cur))
         stok_min = _cached(profile, "stok_min", lambda: _stok_min_map(cur))
@@ -816,7 +819,12 @@ def _barang_universe(cur, kd_divisi=None) -> list[tuple]:
     """All (kd_divisi, kd_barang) pairs for the Stok Akhir listing — every row of
     m_barang without exception, including barang with no m_barang_divisi
     assignment (kd_divisi ''). Needed because _movement_sums drops all-zero rows
-    via its HAVING clause, hiding every zero-stock barang."""
+    via its HAVING clause, hiding every zero-stock barang.
+
+    SELALU panggil lewat _cached: ~55rb baris, dan di server yang diakses lewat
+    WAN ini terukur 2,96 detik per pemanggilan (vs 0,13 detik di LAN) — 63% dari
+    seluruh waktu Stok per Divisi dengan cache hangat. Key cache harus memuat
+    kd_divisi karena hasilnya berbeda per divisi."""
     sql = (
         "SELECT COALESCE(bd.kd_divisi, '') AS kd_divisi, b.kd_barang FROM m_barang b "
         "LEFT JOIN m_barang_divisi bd ON b.kd_barang = bd.kd_barang "
@@ -839,8 +847,11 @@ def stok_akhir_per_tanggal(profile, tanggal, kd_divisi=None) -> list[dict]:
 
     with mssql.report_cursor(profile) as cur:
         sums = _movement_sums(cur, kd_divisi=kd_divisi or None, date_to=tanggal)
-        universe = _barang_universe(cur, kd_divisi=kd_divisi or None)
-        divisi = {_k(r["kd_divisi"]): r for r in _div_rows_full(cur)}
+        universe = _cached(
+            profile, f"universe:{kd_divisi or ''}",
+            lambda: _barang_universe(cur, kd_divisi=kd_divisi or None),
+        )
+        divisi = _cached(profile, "divisi_full", lambda: {_k(r["kd_divisi"]): r for r in _div_rows_full(cur)})
         meta = _cached(profile, "meta", lambda: _barang_meta(cur))
         harga_jual = _cached(profile, "harga_jual", lambda: _harga_jual_map(cur))
         # _purchase_prices = 3 query agregat atas t_pembelian_detail, ~0.34s dan

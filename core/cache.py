@@ -6,9 +6,16 @@ master-data writes must call invalidate_master_cache(). Shared between
 apps.inventory.services and apps.master_data.services so ONE invalidation
 call busts both — do not give each app its own cache dict.
 """
+import os
 import time
 
-_MASTER_TTL = 600  # seconds
+# Ongkos cache dingin sangat berbeda per server. Terukur pada _barang_meta
+# (55rb barang): 1,2 detik lewat LAN, 21,8 detik lewat Tailscale antar-kota.
+# Dengan TTL 600 detik, pengguna server jauh menanggung 22 detik itu tiap 10
+# menit. Naikkan POS_MASTER_TTL (mis. 3600) kalau ada profil lewat WAN —
+# tabel m_* memang jarang berubah, dan setiap tulis master memanggil
+# invalidate_master_cache() sehingga perubahan tetap langsung terlihat.
+_MASTER_TTL = int(os.environ.get("POS_MASTER_TTL", 600))  # seconds
 _master_cache: dict = {}
 
 
