@@ -95,7 +95,16 @@ def _run_due_stok(now, profile) -> None:
         try:
             res = snapshot_stok_base(profile)
         except Exception as exc:  # server mati / pyodbc — hentikan profil ini, retry tick berikutnya
-            log.warning("snapshot_stok_base terjadwal gagal (%s): %s", profile.name, exc)
+            # Tanpa base, fase live di bawah tak bisa jalan (live = delta sejak
+            # base), jadi profil ini TAK PUNYA snapshot sama sekali dan setiap
+            # halaman stoknya jatuh ke jalur lambat. Diulang tiap tick, jadi
+            # kalau penyebabnya timeout ia akan gagal terus tanpa henti —
+            # naikkan POS_SNAPSHOT_TIMEOUT (default 900 detik) untuk server jauh.
+            log.error(
+                "snapshot_stok_base gagal (%s): %s — profil ini akan memakai jalur "
+                "lambat sampai berhasil. Bila ini timeout, naikkan POS_SNAPSHOT_TIMEOUT.",
+                profile.name, exc,
+            )
             return
         StokSnapshotBaseRun.objects.create(
             profile=profile, profile_name=profile.name, base_month=base_month, rows=res["rows"],

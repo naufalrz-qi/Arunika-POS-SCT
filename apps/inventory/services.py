@@ -419,7 +419,7 @@ def snapshot_stok_base(profile) -> dict:
     Recompute PENUH sejak tutup buku (`use_snapshot=False`) — berat tapi jarang
     (hanya saat bulan base bergeser). Region ini immutable, jadi hasilnya stabil.
     Return {"rows": n, "base_date": base_dt}."""
-    with mssql.report_cursor(profile) as rcur:
+    with mssql.report_cursor(profile, query_timeout=mssql.SNAPSHOT_TIMEOUT) as rcur:
         # Opening block [0] membaca m_barang_divisi.stok_awal, yang berjangkar di
         # tanggal tutup buku — base beku tak boleh mulai sebelum itu. Bila lebih
         # awal, jendela transaksi (closing, base_dt] kosong sehingga base berisi
@@ -440,7 +440,7 @@ def snapshot_stok(profile) -> dict:
     ada (first run) → fallback recompute penuh sejak tutup buku (perilaku lama,
     tetap benar). Return {"rows": n, "tanggal": snap_ts}."""
     snap_ts = dt.datetime.now()
-    with mssql.report_cursor(profile) as rcur:
+    with mssql.report_cursor(profile, query_timeout=mssql.SNAPSHOT_TIMEOUT) as rcur:
         base_dt = _snapshot_meta(rcur, SNAPSHOT_BASE_TABLE)
         if base_dt is not None:
             sums = _movement_sums(
