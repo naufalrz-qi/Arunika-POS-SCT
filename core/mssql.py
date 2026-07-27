@@ -14,6 +14,7 @@ the same trusted LAN as the app server.
 """
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -106,6 +107,15 @@ ODBC_DRIVER = _detect_driver()
 _MODERN_DRIVERS = {"ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server"}
 CONNECT_TIMEOUT = 5  # seconds
 
+# Batas waktu query. 60 detik pas untuk halaman interaktif — query lambat tak
+# boleh menahan worker selamanya. Tapi pembangun snapshot (snapshot_stok_base)
+# adalah query terberat di aplikasi dan jalan di latar, jadi punya plafonnya
+# sendiri: kalau ia kena timeout, scheduler gagal tanpa mencatat marker,
+# mengulang tiap 30 menit, dan server itu TAK PERNAH punya snapshot — artinya
+# jalur lambat permanen. Naikkan POS_SNAPSHOT_TIMEOUT untuk server jauh/lambat.
+QUERY_TIMEOUT = int(os.environ.get("POS_QUERY_TIMEOUT", 60))
+SNAPSHOT_TIMEOUT = int(os.environ.get("POS_SNAPSHOT_TIMEOUT", 900))
+
 # Enable driver-manager connection pooling (reuses handles across requests).
 pyodbc.pooling = True
 
@@ -125,10 +135,10 @@ def build_conn_str(host, port, db_name, username, password) -> str:
     )
 
 
-def _connect(host, port, db_name, username, password, autocommit=True):
+def _connect(host, port, db_name, username, password, autocommit=True, query_timeout=None):
     conn_str = build_conn_str(host, port, db_name, username, password)
     conn = pyodbc.connect(conn_str, timeout=CONNECT_TIMEOUT, autocommit=autocommit)
-    conn.timeout = 60  # Query timeout (seconds); slow queries don't pin the worker indefinitely.
+    conn.timeout = query_timeout or QUERY_TIMEOUT
     return conn
 
 
@@ -161,7 +171,7 @@ def test_profile(profile) -> dict:
 
 
 @contextmanager
-def cursor(profile, autocommit=True):
+def cursor(profile, autocommit=True, query_timeout=None):
     """Context manager yielding a cursor for the given ServerProfile.
 
     Use autocommit=False for write transactions, then call conn.commit() yourself.
@@ -185,6 +195,7 @@ def cursor(profile, autocommit=True):
         profile.username,
         password,
         autocommit=autocommit,
+        query_timeout=query_timeout,
     )
     try:
         yield conn.cursor()
@@ -193,11 +204,11 @@ def cursor(profile, autocommit=True):
 
 
 @contextmanager
-def report_cursor(profile):
+def report_cursor(profile, query_timeout=None):
     """Cursor READ-ONLY untuk report: READ UNCOMMITTED (NOLOCK) supaya SELECT
     berat tak mengambil shared lock yang memblok tulis POS live. Aman untuk
     laporan (data historis tak sedang ditulis); JANGAN dipakai jalur write."""
-    with cursor(profile) as cur:
+    with cursor(profile, query_timeout=query_timeout) as cur:
         cur.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
         yield cur
 

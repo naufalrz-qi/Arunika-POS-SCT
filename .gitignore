@@ -38,6 +38,13 @@ scripts/*_out*.json
 scripts/func_def*.txt
 scripts/view_def*.txt
 
+# Definisi SQL Agent job sinkronisasi antar-server. Alasan yang sama seperti di
+# atas, lebih tajam: berkasnya memuat endpoint API hidup yang menerima SQL lewat
+# query string, sisi terima yang menjalankan exec() atas balasannya, akun sa, dan
+# xp_cmdshell di tiap server cabang. Repo ini publik — menggabungkan semuanya
+# memberi peta jalan untuk mengeksekusi perintah di setiap cabang. Simpan lokal.
+scripts/job/
+
 demos/
 graphify-out/
 .obsidian/

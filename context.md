@@ -32,7 +32,7 @@ Route prefix `/admin-panel/`. View di `apps/monitoring/views.py` (kecuali connec
 `apps/inventory/services.py` (movement engine, raw tables):
 - `_movement_sql` (9-way UNION ALL: t_penjualan/pembelian(+retur), t_mutasi_stok, t_opname_stok, dll).
 - `_movement_sums` — agregasi DI SQL (GROUP BY + HAVING buang serba-nol). **JANGAN stream jutaan row ke Python.**
-- `_k(kd)` — normalisasi key (strip+upper) untuk collation CI. `_cached(profile,name,build)` TTL 600s. `invalidate_master_cache(profile_id)`.
+- `_k(kd)` — normalisasi key (strip+upper) untuk collation CI. `_cached(profile,name,build,ttl=,force=)` TTL 600s. `invalidate_master_cache(profile_id, prefix=)`. `warm_master_cache(profile,ttl)` — isi ulang semua key berat dalam satu koneksi, dipanggil scheduler.
 - Public: `list_divisi`, `search_barang`, `stock_card`, `stock_levels(profile,kd_divisi,date_from,date_to,search,kd_kategori)`, `stok_akhir_per_tanggal(profile,tanggal,kd_divisi)`, `barang_histori(...)`.
 
 `apps/master_data/services.py`: `list_products`, `list_categories`, `list_customers`, `list_barang_edit`, `update_harga`(write), `update_status`(write), `compare_harga_jual`, `sync_harga_jual`(write). Semua cap TOP 500.
@@ -73,6 +73,7 @@ Kolom asli WAJIB dicek via INFORMATION_SCHEMA sebelum tulis SQL (nama kolom lega
 - **Inertia POST = JSON**: `request.POST` kosong; baca via `apps/core/http.get_data()`.
 - **Tutup buku** server aktif lama (mis. Lotim 2024-01-12) → movement besar; sarankan klien tutup buku untuk percepat.
 - **Cache TTL bersama** (`core/cache.py`, `_cached`/`invalidate_master_cache`, 600s) dipakai `apps/inventory/services.py` DAN `apps/master_data/services.py` — satu dict, satu invalidasi. JANGAN cache kolom yang berubah tiap transaksi kasir (mis. `m_barang_stok_akhir`) atau query bertingkat search-term (key bisa membengkak).
+- **Cache dingin = biaya sebenarnya di profil WAN.** Terukur ANDARIA: kunjungan pertama ~30 detik, berikutnya <5 detik. Karena itu `apps/core/scheduler.py` memanaskan cache master tiap tick (`warm_master_cache`, `MASTER_WARM_ENABLED`) dengan TTL 3× jeda tick — entri diganti sebelum kedaluwarsa, jadi tak ada celah waktu di mana seorang pengguna menemukan cache kosong. Konsekuensinya: **key cache jangan pernah memuat parameter yang dipilih pengguna** (dulu `universe:<kd_divisi>` → tiap divisi baru = 30 detik lagi). Cache katalog penuh sekali, saring di Python (`_universe_for`).
 - **Filter tanggal report/listing**: dorong ke SQL (`WHERE tanggal >= ?`) kalau fungsinya tak perlu histori sebelum `date_from` untuk saldo berjalan (lihat `barang_histori` vs `stock_card` di `apps/inventory/services.py`) — jangan tarik semua baris ke Python lalu buang.
 - **Filter/fetch halaman Inventory** (`Stock.vue`, `BarangHistori.vue`): pakai `frontend/composables/useReportFilters.js` + `frontend/components/report/DateRangeFilter.vue`, jangan hand-roll `reactive`+`router.get` lagi. Halaman laporan (`ReportView`) punya pola pagination server-side sendiri di `apps/core/reporting.py` — jangan campur dua pola ini.
 - **No `v-html`/dynamic `<component :is>`** dari string backend untuk konten sel laporan — pakai slot `cell-<key>` yang sudah ada di `DataTable.vue`.

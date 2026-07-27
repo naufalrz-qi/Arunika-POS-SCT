@@ -4,7 +4,10 @@ Menjalankan job harian sekali per hari kalender untuk koneksi AKTIF, selama pros
 server HTTP hidup. Dimulai dari `config/wsgi.py`, jadi hanya jalan saat serving
 (runserver/waitress) — bukan saat `migrate`/`shell`/dll.
 
-Dua job:
+Tiga job:
+- pemanas CACHE master data — MASTER_WARM_ENABLED. Tiap tick, bukan harian:
+  ongkos cache dingin di server WAN ~30 detik, dan tanpa pemanas ongkos itu
+  selalu ditanggung pengguna pertama setelah TTL habis / server restart.
 - snapshot HARGA (deteksi perubahan harga_jual per SKU) — HARGA_SNAPSHOT_*.
 - snapshot STOK (rebuild saldo stok pos_stok_snapshot) — STOK_SNAPSHOT_*.
 
@@ -13,6 +16,7 @@ Kalau server mati seharian, hari itu dilewati (trade-off diterima: "saat server
 berjalan saja"). Nonaktifkan per job dengan *_SNAPSHOT_ENABLED=0.
 
 Env:
+- MASTER_WARM_ENABLED (default 1) — pemanas cache master data tiap tick.
 - HARGA_SNAPSHOT_ENABLED / STOK_SNAPSHOT_ENABLED (default 1)
 - HARGA_SNAPSHOT_HOUR (default 0) / STOK_SNAPSHOT_HOUR (default 3) — jam lokal minimum
   sebelum boleh jalan. Beda jam supaya kedua job berat tak tabrakan.
@@ -46,6 +50,21 @@ def _harga_enabled() -> bool:
 
 def _stok_enabled() -> bool:
     return _flag("STOK_SNAPSHOT_ENABLED")
+
+
+def _warm_enabled() -> bool:
+    return _flag("MASTER_WARM_ENABLED")
+
+
+def _warm_ttl() -> int:
+    """Umur entri cache yang ditulis pemanas: 3x jeda tick.
+
+    Harus lebih panjang dari jeda tick, kalau tidak entri kedaluwarsa di antara
+    dua pemanasan dan pengguna yang membuka halaman pada celah itu tetap
+    menanggung cache dingin — persis masalah yang mau dihapus. Faktor 3 memberi
+    ruang untuk satu-dua tick yang gagal (server legacy sempat mati) tanpa
+    langsung membuka celah."""
+    return _interval() * 3
 
 
 def _interval() -> int:
@@ -95,7 +114,16 @@ def _run_due_stok(now, profile) -> None:
         try:
             res = snapshot_stok_base(profile)
         except Exception as exc:  # server mati / pyodbc — hentikan profil ini, retry tick berikutnya
-            log.warning("snapshot_stok_base terjadwal gagal (%s): %s", profile.name, exc)
+            # Tanpa base, fase live di bawah tak bisa jalan (live = delta sejak
+            # base), jadi profil ini TAK PUNYA snapshot sama sekali dan setiap
+            # halaman stoknya jatuh ke jalur lambat. Diulang tiap tick, jadi
+            # kalau penyebabnya timeout ia akan gagal terus tanpa henti —
+            # naikkan POS_SNAPSHOT_TIMEOUT (default 900 detik) untuk server jauh.
+            log.error(
+                "snapshot_stok_base gagal (%s): %s — profil ini akan memakai jalur "
+                "lambat sampai berhasil. Bila ini timeout, naikkan POS_SNAPSHOT_TIMEOUT.",
+                profile.name, exc,
+            )
             return
         StokSnapshotBaseRun.objects.create(
             profile=profile, profile_name=profile.name, base_month=base_month, rows=res["rows"],
@@ -117,6 +145,20 @@ def _run_due_stok(now, profile) -> None:
     log.info("snapshot_stok %s: %s baris saldo", profile.name, res["rows"])
 
 
+def _warm_master(profile) -> None:
+    """Panasi cache master data profil ini. Tiap tick, bukan sekali sehari:
+    tujuannya menjaga cache TETAP hangat, bukan mengisinya sekali."""
+    from apps.inventory.services import warm_master_cache
+
+    t0 = time.monotonic()
+    try:
+        n = warm_master_cache(profile, ttl=_warm_ttl())
+    except Exception as exc:  # pyodbc.Error dll — server jauh mati, coba tick berikutnya
+        log.warning("pemanasan cache master gagal (%s): %s", profile.name, exc)
+        return
+    log.info("cache master %s: %s key, %.2fs", profile.name, n, time.monotonic() - t0)
+
+
 def _run_due_jobs() -> None:
     """Jalankan snapshot untuk SEMUA profil (bukan hanya koneksi aktif) — tiap
     server/database butuh snapshotnya sendiri. Berurutan, per-profil terisolasi:
@@ -128,8 +170,11 @@ def _run_due_jobs() -> None:
     now = timezone.localtime()
     stok_on = _stok_enabled()
     harga_on = _harga_enabled()
+    warm_on = _warm_enabled()
     for profile in ServerProfile.objects.all():
         try:
+            if warm_on:
+                _warm_master(profile)
             if stok_on:
                 _run_due_stok(now, profile)
             if harga_on:
@@ -152,7 +197,7 @@ def _loop() -> None:
 def start_scheduler() -> None:
     """Idempotent: mulai satu daemon thread. Dipanggil dari config/wsgi.py."""
     global _started
-    if not (_harga_enabled() or _stok_enabled()):
+    if not (_harga_enabled() or _stok_enabled() or _warm_enabled()):
         return
     with _lock:
         if _started:
@@ -160,7 +205,9 @@ def start_scheduler() -> None:
         _started = True
     threading.Thread(target=_loop, name="snapshot-scheduler", daemon=True).start()
     log.info(
-        "Scheduler snapshot aktif (interval %ss, semua profil; harga=%s jam≥%s, stok=%s jam≥%s).",
+        "Scheduler snapshot aktif (interval %ss, semua profil; harga=%s jam≥%s, stok=%s jam≥%s, "
+        "pemanas cache=%s ttl=%ss).",
         _interval(), _harga_enabled(), _hour("HARGA_SNAPSHOT_HOUR", 0),
         _stok_enabled(), _hour("STOK_SNAPSHOT_HOUR", 0),
+        _warm_enabled(), _warm_ttl(),
     )

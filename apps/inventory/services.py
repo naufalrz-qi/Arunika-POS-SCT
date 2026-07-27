@@ -419,7 +419,7 @@ def snapshot_stok_base(profile) -> dict:
     Recompute PENUH sejak tutup buku (`use_snapshot=False`) — berat tapi jarang
     (hanya saat bulan base bergeser). Region ini immutable, jadi hasilnya stabil.
     Return {"rows": n, "base_date": base_dt}."""
-    with mssql.report_cursor(profile) as rcur:
+    with mssql.report_cursor(profile, query_timeout=mssql.SNAPSHOT_TIMEOUT) as rcur:
         # Opening block [0] membaca m_barang_divisi.stok_awal, yang berjangkar di
         # tanggal tutup buku — base beku tak boleh mulai sebelum itu. Bila lebih
         # awal, jendela transaksi (closing, base_dt] kosong sehingga base berisi
@@ -440,7 +440,7 @@ def snapshot_stok(profile) -> dict:
     ada (first run) → fallback recompute penuh sejak tutup buku (perilaku lama,
     tetap benar). Return {"rows": n, "tanggal": snap_ts}."""
     snap_ts = dt.datetime.now()
-    with mssql.report_cursor(profile) as rcur:
+    with mssql.report_cursor(profile, query_timeout=mssql.SNAPSHOT_TIMEOUT) as rcur:
         base_dt = _snapshot_meta(rcur, SNAPSHOT_BASE_TABLE)
         if base_dt is not None:
             sums = _movement_sums(
@@ -451,6 +451,71 @@ def snapshot_stok(profile) -> dict:
     rows = _sums_to_rows(sums, snap_ts)
     _write_snapshot(profile, SNAPSHOT_TABLE, rows)
     return {"rows": len(rows), "tanggal": snap_ts}
+
+
+def _purchase_prices_key(tanggal) -> str:
+    return f"purchase_prices:{tanggal:%Y-%m-%d}"
+
+
+PURCHASE_PRICES_PREFIX = "purchase_prices:"
+
+
+def warm_master_cache(profile, ttl=None) -> int:
+    """Isi ulang cache master data untuk `profile` dalam SATU koneksi.
+
+    Ongkos cache dingin bukan biaya query, melainkan biaya menstreaming katalog
+    penuh lewat kabel: terukur ~30 detik untuk profil WAN antar-kota (vs <5 detik
+    saat cache hangat). Tanpa pemanas, ongkos itu ditanggung pengguna PERTAMA
+    yang membuka halaman setelah TTL habis atau setelah server restart — jadi
+    "kadang 30 detik" selamanya. Dipanggil terjadwal oleh apps/core/scheduler.py
+    dengan `ttl` lebih panjang dari jeda tick-nya, sehingga entri selalu diganti
+    sebelum kedaluwarsa dan tak pernah ada celah dingin.
+
+    `force=True`: sengaja membangun ulang walau entri lama masih hidup — itulah
+    gunanya, mengganti isi cache di latar sebelum pengguna menemukannya kosong.
+
+    Return jumlah key yang diisi."""
+    filled = []
+
+    def put(name, build):
+        _cached(profile, name, build, ttl=ttl, force=True)
+        filled.append(name)
+
+    # Key berkunci tanggal: buang set hari-hari sebelumnya sebelum mengisi yang
+    # baru, kalau tidak tiap hari meninggalkan satu peta puluhan ribu entri.
+    invalidate_master_cache(profile.pk, prefix=PURCHASE_PRICES_PREFIX)
+
+    with mssql.report_cursor(profile) as cur:
+        put("universe", lambda: _barang_universe(cur))
+        put("meta", lambda: _barang_meta(cur))
+        put("factors", lambda: _unit_factors(cur))
+        put("harga_jual", lambda: _harga_jual_map(cur))
+        put("divisi_full", lambda: {_k(r["kd_divisi"]): r for r in _div_rows_full(cur)})
+        put("satuan", lambda: {_k(r["kd_satuan"]): r["nama"] for r in _satuan_rows(cur)})
+
+        def _names():
+            cur.execute("SELECT kd_barang, nama FROM m_barang")
+            return {_k(r["kd_barang"]): (r["nama"] or "").strip() for r in _dictify(cur)}
+
+        put("barang_names", _names)
+
+        def _divisi_list():
+            cur.execute("SELECT kd_divisi, nama FROM m_divisi WHERE status <> 0 ORDER BY nama")
+            return [
+                {"kd_divisi": (r["kd_divisi"] or "").strip(), "nama": (r["nama"] or "").strip()}
+                for r in _dictify(cur)
+            ]
+
+        put("divisi_list", _divisi_list)
+
+        stok_min = _stok_min_map(cur)
+        put("stok_min", lambda: stok_min)
+        put("stok_min_kb", lambda: _sum_by_barang(stok_min))
+
+        hari_ini = dt.datetime.combine(dt.date.today(), dt.time(23, 59, 59))
+        put(_purchase_prices_key(hari_ini), lambda: _purchase_prices(cur, hari_ini))
+
+    return len(filled)
 
 
 # --- Public services -------------------------------------------------------
@@ -653,7 +718,7 @@ def stock_levels(profile, kd_divisi=None, date_to=None) -> list[dict]:
     per_divisi = bool(kd_divisi)
     with mssql.report_cursor(profile) as cur:
         sums = _movement_sums(cur, kd_divisi=kd_divisi or None, date_to=date_to)
-        universe = _barang_universe(cur, kd_divisi=kd_divisi or None)
+        universe = _universe_for(profile, cur, kd_divisi or None)
         # kd_barang -> {nama, kategori, kd_kategori, jenis, supplier, status}
         meta = _cached(profile, "meta", lambda: _barang_meta(cur))
         stok_min = _cached(profile, "stok_min", lambda: _stok_min_map(cur))
@@ -816,7 +881,11 @@ def _barang_universe(cur, kd_divisi=None) -> list[tuple]:
     """All (kd_divisi, kd_barang) pairs for the Stok Akhir listing — every row of
     m_barang without exception, including barang with no m_barang_divisi
     assignment (kd_divisi ''). Needed because _movement_sums drops all-zero rows
-    via its HAVING clause, hiding every zero-stock barang."""
+    via its HAVING clause, hiding every zero-stock barang.
+
+    SELALU panggil lewat _universe_for: ~55rb baris, dan di server yang diakses
+    lewat WAN ini terukur 2,96 detik per pemanggilan (vs 0,13 detik di LAN) —
+    63% dari seluruh waktu Stok per Divisi dengan cache hangat."""
     sql = (
         "SELECT COALESCE(bd.kd_divisi, '') AS kd_divisi, b.kd_barang FROM m_barang b "
         "LEFT JOIN m_barang_divisi bd ON b.kd_barang = bd.kd_barang "
@@ -830,6 +899,24 @@ def _barang_universe(cur, kd_divisi=None) -> list[tuple]:
     return [(_k(r[0]), _k(r[1])) for r in cur.fetchall()]
 
 
+def _universe_for(profile, cur, kd_divisi=None) -> list[tuple]:
+    """Universe penuh dicache SEKALI, lalu disaring di Python per divisi.
+
+    Menyaring hasil penuh setara dengan query berfilter: `LEFT JOIN + WHERE
+    bd.kd_divisi = ?` membuang baris tak-cocok DAN baris tanpa penugasan divisi
+    (kd_divisi ''), persis seperti membandingkan kolom pertama. Diuji di
+    test_universe_filter.py.
+
+    Dulu key cache-nya memuat kd_divisi ("universe:D01"), jadi tiap divisi yang
+    dibuka pengguna adalah key dingin sendiri — di WAN itu puluhan detik lagi per
+    divisi baru, berulang tiap TTL. Satu key untuk semua divisi menghapus itu."""
+    full = _cached(profile, "universe", lambda: _barang_universe(cur))
+    if not kd_divisi:
+        return full
+    kdiv = _k(kd_divisi)
+    return [r for r in full if r[0] == kdiv]
+
+
 def stok_akhir_per_tanggal(profile, tanggal, kd_divisi=None) -> list[dict]:
     """Stok akhir per (divisi, barang) at tanggal — matches api_GetStokAkhirPerTanggal schema.
 
@@ -839,19 +926,21 @@ def stok_akhir_per_tanggal(profile, tanggal, kd_divisi=None) -> list[dict]:
 
     with mssql.report_cursor(profile) as cur:
         sums = _movement_sums(cur, kd_divisi=kd_divisi or None, date_to=tanggal)
-        universe = _barang_universe(cur, kd_divisi=kd_divisi or None)
-        divisi = {_k(r["kd_divisi"]): r for r in _div_rows_full(cur)}
+        universe = _universe_for(profile, cur, kd_divisi or None)
+        divisi = _cached(profile, "divisi_full", lambda: {_k(r["kd_divisi"]): r for r in _div_rows_full(cur)})
         meta = _cached(profile, "meta", lambda: _barang_meta(cur))
         harga_jual = _cached(profile, "harga_jual", lambda: _harga_jual_map(cur))
         # _purchase_prices = 3 query agregat atas t_pembelian_detail, ~0.34s dan
         # dulu jalan di SETIAP request. Dicache hanya untuk tanggal hari ini —
-        # itu nilai default dan mayoritas kunjungan, sekaligus menjaga cache
-        # tetap satu key. Tanggal lampau tetap dihitung langsung supaya tak
-        # menumpuk key per tanggal yang dipilih pengguna (lihat catatan cache di
-        # context.md soal query berkunci parameter bebas).
+        # itu nilai default dan mayoritas kunjungan. Tanggal lampau tetap
+        # dihitung langsung supaya tak menumpuk key per tanggal yang dipilih
+        # pengguna (lihat catatan cache di context.md soal query berkunci
+        # parameter bebas). Key memuat tanggalnya: lewat tengah malam key hari
+        # kemarin tak terpakai lagi, jadi tak mungkin menyajikan harga basi
+        # meski TTL pemanas panjang. Set lama dibuang pemanas terjadwal.
         if tanggal.date() == dt.date.today():
             avg_map, last_map, init_map = _cached(
-                profile, "purchase_prices_hari_ini", lambda: _purchase_prices(cur, tanggal)
+                profile, _purchase_prices_key(tanggal), lambda: _purchase_prices(cur, tanggal)
             )
         else:
             avg_map, last_map, init_map = _purchase_prices(cur, tanggal)
@@ -916,8 +1005,8 @@ def barang_histori(profile, kd_barang=None, kd_divisi=None, date_from=None, date
             ):
                 saldo[(_k(m["kd_divisi"]), _k(m["kd_barang"]))] = _f(m["stok_awal"])
         factors = _cached(profile, "factors", lambda: _unit_factors(cur))
-        divisi = {_k(r["kd_divisi"]): r for r in _div_rows_full(cur)}
-        satuan = {_k(r["kd_satuan"]): r["nama"] for r in _satuan_rows(cur)}
+        divisi = _cached(profile, "divisi_full", lambda: {_k(r["kd_divisi"]): r for r in _div_rows_full(cur)})
+        satuan = _cached(profile, "satuan", lambda: {_k(r["kd_satuan"]): r["nama"] for r in _satuan_rows(cur)})
 
         def _names():
             cur.execute("SELECT kd_barang, nama FROM m_barang")

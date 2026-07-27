@@ -35,7 +35,7 @@ class SnapshotBaseClampTest(SimpleTestCase):
         services._base_date = lambda *a, **k: base_date
         services._closing_date = lambda cur: CLOSING
         services._movement_sums = lambda cur, **kw: seen.update(kw) or []
-        services.mssql.report_cursor = lambda profile: _Cur()
+        services.mssql.report_cursor = lambda profile, **kw: _Cur()  # **kw: query_timeout
         services._write_snapshot = lambda profile, table, rows: None
         try:
             res = services.snapshot_stok_base(profile=None)
