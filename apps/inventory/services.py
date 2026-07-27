@@ -633,23 +633,30 @@ def mutasi_stok(profile, date_from=None, date_to=None, kd_divisi=None) -> list[d
     return out
 
 
-def stock_levels(profile, kd_divisi=None, date_from=None, date_to=None, search="", kd_kategori="") -> list[dict]:
-    """Stok akhir per barang (and per divisi unless 'all'), computed from movements.
+def stock_levels(profile, kd_divisi=None, date_to=None) -> list[dict]:
+    """Saldo stok per barang untuk cek cepat — SELURUH barang, saldo as-of date_to.
 
-    - kd_divisi None  -> Semua Divisi (aggregate across divisions, per barang)
-    - date_from None  -> stok akhir as-of date_to (everything counts as 'masuk/keluar' net)
-    - date_from set   -> period: stok_awal (before), masuk/keluar (within), stok_akhir
+    Menampilkan setiap baris m_barang tanpa kecuali: termasuk yang stoknya nol,
+    yang tak pernah bergerak, dan yang berstatus nonaktif. _movement_sums
+    membuang grup serba-nol lewat HAVING-nya, jadi hasilnya di-union dengan
+    _barang_universe — pola yang sama dipakai stok_akhir_per_tanggal.
+
+    Bentuk barisnya sengaja RAMPING: hanya kolom yang benar-benar dirender
+    StokDivisi.vue. Dengan ~55rb barang, tiap kolom tambahan berarti ~1 MB JSON
+    lagi yang harus di-parse browser. Kolom divisi tak ikut dikirim karena
+    nilainya konstan — sudah ditentukan oleh filter di halaman.
+
+    Tanpa date_from: halaman ini selalu point-in-time supaya jalur snapshot
+    aktif (lihat stok_divisi di apps/monitoring/views.py).
     """
     date_to = date_to or dt.datetime.now()
+    per_divisi = bool(kd_divisi)
     with mssql.report_cursor(profile) as cur:
-        sums = _movement_sums(cur, kd_divisi=kd_divisi or None, date_from=date_from, date_to=date_to)
-        divisi = _cached(profile, "divisi_names", lambda: {_k(r["kd_divisi"]): r["nama"] for r in _div_rows(cur)})
+        sums = _movement_sums(cur, kd_divisi=kd_divisi or None, date_to=date_to)
+        universe = _barang_universe(cur, kd_divisi=kd_divisi or None)
         # kd_barang -> {nama, kategori, kd_kategori, jenis, supplier, status}
         meta = _cached(profile, "meta", lambda: _barang_meta(cur))
         stok_min = _cached(profile, "stok_min", lambda: _stok_min_map(cur))
-
-    # group key: per barang, or per (divisi, barang) when a specific divisi is chosen
-    per_divisi = bool(kd_divisi)
     # stok_min is per (divisi, barang) in the legacy schema; when aggregating
     # across all divisions there is no single threshold, so sum it — a
     # combined "org-wide" minimum makes more sense than dropping the badge.
@@ -661,44 +668,28 @@ def stock_levels(profile, kd_divisi=None, date_from=None, date_to=None, search="
     agg: dict = {}
     for m in sums:
         key = (_k(m["kd_divisi"]), _k(m["kd_barang"])) if per_divisi else (None, _k(m["kd_barang"]))
-        a = agg.setdefault(key, {"stok_awal": 0.0, "masuk": 0.0, "keluar": 0.0})
-        a["stok_awal"] += _f(m["stok_awal"])
-        a["masuk"] += _f(m["masuk"])
-        a["keluar"] += _f(m["keluar"])
+        agg[key] = agg.get(key, 0.0) + _f(m["stok_awal"]) + _f(m["masuk"]) - _f(m["keluar"])
+
+    # Union dengan universe supaya barang bersaldo nol / tak pernah bergerak
+    # tetap muncul. Di mode agregat kunci divisinya diruntuhkan jadi None.
+    keys = set(agg)
+    keys |= {(kdiv, kb) if per_divisi else (None, kb) for kdiv, kb in universe}
 
     out = []
-    for (kdiv, kb), a in agg.items():
-        info = meta.get(kb, {})
-        if kd_kategori and info.get("kd_kategori") != kd_kategori:
-            continue
-        nama = info.get("nama", "")
-        if search:
-            s = search.lower()
-            if s not in nama.lower() and s not in kb.lower():
-                continue
-        stok_akhir = a["stok_awal"] + a["masuk"] - a["keluar"]
-        # Skip products with no stock and no movement in the period (noise).
-        if not (a["stok_awal"] or a["masuk"] or a["keluar"] or stok_akhir):
-            continue
-        out.append(
-            {
-                "kd_barang": kb.strip() if isinstance(kb, str) else kb,
-                "nama": nama,
-                "kategori": info.get("kategori", ""),
-                "jenis": info.get("jenis", ""),
-                "supplier": info.get("supplier", ""),
-                "divisi": divisi.get(kdiv, "Semua Divisi") if per_divisi else "Semua Divisi",
-                "stok_awal": round(a["stok_awal"], 3),
-                "masuk": round(a["masuk"], 3),
-                "keluar": round(a["keluar"], 3),
-                "stok_akhir": round(stok_akhir, 3),
-                "stok_min": round(stok_min.get((kdiv, kb), 0.0) if per_divisi else stok_min_by_kb.get(kb, 0.0), 3),
-            }
-        )
-    # Return ALL items with stock or movement (no cap — client filters/searches).
-    # ponytail: tanpa cap. _movement_sums sudah membuang grup serba-nol lewat
-    # HAVING (~75% katalog). Kalau payload jadi bottleneck (bukan SQL), langkah
-    # berikutnya: pangkas kolom yang tak dirender, bukan pindah stack tabel.
+    for kdiv, kb in keys:
+        stok = agg.get((kdiv, kb), 0.0)
+        out.append({
+            "kd_barang": kb.strip() if isinstance(kb, str) else kb,
+            "nama": meta.get(kb, {}).get("nama", ""),
+            "stok_akhir": round(stok, 3),
+            "stok_min": round(
+                stok_min.get((kdiv, kb), 0.0) if per_divisi else stok_min_by_kb.get(kb, 0.0), 3
+            ),
+        })
+    # ponytail: tanpa cap dan tanpa paginasi server — filter/cari di klien.
+    # Barisnya sudah diramping jadi 4 kolom; kalau payload masih jadi bottleneck,
+    # langkah berikutnya paginasi server (pindah ke stack ServerTable), bukan
+    # memotong daftar barang secara diam-diam.
     out.sort(key=lambda r: r["nama"])
     return out
 

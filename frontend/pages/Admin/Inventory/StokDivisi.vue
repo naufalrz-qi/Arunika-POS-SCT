@@ -33,12 +33,18 @@ const divisiOptions = computed(() => [
   ...(props.data?.divisi_list ?? []).map((d) => ({ value: d.kd_divisi, label: d.nama })),
 ]);
 
+// Kolom Divisi sengaja tak ada: nilainya konstan (sudah ditentukan filter),
+// jadi mengirimnya per baris cuma menggandakan payload di ~55rb barang.
 const columns = [
   { key: "kd_barang", label: "Kode" },
   { key: "nama", label: "Barang" },
-  { key: "divisi", label: "Divisi" },
   { key: "stok_akhir", label: "Stok", align: "right", format: "number" },
 ];
+
+const divisiAktif = computed(() => {
+  const d = (props.data?.divisi_list ?? []).find((x) => x.kd_divisi === props.filters.kd_divisi);
+  return d ? d.nama : "Semua Divisi";
+});
 </script>
 
 <template>
@@ -71,7 +77,7 @@ const columns = [
       />
 
       <ReportView
-        title="Stok per Divisi"
+        :title="`Stok per Divisi — ${divisiAktif}`"
         :columns="columns"
         :rows="rows"
         row-key="kd_barang"
