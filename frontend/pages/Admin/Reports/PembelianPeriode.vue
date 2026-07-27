@@ -46,7 +46,6 @@ const summaryItems = computed(() => {
 <template>
   <AdminLayout title="Pembelian per Periode">
     <ReportPage
-      title="Pembelian per Periode"
       deferred-key="report"
       :data="report"
       :columns="columns"

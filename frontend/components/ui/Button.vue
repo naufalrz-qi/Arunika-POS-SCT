@@ -9,8 +9,14 @@ const props = defineProps({
   loading: { type: Boolean, default: false },
 });
 
+// Tanpa `panel-cut-sm`: clip-path memotong SEMUA yang dilukis elemen ini —
+// termasuk `border` (putus di 4 sudut diagonal) dan setiap `box-shadow` (glow
+// hover di bawah hilang total, karena shadow dilukis di luar kotak). Lihat
+// catatan panjang di main.css .panel-cut-frame. Solusi bevel butuh elemen
+// pembungkus, yang tak tersedia untuk satu <button>; jadi kontrol memakai
+// radius kecil — bevel tetap milik permukaan (kartu, tabel, panel).
 const base =
-  "inline-flex items-center justify-center gap-2 font-heading font-bold uppercase tracking-widest panel-cut-sm transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 disabled:opacity-50 disabled:cursor-not-allowed active:translate-y-px active:scale-[0.98] border relative overflow-hidden group before:absolute before:inset-0 before:bg-white/10 before:opacity-0 hover:before:opacity-100 before:transition-opacity";
+  "inline-flex items-center justify-center gap-2 font-heading font-bold uppercase tracking-widest rounded transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 disabled:opacity-50 disabled:cursor-not-allowed active:translate-y-px active:scale-[0.98] border relative overflow-hidden group before:absolute before:inset-0 before:bg-white/10 before:opacity-0 hover:before:opacity-100 before:transition-opacity";
 
 const variants = {
   primary: "bg-brand-600/90 text-white border-brand-500 hover:bg-brand-500 hover:border-brand-400 hover:shadow-[0_0_15px_rgba(11,61,145,0.6)] backdrop-blur-sm",

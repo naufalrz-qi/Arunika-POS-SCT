@@ -23,7 +23,12 @@ watch(
     else window.removeEventListener("keydown", onKey);
   },
 );
-onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
+// Unmounting while open (Inertia navigation, parent v-if) would otherwise
+// leave body scroll locked with no way back short of a reload.
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKey);
+  document.body.style.overflow = "";
+});
 </script>
 
 <template>

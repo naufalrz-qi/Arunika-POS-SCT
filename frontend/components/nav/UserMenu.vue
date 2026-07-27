@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { Link } from "@inertiajs/vue3";
 import { storeToRefs } from "pinia";
 import { useUserStore } from "@/stores/user";
+import { ROLE_LABELS } from "@/utils/labels";
 import Icon from "./Icon.vue";
 
 const userStore = useUserStore();
