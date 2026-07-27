@@ -53,8 +53,6 @@
   --color-danger-600: oklch(0.56 0.21 25);
   --color-danger-700: oklch(0.49 0.18 25);
 
-  /* Panels sharpened a touch for the mecha "panel-line" feel */
-  --radius-card: 0.75rem;
   /* Radius tunggal untuk semua kontrol — lihat "Aturan bentuk sudut" di bawah.
      6px menyamai lebar bevel `panel-cut-sm`, jadi bobot sudutnya tetap sama
      dengan sebelum kontrol pindah dari bevel ke radius. */
