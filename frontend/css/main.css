@@ -53,9 +53,32 @@
   --color-danger-600: oklch(0.56 0.21 25);
   --color-danger-700: oklch(0.49 0.18 25);
 
-  /* Panels sharpened a touch for the mecha "panel-line" feel */
-  --radius-card: 0.75rem;
+  /* Radius tunggal untuk semua kontrol — lihat "Aturan bentuk sudut" di bawah.
+     6px menyamai lebar bevel `panel-cut-sm`, jadi bobot sudutnya tetap sama
+     dengan sebelum kontrol pindah dari bevel ke radius. */
+  --radius-control: 0.375rem;
 }
+
+/* ---------------------------------------------------------------------------
+   ATURAN BENTUK SUDUT — satu aturan, tanpa pengecualian.
+
+   PERMUKAAN (kartu, tabel, panel filter, modal, kartu login) memakai bevel
+   `panel-cut` di elemen isi, dibungkus `panel-cut-frame`. clip-path memakan
+   border dan box-shadow elemen yang diclip, jadi keduanya hidup di pembungkus
+   — lihat catatan panjang di .panel-cut-frame.
+
+   KONTROL & PEMBERITAHUAN (input, select, tombol, badge, toast, banner, menu
+   dropdown, tombol paginasi) memakai `rounded-control`. Kontrol tidak memakai
+   bevel: bevel butuh elemen pembungkus untuk border/shadow-nya, dan membungkus
+   setiap <input> dan <button> menukar satu masalah tampilan dengan markup
+   berlapis di mana-mana.
+
+   Kenapa ditulis di sini: sebelum aturan ini ada lima bahasa sudut hidup
+   berdampingan (panel-cut, rounded-card, rounded-lg, rounded-md, rounded).
+   Bevel berhenti di kartu dan tabel, sehingga begitu pengguna menyentuh kontrol
+   — mengisi filter, membuka modal, melihat toast — antarmuka berubah jadi admin
+   Tailwind generik. Itu sebabnya tampilannya terasa "hampir" tapi belum menyatu.
+   --------------------------------------------------------------------------- */
 
 /* Light mode (default) */
 :root {
@@ -77,6 +100,14 @@
   --brand-bg: oklch(0.95 0.03 264);
   --brand-fg: oklch(0.45 0.16 264);
   --sidebar-bg: rgba(11, 23, 42, 0.95); /* Deep dark blue for sidebar */
+
+  /* Glow hover tombol, diturunkan dari token warnanya sendiri lewat color-mix.
+     Sebelumnya tiap varian menuliskan rgba() tersendiri (rgba(11,61,145,.6),
+     rgba(230,0,18,.4), …) yang tak ikut berubah kalau warna brand diganti. */
+  --glow-brand: color-mix(in oklch, var(--color-brand-500), transparent 45%);
+  --glow-danger: color-mix(in oklch, var(--color-danger-500), transparent 55%);
+  --glow-success: color-mix(in oklch, var(--color-success-500), transparent 55%);
+  --glow-accent: color-mix(in oklch, var(--color-rx-yellow), transparent 50%);
 }
 
 /* Dark mode */

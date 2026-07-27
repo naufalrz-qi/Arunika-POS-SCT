@@ -23,7 +23,7 @@ const { activeTab, isActive } = useNav();
     <div class="shoulder-panel bg-sidebar border border-white/5 absolute inset-0 -z-10"></div>
     <p
       v-if="!sidebarCollapsed"
-      class="px-5 pb-1 pt-5 text-[10px] font-heading font-bold uppercase tracking-widest text-brand-300/60"
+      class="px-5 pb-1 pt-5 text-[11px] font-heading font-bold uppercase tracking-wide text-brand-300/60"
     >
       {{ activeTab.label }}
     </p>
@@ -33,7 +33,7 @@ const { activeTab, isActive } = useNav();
       <template v-for="(sub, i) in activeTab.subsections" :key="sub.key">
         <p
           v-if="!sidebarCollapsed && activeTab.subsections.length > 1"
-          class="px-2 pb-1.5 pt-4 text-[10px] font-heading font-bold uppercase tracking-widest text-white/50"
+          class="px-2 pb-1.5 pt-4 text-[11px] font-heading font-bold uppercase tracking-wide text-white/50"
         >
           {{ sub.label }}
         </p>
@@ -48,7 +48,7 @@ const { activeTab, isActive } = useNav();
             :href="item.href"
             :title="sidebarCollapsed ? item.label : undefined"
             :class="[
-              'group flex items-center gap-3 rounded-lg py-2 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60',
+              'group flex items-center gap-3 rounded-control py-2 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60',
               sidebarCollapsed ? 'justify-center px-0' : 'px-3',
               isActive(item.href)
                 ? 'bg-brand-600 font-semibold text-white relative overflow-hidden'
@@ -67,6 +67,7 @@ const { activeTab, isActive } = useNav();
 
     <button
       type="button"
+      :aria-expanded="!sidebarCollapsed"
       class="flex items-center gap-3 border-t border-white/10 px-5 py-4 text-xs font-heading font-medium tracking-wide text-white/70 transition-all duration-200 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
       :class="sidebarCollapsed ? 'justify-center px-0' : ''"
       :title="sidebarCollapsed ? 'Perlebar sidebar' : 'Ciutkan sidebar'"

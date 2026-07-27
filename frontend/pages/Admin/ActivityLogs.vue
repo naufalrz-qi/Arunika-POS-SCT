@@ -72,8 +72,8 @@ const actionVariant = (a) => {
 
 <template>
   <AdminLayout title="Log Aktivitas">
-    <div class="mb-4 flex items-center justify-between">
-      <h1 class="text-xl font-semibold text-ink">Log Aktivitas</h1>
+    <!-- Judul dimiliki AdminLayout; di sini cukup aksi kanan-atasnya. -->
+    <div class="mb-4 flex items-center justify-end">
       <ExportButton mode="client" filename="aktivitas-log" :columns="exportColumns" :rows="filtered" sheet-name="Log" />
     </div>
 

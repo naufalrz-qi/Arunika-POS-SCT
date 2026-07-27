@@ -1,5 +1,5 @@
 <script setup>
-import { watch, onBeforeUnmount } from "vue";
+import { watch, onBeforeUnmount, nextTick, ref } from "vue";
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -10,20 +10,66 @@ const emit = defineEmits(["close"]);
 
 const sizes = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl" };
 
-function onKey(e) {
-  if (e.key === "Escape" && props.show) emit("close");
+const panel = ref(null);
+// Elemen yang memicu modal, supaya fokus bisa dikembalikan saat ditutup —
+// tanpa itu fokus terlempar ke <body> dan pengguna keyboard harus menelusuri
+// halaman dari awal untuk kembali ke tempatnya.
+let lastFocused = null;
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function focusables() {
+  return Array.from(panel.value?.querySelectorAll(FOCUSABLE) ?? []).filter(
+    (el) => el.offsetParent !== null || el === document.activeElement,
+  );
 }
 
-// Lock body scroll + Esc-to-close while open.
+// Tab tidak boleh keluar dari dialog: aria-modal saja hanya memberi tahu
+// pembaca layar, tidak menahan fokus.
+function trapTab(e) {
+  const items = focusables();
+  if (!items.length) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  const active = document.activeElement;
+  if (e.shiftKey && (active === first || !panel.value?.contains(active))) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && active === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+function onKey(e) {
+  if (!props.show) return;
+  if (e.key === "Escape") emit("close");
+  else if (e.key === "Tab") trapTab(e);
+}
+
+// Lock body scroll + Esc-to-close + focus trap while open.
 watch(
   () => props.show,
   (open) => {
     document.body.style.overflow = open ? "hidden" : "";
-    if (open) window.addEventListener("keydown", onKey);
-    else window.removeEventListener("keydown", onKey);
+    if (open) {
+      lastFocused = document.activeElement;
+      window.addEventListener("keydown", onKey);
+      nextTick(() => focusables()[0]?.focus());
+    } else {
+      window.removeEventListener("keydown", onKey);
+      lastFocused?.focus?.();
+      lastFocused = null;
+    }
   },
 );
-onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
+// Unmounting while open (Inertia navigation, parent v-if) would otherwise
+// leave body scroll locked with no way back short of a reload.
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKey);
+  document.body.style.overflow = "";
+});
 </script>
 
 <template>
@@ -42,16 +88,21 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           leave-active-class="transition duration-100 ease-in"
           leave-to-class="opacity-0 scale-95"
         >
+          <!-- Modal adalah permukaan, jadi memakai bevel seperti kartu dan tabel;
+               border dan shadow-nya hidup di .panel-cut-frame karena clip-path
+               memakan keduanya di elemen yang diclip. -->
           <div
             v-if="show"
+            ref="panel"
             role="dialog"
             aria-modal="true"
             :aria-label="title || undefined"
-            :class="['relative flex max-h-[85vh] w-full flex-col rounded-card bg-surface shadow-xl', sizes[size]]"
+            :class="['panel-cut-frame panel-cut-frame-accent relative w-full shadow-xl', sizes[size]]"
           >
-            <div class="flex shrink-0 items-center justify-between border-b border-border-default px-5 py-3.5">
-              <h3 class="text-base font-semibold text-ink">{{ title }}</h3>
-              <button class="rounded p-1 text-ink-muted hover:bg-surface-3 hover:text-ink" aria-label="Tutup" title="Tutup" @click="emit('close')">
+            <div class="panel-cut flex max-h-[85vh] flex-col bg-surface">
+            <div class="flex shrink-0 items-center justify-between border-b border-border-default bg-surface-3 px-5 py-3.5">
+              <h3 class="text-base font-heading font-semibold text-ink">{{ title }}</h3>
+              <button class="rounded-control p-1 text-ink-muted hover:bg-surface-3 hover:text-ink" aria-label="Tutup" title="Tutup" @click="emit('close')">
                 <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>
@@ -60,8 +111,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
             <div class="min-h-0 overflow-y-auto px-5 py-4">
               <slot />
             </div>
-            <div v-if="$slots.footer" class="flex shrink-0 justify-end gap-2 border-t border-border-default px-5 py-3.5">
+            <div v-if="$slots.footer" class="flex shrink-0 justify-end gap-2 border-t border-border-default bg-surface-2 px-5 py-3.5">
               <slot name="footer" />
+            </div>
             </div>
           </div>
         </Transition>

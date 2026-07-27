@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, useSlots } from "vue";
 import Button from "@/components/ui/Button.vue";
+import Icon from "@/components/nav/Icon.vue";
 
 const props = defineProps({
   loading: { type: Boolean, default: false },
@@ -45,6 +46,8 @@ const advancedOpen = ref(
     <div class="mecha-card panel-cut bg-surface">
       <button
         type="button"
+        :aria-expanded="open"
+        aria-controls="filter-panel-body"
         @click="open = !open"
         class="flex w-full items-center justify-between px-4 py-3 text-left"
       >
@@ -57,20 +60,37 @@ const advancedOpen = ref(
             {{ activeCount }} aktif
           </span>
         </span>
-        <span class="text-ink-subtle">{{ open ? "▾" : "▸" }}</span>
+        <!-- Ikon, bukan glyph teks "▾"/"▸": glyph tak ikut ukuran/warna ikon
+             lain dan bentuknya berbeda antar-font. Sama seperti
+             CollapsibleSection, yang mengerjakan hal yang sama. -->
+        <Icon
+          name="chevron"
+          size="h-4 w-4"
+          :class="['shrink-0 text-ink-subtle transition-transform duration-200', open ? '' : '-rotate-90']"
+        />
       </button>
-      <form v-show="open" @submit.prevent="emit('submit')" class="border-t border-border-default p-4">
+      <form
+        id="filter-panel-body"
+        v-show="open"
+        @submit.prevent="emit('submit')"
+        class="border-t border-border-default p-4"
+      >
         <div class="grid grid-cols-1 gap-3 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
           <slot />
           <template v-if="hasAdvanced">
             <button
               type="button"
+              :aria-expanded="advancedOpen"
               @click="advancedOpen = !advancedOpen"
-              class="col-span-full flex items-center gap-2 border-t border-border-default pt-3 text-left text-[10px] font-heading font-bold uppercase tracking-widest text-ink-subtle transition-colors hover:text-brand-fg"
+              class="col-span-full flex items-center gap-2 border-t border-border-default pt-3 text-left text-[11px] font-heading font-bold uppercase tracking-wide text-ink-subtle transition-colors hover:text-brand-fg"
             >
               <span class="h-3 w-0.5 rounded-full bg-rx-yellow"></span>
               Filter Lanjutan
-              <span>{{ advancedOpen ? "▾" : "▸" }}</span>
+              <Icon
+                name="chevron"
+                size="h-3.5 w-3.5"
+                :class="['shrink-0 transition-transform duration-200', advancedOpen ? '' : '-rotate-90']"
+              />
             </button>
             <template v-if="advancedOpen">
               <slot name="lanjutan" />

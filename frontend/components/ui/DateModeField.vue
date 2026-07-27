@@ -20,7 +20,7 @@ function setMode(m) {
     <div class="flex items-center justify-between gap-2">
       <span
         v-if="label"
-        class="text-[10px] font-heading font-bold uppercase tracking-widest text-ink-muted"
+        class="text-[11px] font-heading font-semibold tracking-wide text-ink-muted"
       >
         {{ label }}
       </span>
