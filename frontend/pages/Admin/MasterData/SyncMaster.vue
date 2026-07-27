@@ -1,7 +1,8 @@
 <script setup>
 import { computed, reactive, ref } from "vue";
-import { router } from "@inertiajs/vue3";
+import { Deferred, router } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
+import TableSkeleton from "@/components/ui/TableSkeleton.vue";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
 import Select from "@/components/ui/Select.vue";
@@ -16,8 +17,9 @@ const props = defineProps({
   entity: { type: String, default: "m_barang" },
   src: { type: [Number, String], default: null },
   dst: { type: [Number, String], default: null },
-  diff: { type: Array, default: () => [] },
-  conn_error: { type: String, default: null },
+  // Bundle deferred {diff, conn_error} — datang setelah mount.
+  compare: { type: Object, default: null },
+  col_labels: { type: Object, default: () => ({}) },
 });
 
 // Arah tetap: gudang = sumber data master, tujuan = server aktif/dipilih
@@ -41,7 +43,12 @@ const pkCol = computed(() => ({ m_barang: "kd_barang", m_customer: "kd_customer"
 const pkLabel = computed(() => ({ m_barang: "Kode Barang", m_customer: "Kode Pelanggan", m_supplier: "Kode Supplier" }[pick.entity] || "Kode"));
 
 // row-key harus string; diff unik per kode entitas
-const rows = computed(() => props.diff.map((r) => ({ ...r, _key: r[pkCol.value] })));
+const diff = computed(() => props.compare?.diff ?? []);
+const connError = computed(() => props.compare?.conn_error ?? null);
+// Nama kolom MS SQL (npwp_no, limit_kredit) tak berarti bagi operator toko.
+const labelKolom = (v) =>
+  v && v.length ? v.map((c) => props.col_labels[c] || c).join(", ") : "—";
+const rows = computed(() => diff.value.map((r) => ({ ...r, _key: r[pkCol.value] })));
 
 function onEntityChange() {
   pick.src = null;
@@ -95,7 +102,6 @@ const columns = computed(() => [
 
 <template>
   <AdminLayout title="Sinkronisasi Master Data">
-    <Banner v-if="conn_error" variant="warning" :message="conn_error" />
 
     <Card class="mb-4">
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-4 sm:items-end">
@@ -105,6 +111,11 @@ const columns = computed(() => [
         <Button :disabled="!pick.src || !pick.dst" @click="bandingkan">Bandingkan</Button>
       </div>
     </Card>
+
+    <Deferred data="compare">
+      <template #fallback><TableSkeleton /></template>
+
+    <Banner v-if="connError" variant="warning" :message="connError" class="mb-4" />
 
     <div v-if="diff.length" class="mb-3 flex items-center gap-3">
       <label class="flex items-center gap-2 text-sm text-ink-muted">
@@ -141,7 +152,7 @@ const columns = computed(() => [
       <template #cell-sel="{ row }">
         <input type="checkbox" :checked="selected.has(row._key)" @change="toggle(row)" />
       </template>
-      <template #cell-fields_changed="{ value }">{{ value && value.length ? value.join(", ") : "—" }}</template>
+      <template #cell-fields_changed="{ value }">{{ labelKolom(value) }}</template>
       <template #cell-flag="{ row }">
         <Badge :variant="row.ada_di_dst ? 'warning' : 'brand'">{{ row.ada_di_dst ? "Data beda" : "Belum ada" }}</Badge>
       </template>
@@ -150,5 +161,6 @@ const columns = computed(() => [
     <Card v-else>
       <p class="py-8 text-center text-sm text-ink-muted">Pilih entitas & server, lalu klik "Bandingkan".</p>
     </Card>
+    </Deferred>
   </AdminLayout>
 </template>

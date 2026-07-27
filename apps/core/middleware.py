@@ -82,6 +82,11 @@ def auth_required(get_response):
         if not path.startswith(PUBLIC_PREFIXES):
             user = getattr(request, "user", None)
             if not (user and user.is_authenticated):
+                # Bedakan sesi yang HABIS dari kunjungan pertama: hanya yang
+                # masih membawa cookie sesi yang diberi tahu, supaya pengunjung
+                # baru tak dituduh "sesi berakhir".
+                if request.COOKIES.get(settings.SESSION_COOKIE_NAME):
+                    return redirect(f"{settings.LOGIN_URL}?expired=1")
                 return redirect(settings.LOGIN_URL)
         return get_response(request)
 
@@ -107,16 +112,16 @@ def admin_network_guard(get_response):
         if request.path.startswith(ADMIN_PREFIX):
             user = getattr(request, "user", None)
             if not (user and user.is_authenticated and user.is_admin_tier):
-                return HttpResponseForbidden("403 Forbidden — butuh hak akses Admin.")
+                return HttpResponseForbidden("Akses ditolak: halaman ini butuh hak akses Admin.")
             if settings.ENFORCE_TAILSCALE:
                 ip = request.META.get("REMOTE_ADDR", "")
                 if not _ip_allowed(ip):
                     return HttpResponseForbidden(
-                        "403 Forbidden — akses Admin hanya via jaringan Tailscale."
+                        "Akses ditolak: panel admin hanya bisa dibuka lewat jaringan Tailscale."
                     )
             if not _menu_allowed(user, request.path):
                 return HttpResponseForbidden(
-                    "403 Forbidden — menu ini tidak diberikan untuk akun Anda."
+                    "Akses ditolak: menu ini tidak diberikan untuk akun Anda. Hubungi superadmin."
                 )
         return get_response(request)
 

@@ -763,12 +763,22 @@ def sync_harga_index(request):
     src = ServerProfile.objects.filter(pk=request.GET.get("src")).first() if request.GET.get("src") else None
     dst = ServerProfile.objects.filter(pk=request.GET.get("dst")).first() if request.GET.get("dst") else None
 
-    diff, conn_error = [], None
-    if src and dst:
-        try:
-            diff = master.compare_harga_jual(src, dst)
-        except pyodbc.Error as exc:
-            conn_error = mssql.friendly_error(exc, "Gagal membandingkan harga")
+    # Deferred: compare_harga_jual membaca m_barang_satuan PENUH di DUA server.
+    # Sebelum ini jalan sinkron sebelum first paint, jadi cache dingin = halaman
+    # membeku. Form-nya tetap prop biasa supaya langsung bisa dipakai.
+    def load_diff():
+        diff, conn_error = [], None
+        if src and dst:
+            try:
+                diff = master.compare_harga_jual(src, dst)
+            except pyodbc.Error as exc:
+                conn_error = mssql.friendly_error(exc, "Gagal membandingkan harga")
+            except Exception:
+                # ponytail: prop deferred yang meledak = halaman rusak; di UI tak
+                # ada bedanya per-tipe, detailnya ke log.
+                log.exception("compare_harga_jual gagal")
+                conn_error = "Gagal membandingkan harga. Cek log server."
+        return {"diff": diff, "conn_error": conn_error}
 
     return render(
         request,
@@ -778,8 +788,7 @@ def sync_harga_index(request):
             "mode": mode,
             "src": src.id if src else None,
             "dst": dst.id if dst else None,
-            "diff": diff,
-            "conn_error": conn_error,
+            "compare": defer(load_diff),
         },
     )
 
@@ -835,12 +844,19 @@ def sync_master_index(request):
     src = ServerProfile.objects.filter(pk=request.GET.get("src")).first() if request.GET.get("src") else None
     dst = ServerProfile.objects.filter(pk=request.GET.get("dst")).first() if request.GET.get("dst") else None
 
-    diff, conn_error = [], None
-    if src and dst and entity in master._SYNC_ENTITIES:
-        try:
-            diff = master.compare_entity(entity, src, dst)
-        except pyodbc.Error as exc:
-            conn_error = mssql.friendly_error(exc, "Gagal membandingkan data")
+    # Deferred: compare_entity membaca m_barang/m_customer/m_supplier PENUH di
+    # DUA server — sama seperti sync_harga_index, jangan blokir first paint.
+    def load_diff():
+        diff, conn_error = [], None
+        if src and dst and entity in master._SYNC_ENTITIES:
+            try:
+                diff = master.compare_entity(entity, src, dst)
+            except pyodbc.Error as exc:
+                conn_error = mssql.friendly_error(exc, "Gagal membandingkan data")
+            except Exception:
+                log.exception("compare_entity(%s) gagal", entity)
+                conn_error = "Gagal membandingkan data. Cek log server."
+        return {"diff": diff, "conn_error": conn_error}
 
     return render(
         request,
@@ -848,11 +864,11 @@ def sync_master_index(request):
         props={
             "profiles": profiles,
             "entities": _SYNC_MASTER_ENTITIES,
+            "col_labels": master.COL_LABELS,
             "entity": entity,
             "src": src.id if src else None,
             "dst": dst.id if dst else None,
-            "diff": diff,
-            "conn_error": conn_error,
+            "compare": defer(load_diff),
         },
     )
 
@@ -1143,31 +1159,40 @@ def _report_view(spec):
                 # to the legacy server itself if no replica is set up OR the
                 # replica is unreachable — a replica outage shouldn't break
                 # every report when the primary can still serve them.
-                inner, params = spec["inner"](f)
-                inner, params = reporting.apply_column_filters(inner, params, f)
-                for read_profile in mssql.report_read_profiles(profile):
-                    rows, total, summary, options = [], 0, {}, {}  # reset per attempt
-                    try:
-                        with mssql.report_cursor(read_profile) as cur:
-                            if f["recent"]:
-                                rows, total, summary_sql = reporting.run_recent(cur, inner, params, f)
-                            else:
-                                rows, total = reporting.run_paged(cur, inner, params, f)
-                                summary_sql = inner
-                            cur.execute(f"SELECT {spec['summary']} FROM ({summary_sql}) AS q", params)
-                            summary = reporting.clean_rows(reporting.dictify(cur))[0]
-                        if spec.get("options"):
-                            options = spec["options"](read_profile)
-                        conn_error = None
-                        break
-                    except pyodbc.Error as exc:
-                        conn_error = mssql.friendly_error(exc, "Gagal membaca laporan")
+                # spec["inner"]/apply_column_filters dulu di luar try — bentuk
+                # filter yang aneh jadi 500, bukan banner.
+                try:
+                    inner, params = spec["inner"](f)
+                    inner, params = reporting.apply_column_filters(inner, params, f)
+                    for read_profile in mssql.report_read_profiles(profile):
+                        rows, total, summary, options = [], 0, {}, {}  # reset per attempt
+                        try:
+                            with mssql.report_cursor(read_profile) as cur:
+                                if f["recent"]:
+                                    rows, total, summary_sql = reporting.run_recent(cur, inner, params, f)
+                                else:
+                                    rows, total = reporting.run_paged(cur, inner, params, f)
+                                    summary_sql = inner
+                                cur.execute(f"SELECT {spec['summary']} FROM ({summary_sql}) AS q", params)
+                                summary = reporting.one_row(cur)
+                            if spec.get("options"):
+                                options = spec["options"](read_profile)
+                            conn_error = None
+                            break
+                        except pyodbc.Error as exc:
+                            conn_error = mssql.friendly_error(exc, "Gagal membaca laporan")
+                except pyodbc.Error as exc:
+                    conn_error = mssql.friendly_error(exc, "Gagal membaca laporan")
+                except Exception:
+                    log.exception("gagal menyiapkan laporan %s", spec.get("component"))
+                    conn_error = "Filter yang dipilih tidak bisa diproses. Kembalikan filter ke bawaan."
             else:
                 conn_error = CONN_ERROR
-            if f["warning"]:
-                conn_error = f["warning"] if not conn_error else f"{conn_error} {f['warning']}"
+            # Peringatan rentang tanggal BUKAN kegagalan koneksi — kanal sendiri
+            # supaya tak dirender sebagai banner error (atau digabung ke dalamnya).
             return {"rows": rows, "total": total, "summary": summary,
-                    "options": options, "conn_error": conn_error}
+                    "options": options, "conn_error": conn_error,
+                    "notice": f["warning"] or None}
 
         return render(request, spec["component"],
                       props={"report": defer(load_report), "filters": _spec_filters(f, spec)})
@@ -1775,7 +1800,7 @@ def transaksi_barang(request):
                             rows, total = reporting.run_paged(cur, inner, params, p)
                             summary_sql = inner
                         cur.execute(f"SELECT {rpt.SUMMARY_TRANSAKSI_BARANG} FROM ({summary_sql}) AS q", params)
-                        summary = reporting.clean_rows(reporting.dictify(cur))[0]
+                        summary = reporting.one_row(cur)
                     options = {"divisi": _opt_divisi(read_profile)}
                     conn_error = None
                     break
@@ -1992,10 +2017,9 @@ def fmi_stok(request):
                 conn_error = mssql.friendly_error(exc, "Gagal membaca FMI stok")
         else:
             conn_error = CONN_ERROR
-        if f["warning"]:
-            conn_error = f["warning"] if not conn_error else f"{conn_error} {f['warning']}"
         return {"rows": rows, "total": total, "summary": summary,
-                "options": options, "conn_error": conn_error}
+                "options": options, "conn_error": conn_error,
+                "notice": f["warning"] or None}
 
     return render(request, "Admin/Analytics/FmiStok", props={
         "report": defer(load_report),
@@ -2055,15 +2079,14 @@ def kas_harian(request):
                     rows, total = reporting.run_paged(cur, inner, params, f)
                     ssql, sparams = rpt.kas_summary(f)
                     cur.execute(ssql, sparams)
-                    summary = reporting.clean_rows(reporting.dictify(cur))[0]
+                    summary = reporting.one_row(cur)
                     options = {"kas": _opt_kas(profile)}
             except pyodbc.Error as exc:
                 conn_error = mssql.friendly_error(exc, "Gagal membaca kas")
         else:
             conn_error = CONN_ERROR
-        if f["warning"]:
-            conn_error = f["warning"] if not conn_error else f"{conn_error} {f['warning']}"
-        return {"rows": rows, "total": total, "summary": summary, "options": options, "conn_error": conn_error}
+        return {"rows": rows, "total": total, "summary": summary, "options": options,
+                "conn_error": conn_error, "notice": f["warning"] or None}
 
     return render(request, "Admin/Cash/Kas", props={
         "report": defer(load_report),

@@ -37,8 +37,10 @@ const emit = defineEmits(["page-change", "sort-change", "per-page-change"]);
       <template #fallback><TableSkeleton /></template>
 
       <Banner v-if="data && data.conn_error" variant="warning" :message="data.conn_error" />
+      <!-- Rentang tanggal dipangkas: pemberitahuan, bukan kegagalan koneksi. -->
+      <Banner v-if="data && data.notice" variant="info" :message="data.notice" />
       <Banner
-        v-else-if="recent"
+        v-if="!(data && data.conn_error) && recent"
         variant="info"
         message="Menampilkan 100 data terbaru. Gunakan filter untuk melihat data lain."
       />

@@ -1,7 +1,8 @@
 <script setup>
 import { computed, reactive, ref } from "vue";
-import { router } from "@inertiajs/vue3";
+import { Deferred, router } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
+import TableSkeleton from "@/components/ui/TableSkeleton.vue";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
 import Select from "@/components/ui/Select.vue";
@@ -15,8 +16,8 @@ const props = defineProps({
   mode: { type: String, default: "gudang_grosir" },
   src: { type: [Number, String], default: null },
   dst: { type: [Number, String], default: null },
-  diff: { type: Array, default: () => [] },
-  conn_error: { type: String, default: null },
+  // Bundle deferred {diff, conn_error} — datang setelah mount.
+  compare: { type: Object, default: null },
 });
 
 const MODES = {
@@ -45,7 +46,9 @@ const dstOptions = computed(() =>
 );
 
 // row-key harus string; diff unik per (kd_barang, kd_satuan)
-const rows = computed(() => props.diff.map((r) => ({ ...r, _key: `${r.kd_barang}||${r.kd_satuan}` })));
+const diff = computed(() => props.compare?.diff ?? []);
+const connError = computed(() => props.compare?.conn_error ?? null);
+const rows = computed(() => diff.value.map((r) => ({ ...r, _key: `${r.kd_barang}||${r.kd_satuan}` })));
 
 function onModeChange() {
   pick.src = null;
@@ -106,8 +109,6 @@ const columns = [
 
 <template>
   <AdminLayout title="Sinkronisasi Harga">
-    <Banner v-if="conn_error" variant="warning" :message="conn_error" />
-
     <Card class="mb-4">
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-4 sm:items-end">
         <Select v-model="pick.mode" label="Mode" :options="modeOptions" @update:modelValue="onModeChange" />
@@ -116,6 +117,11 @@ const columns = [
         <Button :disabled="!pick.src || !pick.dst" @click="bandingkan">Bandingkan</Button>
       </div>
     </Card>
+
+    <Deferred data="compare">
+      <template #fallback><TableSkeleton /></template>
+
+    <Banner v-if="connError" variant="warning" :message="connError" class="mb-4" />
 
     <div v-if="diff.length" class="mb-3 flex items-center gap-3">
       <label class="flex items-center gap-2 text-sm text-ink-muted">
@@ -162,6 +168,7 @@ const columns = [
     <Card v-else>
       <p class="py-8 text-center text-sm text-ink-muted">Pilih mode & server, lalu klik "Bandingkan".</p>
     </Card>
+    </Deferred>
   </AdminLayout>
 </template>
 

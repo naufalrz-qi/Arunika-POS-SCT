@@ -681,6 +681,22 @@ _SYNC_ENTITIES = {
 }
 
 
+# Nama kolom MS SQL tak boleh muncul di layar operator toko. Satu peta datar
+# (kolomnya banyak yang dipakai bersama antar entitas), hidup di sebelah
+# _SYNC_ENTITIES supaya kolom baru dan labelnya ditambah di tempat yang sama.
+COL_LABELS = {
+    "kd_kategori": "Kategori", "kd_jenis_bahan": "Jenis Bahan", "kd_model": "Model",
+    "kd_merk": "Merk", "kd_warna": "Warna", "ukuran": "Ukuran", "nama": "Nama",
+    "keterangan": "Keterangan", "status": "Status", "status_pinjam": "Status Pinjam",
+    "pabrik": "Pabrik", "kd_kota": "Kota", "alamat": "Alamat", "telepon": "Telepon",
+    "fax": "Faks", "kontak": "Kontak", "hp": "HP", "email": "Email",
+    "limit_kredit": "Limit Kredit", "disc": "Diskon", "parent": "Induk",
+    "npwp_no": "No. NPWP", "nppkp_no": "No. NPPKP", "npwp_nama": "Nama NPWP",
+    "npwp_alamat": "Alamat NPWP", "kd_bank": "Bank", "rekening": "Rekening",
+    "jenis": "Jenis",
+}
+
+
 def _entity_row_map(profile, entity: str) -> dict:
     """pk_tuple -> row dict (kolom pk + cols), untuk satu server. Cache seperti _harga_map."""
     cfg = _SYNC_ENTITIES[entity]
