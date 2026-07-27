@@ -96,7 +96,7 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
             v-for="u in filteredUsers"
             :key="u.id"
             :class="[
-              'flex cursor-pointer items-center justify-between px-1 py-2.5 -mx-1 rounded-lg',
+              'flex cursor-pointer items-center justify-between px-1 py-2.5 -mx-1 rounded-control',
               selected?.id === u.id ? 'bg-brand-50' : 'hover:bg-surface-2',
             ]"
             @click="select(u)"
@@ -115,7 +115,7 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
       <Card class="lg:col-span-2" :title="selected ? `Menu untuk ${selected.name}` : 'Pilih user dulu'">
         <template v-if="selected">
           <!-- Toolbar global -->
-          <div class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-2">
+          <div class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-control bg-surface-2 px-3 py-2">
             <p class="text-sm text-ink-muted">
               <strong class="text-ink">{{ checkedCount }}</strong> / {{ menus.length }} menu dipilih
             </p>
@@ -146,7 +146,7 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
                   v-for="m in s.items"
                   :key="m.key"
                   :class="[
-                    'flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors',
+                    'flex items-center gap-3 rounded-control border px-3 py-2.5 cursor-pointer transition-colors',
                     checked[m.key] ? 'border-brand-500/60 bg-brand-50' : 'border-border-default hover:bg-surface-2',
                   ]"
                 >

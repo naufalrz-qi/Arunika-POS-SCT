@@ -48,7 +48,7 @@ const { activeTab, isActive } = useNav();
             :href="item.href"
             :title="sidebarCollapsed ? item.label : undefined"
             :class="[
-              'group flex items-center gap-3 rounded-lg py-2 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60',
+              'group flex items-center gap-3 rounded-control py-2 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60',
               sidebarCollapsed ? 'justify-center px-0' : 'px-3',
               isActive(item.href)
                 ? 'bg-brand-600 font-semibold text-white relative overflow-hidden'

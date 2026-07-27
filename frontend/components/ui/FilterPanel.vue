@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, useSlots } from "vue";
 import Button from "@/components/ui/Button.vue";
+import Icon from "@/components/nav/Icon.vue";
 
 const props = defineProps({
   loading: { type: Boolean, default: false },
@@ -59,7 +60,14 @@ const advancedOpen = ref(
             {{ activeCount }} aktif
           </span>
         </span>
-        <span class="text-ink-subtle">{{ open ? "▾" : "▸" }}</span>
+        <!-- Ikon, bukan glyph teks "▾"/"▸": glyph tak ikut ukuran/warna ikon
+             lain dan bentuknya berbeda antar-font. Sama seperti
+             CollapsibleSection, yang mengerjakan hal yang sama. -->
+        <Icon
+          name="chevron"
+          size="h-4 w-4"
+          :class="['shrink-0 text-ink-subtle transition-transform duration-200', open ? '' : '-rotate-90']"
+        />
       </button>
       <form
         id="filter-panel-body"
@@ -78,7 +86,11 @@ const advancedOpen = ref(
             >
               <span class="h-3 w-0.5 rounded-full bg-rx-yellow"></span>
               Filter Lanjutan
-              <span>{{ advancedOpen ? "▾" : "▸" }}</span>
+              <Icon
+                name="chevron"
+                size="h-3.5 w-3.5"
+                :class="['shrink-0 transition-transform duration-200', advancedOpen ? '' : '-rotate-90']"
+              />
             </button>
             <template v-if="advancedOpen">
               <slot name="lanjutan" />

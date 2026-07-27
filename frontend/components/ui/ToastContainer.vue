@@ -49,7 +49,7 @@ const styles = {
         <div
           v-for="t in toasts"
           :key="t.id"
-          :class="['flex items-start justify-between gap-3 rounded-lg px-4 py-3 text-sm text-white shadow-lg', styles[t.type] || styles.info]"
+          :class="['flex items-start justify-between gap-3 rounded-control px-4 py-3 text-sm text-white shadow-lg', styles[t.type] || styles.info]"
         >
           <span>{{ t.message }}</span>
           <button

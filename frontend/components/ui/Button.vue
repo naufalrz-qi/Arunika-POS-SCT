@@ -2,7 +2,7 @@
 import { computed } from "vue";
 
 const props = defineProps({
-  variant: { type: String, default: "primary" }, // primary | secondary | ghost | danger
+  variant: { type: String, default: "primary" }, // primary | secondary | ghost | danger | success | accent
   size: { type: String, default: "md" }, // sm | md
   type: { type: String, default: "button" },
   disabled: { type: Boolean, default: false },
@@ -21,19 +21,20 @@ const props = defineProps({
 // pembungkus, yang tak tersedia untuk satu <button>; jadi kontrol memakai
 // radius kecil — bevel tetap milik permukaan (kartu, tabel, panel).
 const base =
-  "inline-flex items-center justify-center gap-2 font-heading font-bold tracking-wide rounded transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 disabled:opacity-50 disabled:cursor-not-allowed active:translate-y-px active:scale-[0.98] border relative overflow-hidden group before:absolute before:inset-0 before:bg-white/10 before:opacity-0 hover:before:opacity-100 before:transition-opacity";
+  "inline-flex items-center justify-center gap-2 font-heading font-bold tracking-wide rounded-control transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 disabled:opacity-50 disabled:cursor-not-allowed active:translate-y-px active:scale-[0.98] border relative overflow-hidden group before:absolute before:inset-0 before:bg-white/10 before:opacity-0 hover:before:opacity-100 before:transition-opacity";
 
+// Enam varian, semuanya terpakai. Sebelumnya ada sepuluh: `warning`, `info`,
+// `yellow`, dan `accent` (merah) nol pemakaian — `variant="warning"` dan
+// `variant="info"` yang bertebaran di halaman semuanya milik Banner, bukan
+// Button. Nama `yellow-outline` menggambarkan warna, bukan makna, jadi diganti
+// `accent`: aksi yang menonjol tapi bukan destruktif (alur saran/ubah harga).
 const variants = {
-  primary: "bg-brand-600/90 text-white border-brand-500 hover:bg-brand-500 hover:border-brand-400 hover:shadow-[0_0_15px_rgba(11,61,145,0.6)] backdrop-blur-sm",
-  secondary: "bg-surface/80 text-ink border-border-strong hover:bg-surface-2 hover:border-brand-400 hover:text-brand-600 hover:shadow-[0_0_12px_rgba(11,61,145,0.15)] backdrop-blur-sm",
+  primary: "bg-brand-600/90 text-white border-brand-500 hover:bg-brand-500 hover:border-brand-400 hover:shadow-[0_0_15px_var(--glow-brand)] backdrop-blur-sm",
+  secondary: "bg-surface/80 text-ink border-border-strong hover:bg-surface-2 hover:border-brand-400 hover:text-brand-600 hover:shadow-[0_0_12px_var(--glow-brand)] backdrop-blur-sm",
   ghost: "text-ink-muted border-transparent hover:bg-surface-3/50 hover:text-ink",
-  danger: "bg-danger-600/90 text-white border-danger-500 hover:bg-danger-500 hover:border-danger-400 hover:shadow-[0_0_15px_rgba(230,0,18,0.4)] backdrop-blur-sm",
-  success: "bg-success-600/90 text-white border-success-500 hover:bg-success-500 hover:border-success-400 hover:shadow-[0_0_15px_rgba(40,167,69,0.4)] backdrop-blur-sm",
-  warning: "bg-warning-600/90 text-white border-warning-500 hover:bg-warning-500 hover:shadow-[0_0_15px_rgba(255,196,0,0.4)] backdrop-blur-sm",
-  info: "bg-blue-600/90 text-white border-blue-500 hover:bg-blue-500 hover:shadow-[0_0_15px_rgba(0,123,255,0.4)] backdrop-blur-sm",
-  yellow: "bg-rx-yellow text-ink border-yellow-400 hover:bg-yellow-400 hover:shadow-[0_0_15px_rgba(255,196,0,0.6)] backdrop-blur-sm",
-  "yellow-outline": "bg-surface/80 text-ink border-rx-yellow hover:bg-warning-bg hover:text-warning-fg hover:shadow-[0_0_12px_rgba(255,196,0,0.35)] backdrop-blur-sm",
-  accent: "bg-rx-red text-white border-red-500 hover:brightness-110 hover:shadow-[0_0_15px_rgba(230,0,18,0.6)] backdrop-blur-sm",
+  danger: "bg-danger-600/90 text-white border-danger-500 hover:bg-danger-500 hover:border-danger-400 hover:shadow-[0_0_15px_var(--glow-danger)] backdrop-blur-sm",
+  success: "bg-success-600/90 text-white border-success-500 hover:bg-success-500 hover:border-success-400 hover:shadow-[0_0_15px_var(--glow-success)] backdrop-blur-sm",
+  accent: "bg-surface/80 text-ink border-rx-yellow hover:bg-warning-bg hover:text-warning-fg hover:shadow-[0_0_12px_var(--glow-accent)] backdrop-blur-sm",
 };
 
 const sizes = {
@@ -41,7 +42,18 @@ const sizes = {
   md: "text-xs px-5 py-2.5 h-10",
 };
 
-const classes = computed(() => [base, variants[props.variant], sizes[props.size]]);
+// Varian tak dikenal dulu menghasilkan `undefined` di daftar kelas, jadi
+// tombolnya terender telanjang tanpa warna sama sekali dan salah ketik lolos
+// diam-diam. Sekarang jatuh ke `secondary` dan berisik di konsol dev.
+const classes = computed(() => {
+  const variant = variants[props.variant];
+  if (!variant && import.meta.env.DEV) {
+    console.warn(
+      `[Button] varian "${props.variant}" tidak dikenal. Pilihan: ${Object.keys(variants).join(", ")}.`,
+    );
+  }
+  return [base, variant ?? variants.secondary, sizes[props.size] ?? sizes.md];
+});
 </script>
 
 <template>

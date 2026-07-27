@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import Spinner from "./Spinner.vue";
 import EmptyState from "./EmptyState.vue";
 import Pagination from "./Pagination.vue";
+import { useDismissable } from "@/composables/useDismissable";
 
 const props = defineProps({
   // columns: [{ key, label, sortable?, align?: 'left'|'right'|'center' }]
@@ -19,7 +20,7 @@ const sortDir = ref("asc");
 const page = ref(1);
 // `perPage` prop is the initial value; the picker below owns it after that.
 const perPage = ref(props.perPage);
-const columnMenuOpen = ref(false);
+const { open: columnMenuOpen, root: columnMenuRoot, toggle: toggleColumnMenu } = useDismissable();
 const hiddenKeys = ref(new Set());
 
 const visibleColumns = computed(() => props.columns.filter((c) => !hiddenKeys.value.has(c.key)));
@@ -103,26 +104,24 @@ function formatCell(value, col) {
   <div class="panel-cut-frame">
     <div class="overflow-hidden panel-cut bg-surface">
     <div class="flex justify-end border-b border-border-default bg-surface-2 px-3 py-1.5">
-      <div class="relative">
+      <div ref="columnMenuRoot" class="relative">
         <button
           type="button"
-          class="rounded-md border border-border-default px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-3"
+          class="rounded-control border border-border-default px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-3"
           :aria-expanded="columnMenuOpen"
           aria-haspopup="true"
-          @click="columnMenuOpen = !columnMenuOpen"
-          @blur="columnMenuOpen = false"
+          @click="toggleColumnMenu"
         >
           Kolom ({{ visibleColumns.length }}/{{ columns.length }})
         </button>
         <div
           v-if="columnMenuOpen"
-          class="absolute right-0 z-20 mt-1 w-56 max-h-72 overflow-y-auto rounded-lg border border-border-default bg-surface p-1.5 shadow-lg"
-          @mousedown.prevent
+          class="absolute right-0 z-20 mt-1 w-56 max-h-72 overflow-y-auto rounded-control border border-border-default bg-surface p-1.5 shadow-lg"
         >
           <label
             v-for="col in columns"
             :key="col.key"
-            class="flex items-center gap-2 rounded px-2 py-1.5 text-sm text-ink hover:bg-surface-3"
+            class="flex items-center gap-2 rounded-control px-2 py-1.5 text-sm text-ink hover:bg-surface-3"
           >
             <input
               type="checkbox"
@@ -215,7 +214,7 @@ function formatCell(value, col) {
         <select
           :value="perPage"
           @change="setPerPage($event.target.value)"
-          class="h-8 rounded border border-border-strong bg-surface px-2 text-sm text-ink"
+          class="h-8 rounded-control border border-border-strong bg-surface px-2 text-sm text-ink"
         >
           <option value="25">25</option>
           <option value="50">50</option>

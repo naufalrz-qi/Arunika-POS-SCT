@@ -303,7 +303,7 @@ async function openRiwayat(item) {
           class="sm:w-40"
         />
         <Button variant="primary" @click="reload">Cari</Button>
-        <Button v-if="isRetail" variant="yellow-outline" @click="showSuggest = true">
+        <Button v-if="isRetail" variant="accent" @click="showSuggest = true">
           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
           </svg>
@@ -422,7 +422,7 @@ async function openRiwayat(item) {
             </div>
 
             <div class="flex gap-1.5">
-              <Button size="sm" variant="yellow-outline" class="flex-1" @click="openEdit(row)">
+              <Button size="sm" variant="accent" class="flex-1" @click="openEdit(row)">
                 <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
                   <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 13.5v4.75A2.25 2.25 0 0117.25 20.5H5.75A2.25 2.25 0 013.5 18.25V6.75A2.25 2.25 0 015.75 4.5h4.75" />
@@ -439,7 +439,7 @@ async function openRiwayat(item) {
         </div>
       </div>
 
-      <div v-else-if="!data.conn_error" class="rounded-card border border-dashed border-border-default bg-surface-2 py-12 text-center">
+      <div v-else-if="!data.conn_error" class="rounded-control border border-dashed border-border-default bg-surface-2 py-12 text-center">
         <p class="text-sm text-ink-muted">Tidak ada barang.</p>
       </div>
 
@@ -539,7 +539,7 @@ async function openRiwayat(item) {
                   {{ s.selisih > 0 ? "+" : "" }}{{ rupiah(s.selisih) }}
                 </td>
                 <td class="py-1.5 text-right">
-                  <Button size="sm" variant="yellow-outline" :loading="editLoadingKd === s.kd_barang" @click="openEditByCode(s.kd_barang)">
+                  <Button size="sm" variant="accent" :loading="editLoadingKd === s.kd_barang" @click="openEditByCode(s.kd_barang)">
                     Edit
                   </Button>
                 </td>
@@ -616,7 +616,7 @@ async function openRiwayat(item) {
                 </td>
                 <td class="py-1.5 text-right font-semibold text-ink tabular-nums">{{ rupiah(p.harga_saran) }}</td>
                 <td class="py-1.5 text-right">
-                  <Button size="sm" variant="yellow-outline" :loading="editLoadingKd === p.kd_barang" @click="openEditByCode(p.kd_barang)">
+                  <Button size="sm" variant="accent" :loading="editLoadingKd === p.kd_barang" @click="openEditByCode(p.kd_barang)">
                     Edit
                   </Button>
                 </td>

@@ -1,5 +1,7 @@
 <script setup>
-import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from "vue";
+import { ref, computed, nextTick, watch } from "vue";
+import { useDismissable } from "@/composables/useDismissable";
+import Icon from "@/components/nav/Icon.vue";
 const props = defineProps({
   modelValue: { type: [String, Number, null], default: "" },
   options: { type: Array, default: () => [] }, // [{value,label}]
@@ -7,23 +9,26 @@ const props = defineProps({
   placeholder: { type: String, default: "Semua" },
 });
 const emit = defineEmits(["update:modelValue"]);
-const open = ref(false);
 const q = ref("");
-const root = ref(null);
 const trigger = ref(null);
 const search = ref(null);
 const listbox = ref(null);
 // Indeks pilihan yang sedang disorot keyboard; -1 = baris placeholder "Semua".
 const activeIndex = ref(-1);
 
-let uid = 0;
-const listboxId = `selectsearch-${++uid}-${Math.random().toString(36).slice(2, 7)}`;
+// Id unik per instance: satu halaman laporan memasang beberapa SelectSearch,
+// dan aria-controls harus menunjuk ke daftar miliknya sendiri.
+const listboxId = `selectsearch-${Math.random().toString(36).slice(2, 9)}`;
 
-function onClickOutside(e) {
-  if (open.value && root.value && !root.value.contains(e.target)) open.value = false;
-}
-onMounted(() => document.addEventListener("mousedown", onClickOutside));
-onBeforeUnmount(() => document.removeEventListener("mousedown", onClickOutside));
+// Klik-di-luar dan Escape ditangani composable yang sama dengan menu kolom,
+// menu pengguna, dan menu koneksi.
+const { open, root, close: dismiss } = useDismissable({
+  onClose: () => {
+    q.value = "";
+    activeIndex.value = -1;
+  },
+});
+
 const filtered = computed(() => {
   const t = q.value.toLowerCase().trim();
   if (!t) return props.options;
@@ -39,9 +44,7 @@ function pick(v) {
 }
 
 function close({ refocus = false } = {}) {
-  open.value = false;
-  q.value = "";
-  activeIndex.value = -1;
+  dismiss();
   if (refocus) nextTick(() => trigger.value?.focus());
 }
 
@@ -49,13 +52,13 @@ function close({ refocus = false } = {}) {
 // untuk daftar divisi/supplier yang panjang, dan tanpa itu pengguna harus
 // meraih mouse hanya untuk mulai mengetik.
 function toggle() {
-  open.value = !open.value;
   if (open.value) {
-    activeIndex.value = -1;
-    nextTick(() => search.value?.focus());
-  } else {
-    q.value = "";
+    close();
+    return;
   }
+  open.value = true;
+  activeIndex.value = -1;
+  nextTick(() => search.value?.focus());
 }
 
 // Menyaring ulang bisa membuat sorotan menunjuk ke luar daftar.
@@ -109,14 +112,14 @@ const activeId = computed(() =>
       @keydown.down.prevent="move(1)"
       @keydown.up.prevent="move(-1)"
       @keydown.escape="close({ refocus: true })"
-      class="flex h-10 w-full items-center justify-between rounded border border-border-strong bg-surface/50 backdrop-blur-sm px-3 py-2 text-left text-sm text-ink transition-all duration-200 hover:border-brand-400 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 focus:shadow-[0_0_10px_rgba(11,61,145,0.2)]"
+      class="flex h-10 w-full items-center justify-between rounded-control border border-border-strong bg-surface/50 backdrop-blur-sm px-3 py-2 text-left text-sm text-ink transition-all duration-200 hover:border-brand-400 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 focus:shadow-[0_0_10px_var(--glow-brand)]"
     >
       <span :class="modelValue === '' || modelValue === null ? 'text-ink-subtle' : ''">{{ currentLabel }}</span>
-      <span class="text-brand-500" aria-hidden="true">▾</span>
+      <Icon name="chevron" size="h-4 w-4" class="shrink-0 text-brand-500" aria-hidden="true" />
     </button>
     <div
       v-if="open"
-      class="absolute z-20 mt-1 w-full rounded border border-border-strong bg-surface shadow-[0_4px_15px_rgba(0,0,0,0.15)] backdrop-blur-md"
+      class="absolute z-20 mt-1 w-full rounded-control border border-border-strong bg-surface shadow-lg backdrop-blur-md"
     >
       <input
         ref="search"

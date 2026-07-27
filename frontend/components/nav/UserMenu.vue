@@ -1,26 +1,25 @@
 <script setup>
-import { ref } from "vue";
 import { Link } from "@inertiajs/vue3";
 import { storeToRefs } from "pinia";
 import { useUserStore } from "@/stores/user";
+import { useDismissable } from "@/composables/useDismissable";
 import { ROLE_LABELS } from "@/utils/labels";
 import Icon from "./Icon.vue";
 
 const userStore = useUserStore();
 const { user } = storeToRefs(userStore);
-const open = ref(false);
+const { open, root, close, toggle } = useDismissable();
 </script>
 
 <template>
-  <div class="relative">
+  <div ref="root" class="relative">
     <button
       type="button"
-      class="flex h-10 items-center gap-2.5 rounded-lg border border-white/10 bg-white/5 pl-1.5 pr-3 text-white transition-all duration-200 hover:border-white/20 hover:bg-white/10"
+      class="flex h-10 items-center gap-2.5 rounded-control border border-white/10 bg-white/5 pl-1.5 pr-3 text-white transition-all duration-200 hover:border-white/20 hover:bg-white/10"
       :aria-expanded="open"
       aria-haspopup="menu"
       aria-label="Menu pengguna"
-      @click="open = !open"
-      @blur="open = false"
+      @click="toggle"
     >
       <div class="flex h-7 w-7 items-center justify-center rounded-full bg-brand-500 font-heading text-xs font-bold uppercase text-white">
         {{ (user?.name || "?").charAt(0) }}
@@ -39,8 +38,7 @@ const open = ref(false);
     >
       <div
         v-if="open"
-        class="absolute right-0 mt-2 w-48 overflow-hidden rounded-lg border border-border-default bg-surface shadow-lg"
-        @mousedown.prevent
+        class="absolute right-0 mt-2 w-48 overflow-hidden rounded-control border border-border-default bg-surface shadow-lg"
       >
         <Link
           href="/admin-panel/profile"

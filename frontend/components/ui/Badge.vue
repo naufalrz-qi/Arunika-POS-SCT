@@ -17,7 +17,7 @@ const cls = computed(() => styles[props.variant] ?? styles.neutral);
 </script>
 
 <template>
-  <span :class="['inline-flex items-center gap-1 rounded px-2.5 py-0.5 text-xs font-medium', cls]">
+  <span :class="['inline-flex items-center gap-1 rounded-control px-2.5 py-0.5 text-xs font-medium', cls]">
     <slot />
   </span>
 </template>
