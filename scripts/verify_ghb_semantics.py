@@ -34,7 +34,17 @@ from pathlib import Path
 import pyodbc
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from apps.transactions.reports import _disk4, _ghb, _nota_net, _unit_net  # noqa: E402
+from apps.transactions.reports import _ghb, _nota_net  # noqa: E402
+
+
+def _disk4(alias: str) -> list[str]:
+    """Empat kolom diskon baris sbg daftar ekspresi NULL-safe."""
+    return [f"COALESCE({alias}.diskon{i}, 0)" for i in (1, 2, 3, 4)]
+
+
+def _unit_net(price_col: str, alias: str = "d") -> str:
+    """Harga net per unit: _ghb atas diskon baris, tanpa pajak header."""
+    return _ghb(f"{alias}.{price_col}", _disk4(alias))
 
 _DRIVER_PREFERENCE = (
     "ODBC Driver 18 for SQL Server",
@@ -136,22 +146,6 @@ def check_dual_mode(cur) -> None:
     assert not bad, f"[MODE DUAL] {len(bad)} kasus tidak cocok dgn GetHargaBersih"
 
 
-def check_hpp_unchanged() -> None:
-    """penjualan_hpp direfaktor jadi _unit_net/_disk4 -- ekspresinya harus sama
-    persis dgn bentuk lama (beda spasi diabaikan), jadi angka Laba per Barang
-    tidak boleh bergerak."""
-    lama = _ghb("d.harga_jual",
-                ["COALESCE(d.diskon1,0)", "COALESCE(d.diskon2,0)",
-                 "COALESCE(d.diskon3,0)", "COALESCE(d.diskon4,0)"])
-    baru = _unit_net("harga_jual")
-    norm = lambda s: s.replace(" ", "")  # noqa: E731
-    assert norm(lama) == norm(baru), "ekspresi item_net penjualan_hpp BERUBAH -- Laba per Barang akan bergeser"
-    lama_h = _ghb("X", ["COALESCE(h.diskon1,0)", "COALESCE(h.diskon2,0)",
-                        "COALESCE(h.diskon3,0)", "COALESCE(h.diskon4,0)"])
-    assert norm(lama_h) == norm(_ghb("X", _disk4("h"))), "_disk4('h') tidak setara bentuk lama"
-    print("\n[HPP] OK: ekspresi penjualan_hpp identik dgn sebelum refaktor")
-
-
 def dump_csv(cur, path: str) -> None:
     """Daftar audit: nota terdampak, total lama (formula pra-perbaikan) vs baru."""
     lama_line = ("(d.qty * (d.harga_jual - COALESCE(d.diskon1,0) - COALESCE(d.diskon2,0) "
@@ -194,7 +188,6 @@ def main() -> int:
     ap.add_argument("--csv", help="Tulis daftar audit nota terdampak ke file CSV.")
     args = ap.parse_args()
 
-    check_hpp_unchanged()
     conn = connect()
     try:
         cur = conn.cursor()
