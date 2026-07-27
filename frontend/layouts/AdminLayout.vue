@@ -17,7 +17,7 @@ const { activeSection } = useNav();
     <div class="flex min-h-0 flex-1 relative z-10 mt-3 lg:mt-4">
       <SideNav />
       <main class="scroll-slim min-w-0 flex-1 overflow-y-auto relative">
-        <div class="page-enter mx-auto max-w-[1600px] p-4 sm:p-6 lg:p-8">
+        <div class="page-enter mx-auto max-w-[1600px] p-3 sm:p-4 lg:p-6">
           <div v-if="title" class="mb-6 flex items-end justify-between">
             <div>
               <p v-if="activeSection" class="text-[11px] font-heading font-bold uppercase tracking-widest text-brand-500 mb-1">

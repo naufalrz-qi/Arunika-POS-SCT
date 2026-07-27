@@ -92,7 +92,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
       <!-- Tinggi dibatasi supaya tabel tidak memanjang sampai bawah laman:
            badan tabel yang di-scroll, header sticky di dalam kontainer ini. -->
       <div class="max-h-[65vh] overflow-auto scroll-slim">
-        <table class="w-full min-w-[720px] text-sm tabular-nums">
+        <table class="w-full text-xs tabular-nums">
           <thead class="sticky top-0 z-10 bg-surface-3">
             <tr>
               <th
@@ -108,7 +108,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
                 :class="[
                   alignClass(col),
                   col.sortable ? 'cursor-pointer select-none hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500' : '',
-                  'whitespace-nowrap border-b-2 border-border-strong px-3 py-2 text-[11px] font-heading font-semibold uppercase tracking-wider text-ink-muted',
+                  'whitespace-nowrap border-b-2 border-border-strong px-2 py-1.5 text-[10px] font-heading font-semibold uppercase tracking-wider text-ink-muted',
                 ]"
               >
                 {{ col.label }}
@@ -127,9 +127,15 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
               :key="row[rowKey]"
               class="border-t border-border-default even:bg-surface-2/60 hover:bg-surface-3"
             >
-              <td v-for="col in visibleColumns" :key="col.key" :class="[alignClass(col), 'px-3 py-1.5 leading-snug text-ink']">
+              <td v-for="col in visibleColumns" :key="col.key" :class="[alignClass(col), 'px-2 py-1 leading-snug text-ink']">
+                <!-- Nilai panjang dipotong dengan elipsis; tanpa ini satu baris
+                     saja bisa memaksa tabel melebar dan memunculkan scroll
+                     horizontal di layar 1366px. Teks utuh lewat tooltip. Isi
+                     slot tak disentuh — di situ ada badge/tombol. -->
                 <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
-                  {{ fmt(row[col.key], col) }}
+                  <span class="block max-w-[26ch] truncate" :title="String(row[col.key] ?? '')">
+                    {{ fmt(row[col.key], col) }}
+                  </span>
                 </slot>
               </td>
             </tr>
