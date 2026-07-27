@@ -29,10 +29,25 @@ const ticks = computed(() => {
   }
   return out;
 });
+
+// viewBox 720 diskalakan `w-full`, jadi teks ikut mengecil bersama lebar wadah:
+// di kartu dashboard ponsel (~340px) 24 label jam saling menimpa dan tak
+// terbaca. Labelnya dijarangkan supaya sisanya tetap punya ruang; nilai tiap
+// batang tetap bisa dibaca lewat <title> saat disentuh/hover.
+const MAX_LABELS = 8;
+const labelStep = computed(() => Math.max(1, Math.ceil(props.data.length / MAX_LABELS)));
+function showLabel(i) {
+  return i % labelStep.value === 0;
+}
 </script>
 
 <template>
-  <svg :viewBox="`0 0 ${W} ${height}`" class="w-full" role="img" aria-label="Grafik transaksi per jam">
+  <!-- Tanpa ini data kosong menghasilkan gridline telanjang bersumbu 0–1, yang
+       terbaca seperti grafik rusak alih-alih "belum ada data". -->
+  <p v-if="!data.length" class="py-12 text-center text-sm text-ink-muted">
+    Belum ada transaksi hari ini.
+  </p>
+  <svg v-else :viewBox="`0 0 ${W} ${height}`" class="w-full" role="img" aria-label="Grafik transaksi per jam">
     <!-- gridlines + y labels -->
     <g>
       <line
@@ -50,9 +65,9 @@ const ticks = computed(() => {
         v-for="t in ticks"
         :key="`l${t.v}`"
         :x="PAD.left - 6"
-        :y="t.y + 3"
+        :y="t.y + 4"
         text-anchor="end"
-        class="fill-ink-subtle text-[10px]"
+        class="fill-ink-subtle text-[12px]"
       >
         {{ t.v }}
       </text>
@@ -72,10 +87,11 @@ const ticks = computed(() => {
           <title>{{ d.label }}: {{ d.value }}</title>
         </rect>
         <text
+          v-if="showLabel(i)"
           :x="PAD.left + i * bandW + bandW / 2"
           :y="height - 10"
           text-anchor="middle"
-          class="fill-ink-subtle text-[10px]"
+          class="fill-ink-subtle text-[13px]"
         >
           {{ d.label }}
         </text>

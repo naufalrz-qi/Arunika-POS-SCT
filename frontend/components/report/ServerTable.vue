@@ -32,6 +32,14 @@ function fmt(value, col) {
 function alignClass(col) {
   return col.align === "right" ? "text-right" : col.align === "center" ? "text-center" : "text-left";
 }
+
+// Elipsis hanya untuk teks bebas. Kolom angka tak pernah butuh dipotong, dan
+// memotongnya diam-diam di laporan keuangan menyembunyikan digit — persis
+// kesalahan yang paling mahal di layar ini.
+const NUMERIC_FORMATS = new Set(["number", "rupiah", "persen"]);
+function isNumeric(col) {
+  return NUMERIC_FORMATS.has(col.format) || col.align === "right";
+}
 function toggleSort(col) {
   if (!col.sortable) return;
   const dir = props.sortKey === col.key && props.sortDir === "asc" ? "desc" : "asc";
@@ -108,7 +116,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
                 :class="[
                   alignClass(col),
                   col.sortable ? 'cursor-pointer select-none hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500' : '',
-                  'whitespace-nowrap border-b-2 border-border-strong px-2 py-1.5 text-[10px] font-heading font-semibold uppercase tracking-wider text-ink-muted',
+                  'whitespace-nowrap border-b-2 border-border-strong px-2 py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted',
                 ]"
               >
                 {{ col.label }}
@@ -133,7 +141,11 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
                      horizontal di layar 1366px. Teks utuh lewat tooltip. Isi
                      slot tak disentuh — di situ ada badge/tombol. -->
                 <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
-                  <span class="block max-w-[26ch] truncate" :title="String(row[col.key] ?? '')">
+                  <span
+                    v-if="isNumeric(col)"
+                    class="block whitespace-nowrap"
+                  >{{ fmt(row[col.key], col) }}</span>
+                  <span v-else class="block max-w-[26ch] truncate" :title="String(row[col.key] ?? '')">
                     {{ fmt(row[col.key], col) }}
                   </span>
                 </slot>

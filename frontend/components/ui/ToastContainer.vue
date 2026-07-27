@@ -30,7 +30,8 @@ const styles = {
 
 <template>
   <Teleport to="body">
-    <div class="fixed right-4 top-4 z-[60] flex w-80 flex-col gap-2">
+    <!-- w-80 tetap (320px) meluber di viewport 320px begitu ditambah right-4. -->
+    <div class="fixed right-4 top-4 z-[60] flex w-[calc(100vw-2rem)] max-w-80 flex-col gap-2">
       <TransitionGroup
         enter-active-class="transition duration-200 ease-out"
         enter-from-class="opacity-0 translate-x-4"

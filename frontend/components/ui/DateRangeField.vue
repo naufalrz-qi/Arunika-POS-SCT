@@ -41,7 +41,7 @@ const presets = [
   <div class="space-y-2">
     <div class="grid grid-cols-2 gap-2">
       <label class="block">
-        <span class="mb-1.5 block text-[10px] font-heading font-bold uppercase tracking-widest text-ink-muted">Dari Tanggal</span>
+        <span class="mb-1.5 block text-[11px] font-heading font-semibold tracking-wide text-ink-muted">Dari Tanggal</span>
         <input
           type="date"
           :value="from"
@@ -50,7 +50,7 @@ const presets = [
         />
       </label>
       <label class="block">
-        <span class="mb-1.5 block text-[10px] font-heading font-bold uppercase tracking-widest text-ink-muted">Sampai Tanggal</span>
+        <span class="mb-1.5 block text-[11px] font-heading font-semibold tracking-wide text-ink-muted">Sampai Tanggal</span>
         <input
           type="date"
           :value="to"

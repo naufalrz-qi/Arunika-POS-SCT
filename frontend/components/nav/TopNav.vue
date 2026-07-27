@@ -140,7 +140,7 @@ watch(
                     <template v-for="sub in tab.subsections" :key="sub.key">
                       <p
                         v-if="tab.subsections.length > 1"
-                        class="px-3 pb-1 pt-3 text-[10px] font-heading font-bold uppercase tracking-widest text-white/35"
+                        class="px-3 pb-1 pt-3 text-[11px] font-heading font-bold uppercase tracking-wide text-white/35"
                       >
                         {{ sub.label }}
                       </p>

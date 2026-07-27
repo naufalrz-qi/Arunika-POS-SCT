@@ -66,7 +66,7 @@ const advancedOpen = ref(
             <button
               type="button"
               @click="advancedOpen = !advancedOpen"
-              class="col-span-full flex items-center gap-2 border-t border-border-default pt-3 text-left text-[10px] font-heading font-bold uppercase tracking-widest text-ink-subtle transition-colors hover:text-brand-fg"
+              class="col-span-full flex items-center gap-2 border-t border-border-default pt-3 text-left text-[11px] font-heading font-bold uppercase tracking-wide text-ink-subtle transition-colors hover:text-brand-fg"
             >
               <span class="h-3 w-0.5 rounded-full bg-rx-yellow"></span>
               Filter Lanjutan

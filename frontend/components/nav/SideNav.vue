@@ -23,7 +23,7 @@ const { activeTab, isActive } = useNav();
     <div class="shoulder-panel bg-sidebar border border-white/5 absolute inset-0 -z-10"></div>
     <p
       v-if="!sidebarCollapsed"
-      class="px-5 pb-1 pt-5 text-[10px] font-heading font-bold uppercase tracking-widest text-brand-300/60"
+      class="px-5 pb-1 pt-5 text-[11px] font-heading font-bold uppercase tracking-wide text-brand-300/60"
     >
       {{ activeTab.label }}
     </p>
@@ -33,7 +33,7 @@ const { activeTab, isActive } = useNav();
       <template v-for="(sub, i) in activeTab.subsections" :key="sub.key">
         <p
           v-if="!sidebarCollapsed && activeTab.subsections.length > 1"
-          class="px-2 pb-1.5 pt-4 text-[10px] font-heading font-bold uppercase tracking-widest text-white/50"
+          class="px-2 pb-1.5 pt-4 text-[11px] font-heading font-bold uppercase tracking-wide text-white/50"
         >
           {{ sub.label }}
         </p>

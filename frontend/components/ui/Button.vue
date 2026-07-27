@@ -7,6 +7,11 @@ const props = defineProps({
   type: { type: String, default: "button" },
   disabled: { type: Boolean, default: false },
   loading: { type: Boolean, default: false },
+  // Kalau diisi, dirender sebagai <a> alih-alih <button> — untuk aksi yang
+  // sebenarnya navigasi (unduhan server). Tanpa ini pemanggil menyalin seluruh
+  // daftar kelas di bawah, lalu menyimpang darinya (dulu terjadi di
+  // ExportButton: bevel dan ukuran teksnya sudah beda dari Button).
+  href: { type: String, default: "" },
 });
 
 // Tanpa `panel-cut-sm`: clip-path memotong SEMUA yang dilukis elemen ini —
@@ -16,7 +21,7 @@ const props = defineProps({
 // pembungkus, yang tak tersedia untuk satu <button>; jadi kontrol memakai
 // radius kecil — bevel tetap milik permukaan (kartu, tabel, panel).
 const base =
-  "inline-flex items-center justify-center gap-2 font-heading font-bold uppercase tracking-widest rounded transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 disabled:opacity-50 disabled:cursor-not-allowed active:translate-y-px active:scale-[0.98] border relative overflow-hidden group before:absolute before:inset-0 before:bg-white/10 before:opacity-0 hover:before:opacity-100 before:transition-opacity";
+  "inline-flex items-center justify-center gap-2 font-heading font-bold tracking-wide rounded transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 disabled:opacity-50 disabled:cursor-not-allowed active:translate-y-px active:scale-[0.98] border relative overflow-hidden group before:absolute before:inset-0 before:bg-white/10 before:opacity-0 hover:before:opacity-100 before:transition-opacity";
 
 const variants = {
   primary: "bg-brand-600/90 text-white border-brand-500 hover:bg-brand-500 hover:border-brand-400 hover:shadow-[0_0_15px_rgba(11,61,145,0.6)] backdrop-blur-sm",
@@ -32,7 +37,7 @@ const variants = {
 };
 
 const sizes = {
-  sm: "text-[10px] px-3 py-1.5 h-8",
+  sm: "text-[11px] px-3 py-1.5 h-8",
   md: "text-xs px-5 py-2.5 h-10",
 };
 
@@ -40,7 +45,13 @@ const classes = computed(() => [base, variants[props.variant], sizes[props.size]
 </script>
 
 <template>
-  <button :type="type" :disabled="disabled || loading" :class="classes">
+  <component
+    :is="href ? 'a' : 'button'"
+    :href="href || undefined"
+    :type="href ? undefined : type"
+    :disabled="href ? undefined : disabled || loading"
+    :class="classes"
+  >
     <svg
       v-if="loading"
       class="animate-spin h-4 w-4"
@@ -51,5 +62,5 @@ const classes = computed(() => [base, variants[props.variant], sizes[props.size]
       <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
     </svg>
     <slot />
-  </button>
+  </component>
 </template>

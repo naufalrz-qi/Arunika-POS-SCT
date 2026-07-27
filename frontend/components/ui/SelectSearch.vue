@@ -34,7 +34,7 @@ function pick(v) {
 
 <template>
   <div ref="root" class="relative">
-    <span v-if="label" class="mb-1.5 block text-[10px] font-heading font-bold uppercase tracking-widest text-ink-muted">{{ label }}</span>
+    <span v-if="label" class="mb-1.5 block text-[11px] font-heading font-semibold tracking-wide text-ink-muted">{{ label }}</span>
     <button
       type="button"
       @click="open = !open"

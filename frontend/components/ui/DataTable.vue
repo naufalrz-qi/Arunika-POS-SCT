@@ -76,6 +76,13 @@ function setPerPage(n) {
 const alignClass = (a) =>
   a === "right" ? "text-right" : a === "center" ? "text-center" : "text-left";
 
+// Elipsis hanya untuk teks bebas. Kolom angka tak pernah butuh dipotong, dan
+// memotongnya diam-diam menyembunyikan digit.
+const NUMERIC_FORMATS = new Set(["number", "rupiah", "persen"]);
+function isNumeric(col) {
+  return NUMERIC_FORMATS.has(col.format) || col.align === "right";
+}
+
 const rupiahFmt = new Intl.NumberFormat("id-ID", {
   style: "currency",
   currency: "IDR",
@@ -139,7 +146,7 @@ function formatCell(value, col) {
               :tabindex="col.sortable ? 0 : undefined"
               :aria-sort="col.sortable ? (sortKey === col.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none') : undefined"
               :class="[
-                'whitespace-nowrap border-b-2 border-border-strong px-2 py-1.5 text-[10px] font-heading font-semibold uppercase tracking-wider text-ink-muted',
+                'whitespace-nowrap border-b-2 border-border-strong px-2 py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted',
                 alignClass(col.align),
                 col.sortable ? 'cursor-pointer select-none hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500' : '',
               ]"
@@ -184,7 +191,11 @@ function formatCell(value, col) {
                    bisa dibaca lewat tooltip. Isi slot tak disentuh — di situ ada
                    badge/tombol yang tak boleh dipotong. -->
               <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
-                <span class="block max-w-[26ch] truncate" :title="String(row[col.key] ?? '')">
+                <span
+                  v-if="isNumeric(col)"
+                  class="block whitespace-nowrap"
+                >{{ formatCell(row[col.key], col) }}</span>
+                <span v-else class="block max-w-[26ch] truncate" :title="String(row[col.key] ?? '')">
                   {{ formatCell(row[col.key], col) }}
                 </span>
               </slot>

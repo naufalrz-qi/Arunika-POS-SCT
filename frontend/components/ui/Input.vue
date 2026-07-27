@@ -12,7 +12,7 @@ defineEmits(["update:modelValue"]);
 
 <template>
   <label class="block">
-    <span v-if="label" class="mb-1.5 block text-[10px] font-heading font-bold uppercase tracking-widest text-ink-muted">
+    <span v-if="label" class="mb-1.5 block text-[11px] font-heading font-semibold tracking-wide text-ink-muted">
       {{ label }} <span v-if="required" class="text-danger-500">*</span>
     </span>
     <input
@@ -25,6 +25,6 @@ defineEmits(["update:modelValue"]);
         error ? 'border-danger-500 shadow-[0_0_8px_rgba(230,0,18,0.2)]' : 'border-border-strong focus:border-brand-500 focus:shadow-[0_0_10px_rgba(11,61,145,0.2)] hover:border-brand-400',
       ]"
     />
-    <span v-if="error" class="mt-1.5 block text-[10px] font-bold uppercase tracking-widest text-danger-500">{{ error }}</span>
+    <span v-if="error" class="mt-1.5 block text-[11px] font-semibold tracking-wide text-danger-500">{{ error }}</span>
   </label>
 </template>

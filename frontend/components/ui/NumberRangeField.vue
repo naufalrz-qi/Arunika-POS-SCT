@@ -9,7 +9,7 @@ defineEmits(["update:min", "update:max"]);
 
 <template>
   <div>
-    <span v-if="label" class="mb-1.5 block text-[10px] font-heading font-bold uppercase tracking-widest text-ink-muted">{{ label }}</span>
+    <span v-if="label" class="mb-1.5 block text-[11px] font-heading font-semibold tracking-wide text-ink-muted">{{ label }}</span>
     <div class="flex items-center gap-1.5">
       <input
         type="number"
