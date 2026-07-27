@@ -134,6 +134,42 @@ diubah** pada audit ini; hanya pesannya yang dibuat jujur.
 
 ---
 
+## Performa pada profil jauh (WAN)
+
+Diukur 2026-07-27 di **ANDARIA** (SERVER-LOTIM, lewat Tailscale antar-kota) vs
+**RTL PUSAT** (LAN). Latensi **783 ms vs 26 ms** — 30× lipat. Ini pengali yang
+membuat halaman terasa 40 detik di satu profil dan 1–5 detik di profil lain.
+
+| Yang diukur | ANDARIA | RTL PUSAT |
+|---|---|---|
+| `_barang_meta` (dicache) | **21,77 s** | 1,17 s |
+| `_barang_universe` (dulu tak dicache) | 2,96 s | 0,13 s |
+| `_movement_sums` | 1,83 s | 0,12 s |
+| Stok per Divisi, cache hangat | **4,73 → 1,95 s** | 0,45 s |
+| Stok Akhir, cache hangat | 2,14 s | — |
+| Laporan Penjualan (COUNT + halaman + ringkasan + options) | **0,92 s** | — |
+| Dashboard | **1,10 s** | — |
+
+**Yang terbukti BUKAN penyebab** (ketiganya hipotesis wajar yang gugur saat diukur):
+snapshot ANDARIA ada dan segar; index lengkap tanpa kegagalan; katalognya justru
+lebih kecil dari RTL PUSAT. Laporan dan Dashboard juga ternyata cepat — sempat
+diduga lambat, pengukuran membantahnya, jadi tak ada perubahan di sana.
+
+**Sisa masalah, terukur:**
+
+1. **Cache dingin ~31 detik**, didominasi `_barang_meta` 21,8 detik. Bukan masalah
+   kode melainkan umur cache: dengan TTL 600 detik, pengguna server jauh menanggung
+   ongkos itu tiap 10 menit. **Setel `POS_MASTER_TTL=3600` di server produksi** —
+   aman karena setiap penulisan master memanggil `invalidate_master_cache()`.
+2. **Barang Histori selalu di jalur lambat secara struktur.** Ia mengirim
+   `date_from`, yang otomatis membatalkan snapshot; di ANDARIA berarti memindai
+   ulang ~2,5 tahun `t_penjualan_detail` sejak tutup buku 2024-01-12. Tutup buku
+   tak boleh diubah (keputusan pemilik), jadi perbaikannya harus teknis:
+   **snapshot v2 dengan jangkar mundur** (saldo periodik per bulan) supaya query
+   tanggal lampau berangkat dari jangkar terdekat. `pos_stok_snapshot_base` sudah
+   setengah jalan ke sana. Pekerjaan besar, menyentuh mesin stok — kerjakan
+   terpisah dengan `check_stock_agg` sebagai penjaga.
+
 ## Diketahui, sengaja TIDAK diperbaiki
 
 - **Risiko tulis sinkronisasi lintas server.** Perbandingan dihitung dari cache 10 menit,
