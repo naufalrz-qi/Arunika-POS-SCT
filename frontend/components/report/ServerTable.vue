@@ -5,7 +5,6 @@
  * sepenuhnya milik BaseTable — lihat catatan di sana soal kenapa dua salinan
  * tabel disatukan.
  */
-import { onMounted, onUnmounted } from "vue";
 import BaseTable from "@/components/ui/BaseTable.vue";
 
 defineProps({
@@ -20,16 +19,10 @@ defineProps({
   emptyMessage: { type: String, default: "Tidak ada data untuk filter yang dipilih." },
 });
 const emit = defineEmits(["page-change", "sort-change", "per-page-change"]);
-
-// Pintasan "/" untuk melompat ke kolom pencarian halaman.
-function onKey(e) {
-  if (e.key === "/" && !/input|textarea|select/i.test(e.target.tagName)) {
-    e.preventDefault();
-    document.querySelector('input[placeholder*="Cari"], input[placeholder*="cari"]')?.focus();
-  }
-}
-onMounted(() => window.addEventListener("keydown", onKey));
-onUnmounted(() => window.removeEventListener("keydown", onKey));
+// Pintasan "/" dulu dipasang di sini: satu listener window per instance tabel,
+// yang lalu mencari kolom pencarian lewat document.querySelector berdasarkan
+// teks placeholder — mengambil input pertama yang cocok di mana pun di halaman.
+// Sekarang jadi milik FilterPanel, yang benar-benar memiliki kolom itu.
 </script>
 
 <template>

@@ -18,7 +18,10 @@ function go(p) {
 </script>
 
 <template>
-  <div class="flex items-center justify-between px-1 py-2 text-sm text-ink-muted">
+  <!-- Ukuran teks diwarisi dari footer tabel, bukan dipatok text-sm: dulu satu
+       baris footer memuat tiga ukuran sekaligus (label per-halaman text-xs,
+       ringkasan text-sm, isi paginasi text-sm). -->
+  <div class="flex items-center justify-between px-1 py-2 text-ink-muted">
     <span>Menampilkan {{ from }}–{{ to }} dari {{ total }}</span>
     <div class="flex items-center gap-1">
       <button

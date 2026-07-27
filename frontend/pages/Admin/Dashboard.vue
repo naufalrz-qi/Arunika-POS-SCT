@@ -96,7 +96,13 @@ const chartData = computed(() =>
       </Card>
 
       <Card title="Aktivitas Terbaru">
-        <ul class="divide-y divide-border-default">
+        <!-- Kartu sebelahnya ("Fast Moving") punya kalimat pengganti saat kosong,
+             kartu ini tidak — jadi <ul>-nya hanya kosong melompong dan terbaca
+             seperti gagal memuat, bukan "belum ada aktivitas". -->
+        <p v-if="!(data.recent_activity || []).length" class="text-sm text-ink-muted">
+          Belum ada aktivitas tercatat.
+        </p>
+        <ul v-else class="divide-y divide-border-default">
           <li v-for="a in data.recent_activity || []" :key="a.id" class="flex items-center justify-between py-3">
             <div class="flex items-center gap-3">
               <div class="flex h-8 w-8 items-center justify-center rounded-full bg-surface-3 text-xs font-semibold text-ink-muted">

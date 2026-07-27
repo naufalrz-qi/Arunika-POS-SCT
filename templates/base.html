@@ -4,7 +4,13 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    {# Judul dasar; tiap halaman menimpanya lewat <Head> Inertia (AdminLayout). #}
     <title>Sukses Crown Toys</title>
+    {# Favicon sebagai data-URI SVG: mahkota di atas panel biru brand dengan
+       strip merah/kuning RX-78-2 di bawahnya. Ditulis inline supaya tak perlu
+       aset biner di repo dan tak ada request tambahan. #}
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230B3D91'/%3E%3Cpath d='M6 21 L8 10 L13 15 L16 8 L19 15 L24 10 L26 21 Z' fill='%23fff'/%3E%3Crect x='6' y='23' width='10' height='3' fill='%23E60012'/%3E%3Crect x='16' y='23' width='10' height='3' fill='%23FFC400'/%3E%3C/svg%3E">
+    <meta name="theme-color" content="#0B3D91">
     <script>
       (function () {
         const theme = localStorage.getItem('sct.theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');

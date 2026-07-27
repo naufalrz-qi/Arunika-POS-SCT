@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from "vue";
-import { useForm } from "@inertiajs/vue3";
+import { Head, useForm } from "@inertiajs/vue3";
 import Button from "@/components/ui/Button.vue";
 import Input from "@/components/ui/Input.vue";
 import Banner from "@/components/ui/Banner.vue";
@@ -20,6 +20,7 @@ function submit() {
 </script>
 
 <template>
+  <Head title="Masuk" />
   <div class="flex min-h-screen items-center justify-center bg-surface-2 p-4">
     <div class="w-full max-w-sm">
       <div class="mb-6 text-center">

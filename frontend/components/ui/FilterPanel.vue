@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, useSlots } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useSlots } from "vue";
 import Button from "@/components/ui/Button.vue";
 import Icon from "@/components/nav/Icon.vue";
 
@@ -12,6 +12,25 @@ const props = defineProps({
 const emit = defineEmits(["submit", "reset"]);
 const open = ref(true);
 const slots = useSlots();
+const formEl = ref(null);
+
+// Pintasan "/" ke kolom isian pertama panel ini. Sebelumnya tinggal di
+// ServerTable: satu listener window per instance tabel, yang mencari kolom
+// pencarian lewat document.querySelector berdasarkan teks placeholder dan
+// mengambil input pertama yang cocok di mana pun di halaman. Di sini
+// pencariannya dibatasi ke <form> milik panel sendiri, dan panel yang tertutup
+// dibuka dulu supaya fokusnya tak jatuh ke elemen tersembunyi.
+function onKey(e) {
+  if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (/input|textarea|select/i.test(e.target.tagName) || e.target.isContentEditable) return;
+  e.preventDefault();
+  open.value = true;
+  nextTick(() => {
+    formEl.value?.querySelector('input:not([type="checkbox"]):not([type="radio"])')?.focus();
+  });
+}
+onMounted(() => window.addEventListener("keydown", onKey));
+onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 const hasAdvanced = computed(() => !!slots.lanjutan);
 
 function isFilled(v) {
@@ -60,17 +79,25 @@ const advancedOpen = ref(
             {{ activeCount }} aktif
           </span>
         </span>
+        <span class="flex items-center gap-2">
+          <!-- Pintasannya tak berguna kalau tak ada yang tahu ia ada. -->
+          <kbd
+            class="hidden rounded-control border border-border-default bg-surface-2 px-1.5 py-0.5 font-sans text-[10px] font-semibold text-ink-subtle sm:inline-block"
+            title="Tekan / untuk melompat ke isian filter pertama"
+          >/</kbd>
         <!-- Ikon, bukan glyph teks "▾"/"▸": glyph tak ikut ukuran/warna ikon
              lain dan bentuknya berbeda antar-font. Sama seperti
              CollapsibleSection, yang mengerjakan hal yang sama. -->
-        <Icon
-          name="chevron"
-          size="h-4 w-4"
-          :class="['shrink-0 text-ink-subtle transition-transform duration-200', open ? '' : '-rotate-90']"
-        />
+          <Icon
+            name="chevron"
+            size="h-4 w-4"
+            :class="['shrink-0 text-ink-subtle transition-transform duration-200', open ? '' : '-rotate-90']"
+          />
+        </span>
       </button>
       <form
         id="filter-panel-body"
+        ref="formEl"
         v-show="open"
         @submit.prevent="emit('submit')"
         class="border-t border-border-default p-4"

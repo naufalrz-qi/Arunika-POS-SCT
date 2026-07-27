@@ -15,7 +15,8 @@
  * Yang dimiliki sendiri hanya visibilitas kolom, karena itu murni preferensi
  * tampilan.
  */
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
+import { usePage } from "@inertiajs/vue3";
 import { useDismissable } from "@/composables/useDismissable";
 import Spinner from "./Spinner.vue";
 import EmptyState from "./EmptyState.vue";
@@ -41,7 +42,35 @@ const props = defineProps({
 const emit = defineEmits(["page-change", "sort-change", "per-page-change"]);
 
 const { open: columnMenuOpen, root: columnMenuRoot, toggle: toggleColumnMenu } = useDismissable();
-const hiddenKeys = defineModel("hiddenKeys", { type: Set, default: () => new Set() });
+
+// Pilihan kolom disimpan per halaman. Tanpa ini pilihannya hilang tiap kali
+// pengguna berpindah menu, dan di tabel 25 kolom seperti Penjualan Detail itu
+// berarti mengulang pekerjaan yang sama berkali-kali sehari.
+const storageKey = computed(() => {
+  const path = usePage().url.split(/[?#]/)[0].replace(/\/+$/, "");
+  return `sct.cols.${path}`;
+});
+
+function loadHidden() {
+  try {
+    const raw = localStorage.getItem(storageKey.value);
+    if (!raw) return new Set();
+    const keys = JSON.parse(raw);
+    // Saring terhadap kolom yang benar-benar ada: definisi kolom bisa berubah
+    // setelah rilis, dan key basi akan menyembunyikan kolom yang salah.
+    const known = new Set(props.columns.map((c) => c.key));
+    return new Set((Array.isArray(keys) ? keys : []).filter((k) => known.has(k)));
+  } catch {
+    return new Set();
+  }
+}
+
+const hiddenKeys = ref(loadHidden());
+
+// Halaman berganti (komponen dipakai ulang oleh Inertia) — muat ulang pilihan.
+watch(storageKey, () => {
+  hiddenKeys.value = loadHidden();
+});
 
 const visibleColumns = computed(() => props.columns.filter((c) => !hiddenKeys.value.has(c.key)));
 
@@ -50,7 +79,23 @@ function toggleColumn(key) {
   if (next.has(key)) next.delete(key);
   else next.add(key);
   // Sisakan minimal satu kolom; tabel tanpa kolom tak bisa dipulihkan lewat UI.
-  if (next.size < props.columns.length) hiddenKeys.value = next;
+  if (next.size >= props.columns.length) return;
+  hiddenKeys.value = next;
+  try {
+    if (next.size) localStorage.setItem(storageKey.value, JSON.stringify([...next]));
+    else localStorage.removeItem(storageKey.value);
+  } catch {
+    /* mode privat / kuota penuh: pilihan tetap berlaku untuk sesi ini */
+  }
+}
+
+function resetColumns() {
+  hiddenKeys.value = new Set();
+  try {
+    localStorage.removeItem(storageKey.value);
+  } catch {
+    /* abaikan */
+  }
 }
 
 function toggleSort(col) {
@@ -114,6 +159,16 @@ function isNumeric(col) {
               <input type="checkbox" :checked="!hiddenKeys.has(col.key)" @change="toggleColumn(col.key)" />
               {{ col.label }}
             </label>
+            <!-- Pilihan kini tersimpan antar-kunjungan, jadi harus ada jalan
+                 kembali yang jelas ke "tampilkan semua". -->
+            <button
+              v-if="hiddenKeys.size"
+              type="button"
+              class="mt-1 w-full border-t border-border-default px-2 pt-2 text-left text-xs text-brand-600 hover:underline"
+              @click="resetColumns"
+            >
+              Tampilkan semua kolom
+            </button>
           </div>
         </div>
       </div>

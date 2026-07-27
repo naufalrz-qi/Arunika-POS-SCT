@@ -1,4 +1,5 @@
 <script setup>
+import { Head } from "@inertiajs/vue3";
 import TopNav from "@/components/nav/TopNav.vue";
 import SideNav from "@/components/nav/SideNav.vue";
 import ToastContainer from "@/components/ui/ToastContainer.vue";
@@ -12,6 +13,10 @@ const { activeSection } = useNav();
 </script>
 
 <template>
+  <!-- Judul tab mengikuti judul halaman; formatnya diatur sekali di main.js.
+       AdminLayout satu-satunya pemilik judul (lihat <h1> di bawah), jadi di
+       sini pula tempatnya diteruskan ke <title>. -->
+  <Head v-if="title" :title="title" />
   <!-- 100dvh, bukan 100vh: di browser ponsel 100vh termasuk area yang tertutup
        toolbar, jadi baris terbawah (footer tabel: pemilih per-halaman dan
        paginasi) tersembunyi di balik chrome browser. -->
