@@ -1,8 +1,9 @@
 """
-Django settings for the POS Multi-Server app (Frontend / Admin phase).
+Django settings for the POS Multi-Server app (admin panel).
 
-This phase wires Django + Inertia + Vite with MOCK data only.
-No MS SQL connection and no custom auth models yet — see the project plan.
+Django + Inertia + Vite over a legacy MS SQL Server dataset. App-local state
+(auth, sessions, logs, connection profiles) lives in SQLite; all business data
+is read from MS SQL via raw pyodbc in each app's services.py.
 """
 import os
 from pathlib import Path

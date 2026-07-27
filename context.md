@@ -15,12 +15,11 @@ Ringkasan arsitektur + status untuk planning lanjutan. Django + Inertia.js + Vue
 - **Prod-asset (lintas device/Tailscale)**: `.env` `DJANGO_VITE_DEV=0` + `npm run build`, Django serve aset dari origin sendiri (`:8000/static/assets/...`). Akses dari device manapun yang bisa jangkau `:8000`. **Setelah tiap edit frontend wajib `npm run build`.**
 - Produksi Windows: `waitress-serve --threads=32 --listen=0.0.0.0:8000 config.wsgi:application` (1 proses → cache per-proses konsisten). Lihat `PRODUCTION.md`.
 
-## Peta menu (28) → sumber data
+## Peta menu (42) → sumber data
 
 Route prefix `/admin-panel/`. View di `apps/monitoring/views.py` (kecuali connections di `apps/connections/views.py`). Menu def: `apps/core/menus.py`.
 
-**SEMUA 28 menu sudah REAL** (migrasi Fase 3-7 selesai) — `frontend/mock/*.js` sudah dihapus total, tidak ada lagi import `@/mock` di `frontend/pages`. Laporan penjualan/pembelian pakai `apps/transactions/reports.py` (SQL builder per laporan + pagination server-side + export XLSX via `openpyxl`).
-Catatan: route `master/suppliers` dan `master/sync-history` (`apps/monitoring/urls.py`) sudah ada view-nya tapi BELUM terdaftar di `apps/core/menus.py` — halaman ada tapi tak muncul di nav sampai menu key ditambahkan.
+**SEMUA 42 menu sudah REAL** (migrasi Fase 3-7 selesai) — `frontend/mock/*.js` sudah dihapus total, tidak ada lagi import `@/mock` di `frontend/pages`. Laporan penjualan/pembelian pakai `apps/transactions/reports.py` (SQL builder per laporan + pagination server-side + export XLSX via `openpyxl`).
 
 ## Service backend (reusable)
 
@@ -90,9 +89,8 @@ View: bungkus kerja berat dalam fungsi, `props={"key": defer(fn)}`. Frontend: `<
 
 ## Progress implementasi
 
-- ✅ Fase 0–6: semua 28 menu real (`frontend/mock/*` sudah dihapus), pagination server-side + export XLSX di laporan, indexing diperluas (~30 index) + audit trail `ActivityLog`, redesign UI ("mecha" theme, token warna `rx-red`/`rx-yellow` di `frontend/css/main.css`).
+- ✅ Fase 0–6: semua 42 menu real (`frontend/mock/*` sudah dihapus), pagination server-side + export XLSX di laporan, indexing diperluas (~30 index) + audit trail `ActivityLog`, redesign UI ("mecha" theme, token warna `rx-red`/`rx-yellow` di `frontend/css/main.css`).
 - ⬜ Fase 7: verifikasi + load test — commit terakhir sebelum sesi ini ("Frontend, backend, masih error mwahaha") mengindikasikan masih ada bug runtime belum diselesaikan setelah redesign UI; belum diverifikasi `npm run build` bersih di kondisi terbaru.
-- ⬜ Menu key `supplier`/`sync_history` belum ditambahkan ke `apps/core/menus.py` walau view/route sudah ada.
 - 🔶 Fase 8 (opsional, performa — lihat "Reporting replica" di atas): kode sisi app (`report_source`, `cdc_sync.py`, `sync_cdc`, wiring `_report_view`) sudah ada di branch `feature/cdc-reporting-replica`, teruji lewat Django check + smoke test lokal (fungsi CDC SQL Server-nya sendiri tidak bisa diuji tanpa server asli). Belum dikerjakan: enable CDC di server legacy (DBA), siapkan skema di server kedua, `--backfill` awal, dan verifikasi end-to-end (load test, cocokkan angka replica vs legacy).
 
 ## Di luar scope

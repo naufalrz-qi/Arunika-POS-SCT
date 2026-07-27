@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Arunika POS (Sukses Crown Toys) — a **Django 5 + Inertia-Django + Vue 3** admin panel over a **legacy MS SQL Server** dataset (grosir/gudang/retail). Not Laravel, not React. UI strings are Indonesian; keep new UI text Indonesian to match.
 
-Docs worth reading before large changes: `context.md` (architecture + gotchas), `implementation_plan.md` (phase roadmap / what's still mock), `PRODUCTION.md` (Windows deploy), `README.md` (run guide).
+Docs worth reading before large changes: `context.md` (architecture + gotchas), `KESIAPAN-FITUR.md` (per-menu readiness audit + known-unfixed list), `PANDUAN-PENGGUNA.md` (end-user guide), `PRODUCTION.md` (Windows deploy), `README.md` (run guide).
 
 ## Commands
 

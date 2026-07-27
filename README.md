@@ -2,7 +2,7 @@
 
 POS multi-server. **Django + Inertia.js + Vue 3 + Vite + Pinia + Tailwind v4**, data dari **MS SQL Server legacy** (grosir/gudang/retail). Admin panel: dashboard, monitoring stok, laporan penjualan/pembelian, master data, koneksi multi-server.
 
-Dokumen lain: `PRODUCTION.md` (deploy Windows), `context.md` + `implementation_plan.md` (status & rencana lanjutan).
+Dokumen lain: `PANDUAN-PENGGUNA.md` (untuk pengguna akhir), `KESIAPAN-FITUR.md` (audit kesiapan per menu), `PRODUCTION.md` (deploy Windows), `context.md` (arsitektur & gotcha).
 
 ## Prasyarat
 
