@@ -52,20 +52,39 @@ const displayed = computed(() => {
   });
 });
 
+// SEMUA total harus pakai kolom *_base (satuan terkecil). Menjumlah debet/kredit
+// mentah lintas baris tak ada artinya karena satuannya beda-beda: 1 dus dengan
+// faktor 250 ditambah 1 pcs bukan 2.
 const summary = computed(() => {
-  const totalDebet = displayed.value.reduce((s, r) => s + (r.debet || 0), 0);
-  const totalKredit = displayed.value.reduce((s, r) => s + (r.kredit || 0), 0);
-  // saldo in smallest unit (qty_base already converts each row via satuan factor)
+  const r3 = (n) => Math.round(n * 1000) / 1000;
+  const totalDebet = displayed.value.reduce((s, r) => s + (r.debet_base || 0), 0);
+  const totalKredit = displayed.value.reduce((s, r) => s + (r.kredit_base || 0), 0);
   const saldo = displayed.value.reduce((s, r) => s + (r.qty_base || 0), 0);
-  return { totalDebet, totalKredit, saldo: Math.round(saldo * 1000) / 1000, count: displayed.value.length };
+  return {
+    totalDebet: r3(totalDebet), totalKredit: r3(totalKredit),
+    saldo: r3(saldo), count: displayed.value.length,
+  };
 });
+
+// Total lintas barang menjumlahkan satuan terkecil dari produk yang berbeda —
+// angkanya benar per produk, tapi gabungannya tak punya arti fisik.
+const banyakBarang = computed(
+  () => new Set(displayed.value.map((r) => r.kd_barang)).size > 1,
+);
 
 const num = (n) => (n ?? 0).toLocaleString("id-ID");
 const rupiah = (n) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n || 0);
 
 function exportXlsx() {
-  downloadXlsx(`barang-histori-${stamp()}.xlsx`, columns, displayed.value, "Barang Histori");
+  // Sertakan kolom base-unit supaya SUM() di Excel benar — kolom Debet/Kredit
+  // punya satuan berbeda per baris dan tak boleh dijumlah di sana.
+  const exportColumns = [
+    ...columns,
+    { key: "debet_base", label: "Masuk (satuan terkecil)" },
+    { key: "kredit_base", label: "Keluar (satuan terkecil)" },
+  ];
+  downloadXlsx(`barang-histori-${stamp()}.xlsx`, exportColumns, displayed.value, "Barang Histori");
 }
 
 const transVariant = (t) => {
@@ -83,6 +102,8 @@ const columns = [
   { key: "no_transaksi", label: "No. Transaksi" },
   { key: "kd_barang", label: "Kode Barang", sortable: true },
   { key: "barang", label: "Barang", sortable: true },
+  // Debet/Kredit mengikuti satuan barisnya (kolom Satuan di sebelahnya) — jangan
+  // dijumlahkan. Untuk total, pakai Masuk/Keluar yang sudah base-unit.
   { key: "debet", label: "Debet", align: "right" },
   { key: "kredit", label: "Kredit", align: "right" },
   { key: "satuan", label: "Satuan", align: "center" },
@@ -125,18 +146,25 @@ const columns = [
           <p class="text-lg font-semibold">{{ num(summary.count) }}</p>
         </Card>
         <Card>
-          <p class="text-xs text-ink-muted">Total Debet (masuk)</p>
+          <p class="text-xs text-ink-muted">Masuk (satuan terkecil)</p>
           <p class="text-lg font-semibold text-success-700">{{ num(summary.totalDebet) }}</p>
         </Card>
         <Card>
-          <p class="text-xs text-ink-muted">Total Kredit (keluar)</p>
+          <p class="text-xs text-ink-muted">Keluar (satuan terkecil)</p>
           <p class="text-lg font-semibold text-danger-600">{{ num(summary.totalKredit) }}</p>
         </Card>
         <Card>
-          <p class="text-xs text-ink-muted">Saldo (satuan terkecil)</p>
+          <p class="text-xs text-ink-muted">Selisih (satuan terkecil)</p>
           <p class="text-lg font-semibold text-brand-700">{{ num(summary.saldo) }}</p>
         </Card>
       </div>
+
+      <Banner
+        v-if="banyakBarang"
+        variant="info"
+        message="Total di atas menggabungkan beberapa barang. Satuan terkecil tiap barang berbeda, jadi angka gabungannya hanya indikatif — saring ke satu kode barang untuk total yang bermakna."
+        class="mb-4"
+      />
 
       <div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end">
         <div class="sm:w-56">

@@ -953,6 +953,13 @@ def barang_histori(profile, kd_barang=None, kd_divisi=None, date_from=None, date
             "harga": _f(m["harga"]),
             # base-unit net for a correct cross-satuan saldo summary
             "qty_base": round(factor * (debet - kredit), 3),
+            # Masuk/keluar per baris DALAM SATUAN TERKECIL. debet/kredit di atas
+            # sengaja dibiarkan apa adanya (satuan barisnya) untuk ditampilkan di
+            # sebelah kolom Satuan, tapi menjumlahkannya lintas baris tak ada
+            # artinya: 1 dus (faktor 250) + 1 pcs bukan 2. Total apa pun harus
+            # pakai dua kolom ini.
+            "debet_base": round(factor * debet, 3),
+            "kredit_base": round(factor * kredit, 3),
             # saldo berjalan per (divisi, barang), satuan terkecil
             "saldo": round(saldo[key], 3),
         })
