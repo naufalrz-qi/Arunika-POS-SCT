@@ -1,12 +1,61 @@
 """Security regression tests: user management hardening + per-menu RBAC."""
 import io
 
-from django.test import TestCase
+import pyodbc
+from django.test import SimpleTestCase, TestCase
 
 from apps.auth_app.models import Role, User
 from apps.core import reporting
 from apps.core.menus import menu_key_for_path
 from apps.core.middleware import _menu_allowed
+from core import mssql
+from core.encryption import PasswordDecryptError
+
+
+class ProfileAuthErrorTests(SimpleTestCase):
+    """Regresi: POS_FERNET_KEY rusak/dirotasi melempar PasswordDecryptError
+    (RuntimeError), yang lolos SEMUA `except pyodbc.Error` di views -> 500 di
+    hampir tiap halaman data. mssql.cursor() harus membungkusnya."""
+
+    class _Profile:
+        host, port, db_name, username = "h", 1433, "db", "u"
+        password_encrypted = "gibberish"
+
+    def test_key_rusak_jadi_pyodbc_error_berpesan_indonesia(self):
+        def boom(_):
+            raise PasswordDecryptError(
+                "Password tersimpan tidak bisa dibaca — kemungkinan POS_FERNET_KEY di .env berubah."
+            )
+
+        with self.settings():
+            orig = mssql.decrypt_checked
+            mssql.decrypt_checked = boom
+            try:
+                with self.assertRaises(pyodbc.Error) as ctx:
+                    with mssql.cursor(self._Profile()):
+                        pass
+            finally:
+                mssql.decrypt_checked = orig
+        self.assertIn("POS_FERNET_KEY", str(ctx.exception.args[-1]))
+
+
+class FriendlyErrorTests(SimpleTestCase):
+    """Teks driver ODBC (Inggris, ber-SQLSTATE) tak boleh bocor ke banner Indonesia."""
+
+    def test_prefiks_driver_dibuang(self):
+        exc = pyodbc.Error("42S22", "[Microsoft][ODBC Driver 17 for SQL Server]Kolom tak dikenal")
+        msg = mssql.friendly_error(exc, "Gagal membaca stok")
+        self.assertNotIn("[Microsoft]", msg)
+        self.assertTrue(msg.startswith("Gagal membaca stok: "))
+
+    def test_sqlstate_koneksi_jadi_kalimat_indonesia(self):
+        exc = pyodbc.Error("08001", "[Microsoft][ODBC Driver 17 for SQL Server]Login timeout expired")
+        msg = mssql.friendly_error(exc, "Gagal membaca stok")
+        self.assertEqual(msg, "Gagal membaca stok: server tidak dapat dihubungi. Periksa jaringan/koneksi.")
+
+    def test_profile_auth_error_diteruskan_apa_adanya(self):
+        exc = mssql.ProfileAuthError("HY000", "POS_FERNET_KEY di .env berubah.")
+        self.assertEqual(mssql.friendly_error(exc, "Gagal"), "POS_FERNET_KEY di .env berubah.")
 
 
 class XlsxIllegalCharTests(TestCase):
@@ -35,7 +84,11 @@ class UsersSaveHardeningTests(TestCase):
         )
         self.client.force_login(self.superadmin)
 
-    def test_role_admin_tier_ditolak(self):
+    def test_admin_tak_bisa_bikin_superadmin(self):
+        """Superadmin BOLEH membuat superadmin (_managed_roles memuat semua role
+        untuknya). Yang harus ditolak: seorang admin menaikkan hak ke superadmin."""
+        admin = User.objects.create_user("adm", password="rahasia-kuat-123", role=Role.ADMIN)
+        self.client.force_login(admin)
         self.client.post(
             "/admin-panel/users/save",
             {"username": "jahat", "name": "X", "role": "superadmin", "password": "rahasia-kuat-123"},
@@ -49,7 +102,20 @@ class UsersSaveHardeningTests(TestCase):
         )
         self.assertFalse(User.objects.filter(username="aneh").exists())
 
-    def test_akun_admin_tier_tak_bisa_diedit(self):
+    def test_superadmin_terakhir_tak_bisa_diturunkan(self):
+        """Superadmin kini boleh mengelola sesama superadmin, jadi bukan lagi 404 —
+        yang menahan adalah _last_superadmin_guard (redirect + flash)."""
+        resp = self.client.post(
+            "/admin-panel/users/save",
+            {"id": self.superadmin.pk, "name": "Pwned", "role": "kasir", "password": "rahasia-kuat-123"},
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.superadmin.refresh_from_db()
+        self.assertEqual(self.superadmin.role, Role.SUPERADMIN)
+
+    def test_admin_tak_bisa_edit_superadmin(self):
+        admin = User.objects.create_user("adm2", password="rahasia-kuat-123", role=Role.ADMIN)
+        self.client.force_login(admin)
         resp = self.client.post(
             "/admin-panel/users/save",
             {"id": self.superadmin.pk, "name": "Pwned", "role": "kasir", "password": "rahasia-kuat-123"},
@@ -58,9 +124,11 @@ class UsersSaveHardeningTests(TestCase):
         self.superadmin.refresh_from_db()
         self.assertEqual(self.superadmin.role, Role.SUPERADMIN)
 
-    def test_akun_admin_tier_tak_bisa_dinonaktifkan(self):
+    def test_superadmin_terakhir_tak_bisa_dihapus(self):
+        """/delete kini hard delete; penjaganya redirect, bukan 404."""
         resp = self.client.post(f"/admin-panel/users/{self.superadmin.pk}/delete")
-        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(User.objects.filter(pk=self.superadmin.pk).exists())
 
     def test_user_baru_wajib_password(self):
         self.client.post(

@@ -105,7 +105,7 @@ def connections_check_indexes(request, conn_id):
         failed, results = indexes.ensure_indexes(profile)
     except pyodbc.Error as exc:
         return JsonResponse(
-            {"id": conn_id, "ok": False, "results": [], "error": str(exc.args[-1] if exc.args else exc)},
+            {"id": conn_id, "ok": False, "results": [], "error": mssql.friendly_error(exc, "Gagal cek indexing")},
             status=502,
         )
     log_activity(request, "konfigurasi", f"Cek indexing {profile.name}")

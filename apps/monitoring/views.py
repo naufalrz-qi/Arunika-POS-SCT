@@ -89,7 +89,7 @@ def dashboard(request):
             try:
                 summary = tx.dashboard_summary(profile)
             except pyodbc.Error as exc:
-                conn_error = f"Gagal membaca transaksi: {exc.args[-1] if exc.args else exc}"
+                conn_error = mssql.friendly_error(exc, "Gagal membaca transaksi")
         else:
             conn_error = CONN_ERROR
 
@@ -280,7 +280,7 @@ def products_index(request):
                 products = master.list_products(profile, search, kd_kategori)
                 categories = master.list_categories(profile)
             except pyodbc.Error as exc:
-                conn_error = f"Gagal membaca master produk: {exc.args[-1] if exc.args else exc}"
+                conn_error = mssql.friendly_error(exc, "Gagal membaca master produk")
         else:
             conn_error = CONN_ERROR
         return {"rows": products, "categories": categories, "conn_error": conn_error}
@@ -304,7 +304,7 @@ def customers_index(request):
             try:
                 customers = master.list_customers(profile, search)
             except pyodbc.Error as exc:
-                conn_error = f"Gagal membaca master pelanggan: {exc.args[-1] if exc.args else exc}"
+                conn_error = mssql.friendly_error(exc, "Gagal membaca master pelanggan")
         else:
             conn_error = CONN_ERROR
         return {"rows": customers, "conn_error": conn_error}
@@ -332,7 +332,7 @@ def suppliers_index(request):
                     suppliers = reporting.dictify(cur)
                     suppliers = reporting.clean_rows(suppliers)
             except pyodbc.Error as exc:
-                conn_error = f"Gagal membaca supplier: {exc.args[-1] if exc.args else exc}"
+                conn_error = mssql.friendly_error(exc, "Gagal membaca supplier")
         else:
             conn_error = CONN_ERROR
         return {"rows": suppliers, "conn_error": conn_error}
@@ -380,6 +380,14 @@ _STATUS_FIELD = {
     "m_barang_satuan": BarangUpdateLog.Field.STATUS_SATUAN,
 }
 
+# Nama tabel MS SQL tak boleh muncul di toast. Label disalin dari
+# frontend/pages/Admin/MasterData/UpdateBarang.vue (bagian "Ketersediaan").
+_STATUS_LABELS = {
+    "m_barang": "status barang",
+    "m_barang_divisi": "ketersediaan per divisi",
+    "m_barang_satuan": "ketersediaan per satuan",
+}
+
 
 def update_barang_index(request):
     # Ikut koneksi aktif (dipilih di navbar) — tidak ada pemilihan server terpisah.
@@ -394,7 +402,7 @@ def update_barang_index(request):
             try:
                 items = master.list_barang_edit(profile, search)
             except pyodbc.Error as exc:
-                conn_error = f"Gagal membaca barang: {exc.args[-1] if exc.args else exc}"
+                conn_error = mssql.friendly_error(exc, "Gagal membaca barang")
         else:
             conn_error = CONN_ERROR
         return {"rows": items, "conn_error": conn_error}
@@ -407,7 +415,7 @@ def update_barang_index(request):
         try:
             return {"rows": master.list_saran_harga(profile), "conn_error": None}
         except pyodbc.Error as exc:
-            return {"rows": [], "conn_error": f"Gagal membaca saran harga: {exc.args[-1] if exc.args else exc}"}
+            return {"rows": [], "conn_error": mssql.friendly_error(exc, "Gagal membaca saran harga")}
 
     # Audit harga berpecahan — grup sendiri supaya tidak menahan `items`.
     def load_pecahan():
@@ -416,7 +424,7 @@ def update_barang_index(request):
         try:
             return {"rows": master.list_harga_pecahan(profile), "conn_error": None}
         except pyodbc.Error as exc:
-            return {"rows": [], "conn_error": f"Gagal membaca audit harga: {exc.args[-1] if exc.args else exc}"}
+            return {"rows": [], "conn_error": mssql.friendly_error(exc, "Gagal membaca audit harga")}
 
     return render(
         request,
@@ -460,7 +468,7 @@ def update_barang_harga(request):
     except master.HargaTidakBulat as exc:
         request.session["flash_error"] = f"Harga {kd_barang} ditolak. {exc}"
     except pyodbc.Error as exc:
-        request.session["flash_error"] = f"Gagal update harga: {exc.args[-1] if exc.args else exc}"
+        request.session["flash_error"] = mssql.friendly_error(exc, "Gagal update harga")
     return _redirect_back(data, "/admin-panel/master/update-barang")
 
 
@@ -505,7 +513,7 @@ def update_barang_harga_massal(request):
             gagal.append(f"{kb} ({exc})")
             continue
         except pyodbc.Error as exc:
-            gagal.append(f"{kb} ({exc.args[-1] if exc.args else exc})")
+            gagal.append(f"{kb} ({mssql.friendly_error(exc, 'gagal')})")
             continue
         total += len(changes)
         log_barang_updates(
@@ -549,8 +557,12 @@ def update_barang_status(request):
             [(_STATUS_FIELD.get(table, table), kd_divisi or "", result["lama"], status)],
         )
         log_activity(request, "barang", f"Update status {table} {kd_barang} -> {status} ({profile.name})")
-        request.session["flash_success"] = f"Status ({table}) untuk {kd_barang} diperbarui."
-    except (pyodbc.Error, ValueError) as exc:
+        label = _STATUS_LABELS.get(table, table)
+        request.session["flash_success"] = f"Perubahan {label} untuk {kd_barang} disimpan."
+    except pyodbc.Error as exc:
+        request.session["flash_error"] = mssql.friendly_error(exc, "Gagal update status")
+    except ValueError as exc:
+        # Penolakan whitelist dari master.update_status — pesannya sudah Indonesia.
         request.session["flash_error"] = f"Gagal update status: {exc}"
     return _redirect_back(data, "/admin-panel/master/update-barang")
 
@@ -566,7 +578,7 @@ def update_barang_detail(request):
     try:
         rows = master.list_barang_edit(profile, kd_barang)
     except pyodbc.Error as exc:
-        return JsonResponse({"item": None, "error": f"Gagal membaca barang: {exc.args[-1] if exc.args else exc}"})
+        return JsonResponse({"item": None, "error": mssql.friendly_error(exc, "Gagal membaca barang")})
     key = kd_barang.strip().upper()
     item = next((r for r in rows if r["kd_barang"].strip().upper() == key), None)
     return JsonResponse({
@@ -701,7 +713,7 @@ def pergerakan_harga_index(request):
             try:
                 saran = master.list_saran_harga(saran_profile)
             except pyodbc.Error as exc:
-                saran_error = f"Gagal membaca saran harga: {exc.args[-1] if exc.args else exc}"
+                saran_error = mssql.friendly_error(exc, "Gagal membaca saran harga")
         else:
             saran_error = CONN_ERROR
         return {"rows": rows, "saran": saran, "saran_error": saran_error}
@@ -752,7 +764,7 @@ def sync_harga_index(request):
         try:
             diff = master.compare_harga_jual(src, dst)
         except pyodbc.Error as exc:
-            conn_error = f"Gagal membandingkan harga: {exc.args[-1] if exc.args else exc}"
+            conn_error = mssql.friendly_error(exc, "Gagal membandingkan harga")
 
     return render(
         request,
@@ -798,7 +810,7 @@ def sync_harga_apply(request):
         log_sync(request, feature="harga", mode=mode, src=src, dst=dst, compared=len(keys), applied=n, items=items)
         request.session["flash_success"] = f"Sinkronisasi selesai: {n} baris diperbarui."
     except pyodbc.Error as exc:
-        request.session["flash_error"] = f"Gagal sinkron: {exc.args[-1] if exc.args else exc}"
+        request.session["flash_error"] = mssql.friendly_error(exc, "Gagal sinkron")
         log_sync(request, feature="harga", mode=mode, src=src, dst=dst, compared=len(keys), applied=0,
                   status="failed", error=str(exc.args[-1] if exc.args else exc))
     return redirect(f"/admin-panel/master/sync-harga?mode={mode}&src={src.id}&dst={dst.id}")
@@ -824,7 +836,7 @@ def sync_master_index(request):
         try:
             diff = master.compare_entity(entity, src, dst)
         except pyodbc.Error as exc:
-            conn_error = f"Gagal membandingkan data: {exc.args[-1] if exc.args else exc}"
+            conn_error = mssql.friendly_error(exc, "Gagal membandingkan data")
 
     return render(
         request,
@@ -874,7 +886,7 @@ def sync_master_apply(request):
         log_sync(request, feature=entity, mode="whole_row", src=src, dst=dst, compared=len(keys), applied=n, items=items)
         request.session["flash_success"] = f"Sinkronisasi selesai: {n} baris diperbarui."
     except pyodbc.Error as exc:
-        request.session["flash_error"] = f"Gagal sinkron: {exc.args[-1] if exc.args else exc}"
+        request.session["flash_error"] = mssql.friendly_error(exc, "Gagal sinkron")
         log_sync(request, feature=entity, mode="whole_row", src=src, dst=dst, compared=len(keys), applied=0,
                   status="failed", error=str(exc.args[-1] if exc.args else exc))
     return redirect(f"/admin-panel/master/sync-master?entity={entity}&src={src.id}&dst={dst.id}")
@@ -923,7 +935,7 @@ def stock_index(request):
                     kd_divisi=kd_divisi or None,
                 )
             except pyodbc.Error as exc:
-                conn_error = f"Gagal membaca stok: {exc.args[-1] if exc.args else exc}"
+                conn_error = mssql.friendly_error(exc, "Gagal membaca stok")
         else:
             conn_error = CONN_ERROR
         return {"levels": levels, "divisi_list": divisi_list, "conn_error": conn_error}
@@ -961,7 +973,7 @@ def barang_histori_index(request):
                     date_to=_eod(date_to),
                 )
             except pyodbc.Error as exc:
-                conn_error = f"Gagal membaca histori: {exc.args[-1] if exc.args else exc}"
+                conn_error = mssql.friendly_error(exc, "Gagal membaca histori")
         else:
             conn_error = CONN_ERROR
 
@@ -1145,7 +1157,7 @@ def _report_view(spec):
                         conn_error = None
                         break
                     except pyodbc.Error as exc:
-                        conn_error = f"Gagal membaca laporan: {exc.args[-1] if exc.args else exc}"
+                        conn_error = mssql.friendly_error(exc, "Gagal membaca laporan")
             else:
                 conn_error = CONN_ERROR
             if f["warning"]:
@@ -1185,7 +1197,7 @@ def _report_export(spec):
             except pyodbc.Error as exc:
                 last_exc = exc
         if resp is None:
-            request.session["flash_error"] = f"Gagal export: {last_exc.args[-1] if last_exc.args else last_exc}"
+            request.session["flash_error"] = mssql.friendly_error(last_exc, "Gagal export")
             return redirect(spec["url"])
         log_activity(request, "export", f"Export {spec['filename']}")
         return resp
@@ -1577,7 +1589,7 @@ def stok_divisi(request):
                     date_to=_eod(date_to),
                 )
             except pyodbc.Error as exc:
-                conn_error = f"Gagal membaca stok divisi: {exc.args[-1] if exc.args else exc}"
+                conn_error = mssql.friendly_error(exc, "Gagal membaca stok divisi")
         else:
             conn_error = CONN_ERROR
         return {"rows": rows, "divisi_list": divisi_list, "conn_error": conn_error}
@@ -1618,7 +1630,7 @@ def mutasi_stok(request):
                     kd_divisi=kd_divisi or None,
                 )
             except pyodbc.Error as exc:
-                conn_error = f"Gagal membaca mutasi stok: {exc.args[-1] if exc.args else exc}"
+                conn_error = mssql.friendly_error(exc, "Gagal membaca mutasi stok")
         else:
             conn_error = CONN_ERROR
         return {"rows": rows, "divisi_list": divisi_list, "conn_error": conn_error}
@@ -1653,7 +1665,7 @@ def stok_awal_barang(request):
             try:
                 rows = inv.stok_awal_barang(profile, cutoff=cutoff)
             except pyodbc.Error as exc:
-                conn_error = f"Gagal membaca stok awal: {exc.args[-1] if exc.args else exc}"
+                conn_error = mssql.friendly_error(exc, "Gagal membaca stok awal")
         else:
             conn_error = CONN_ERROR
         return {"rows": rows, "conn_error": conn_error}
@@ -1754,7 +1766,7 @@ def transaksi_barang(request):
                     conn_error = None
                     break
                 except pyodbc.Error as exc:
-                    conn_error = f"Gagal membaca transaksi: {exc.args[-1] if exc.args else exc}"
+                    conn_error = mssql.friendly_error(exc, "Gagal membaca transaksi")
         else:
             conn_error = CONN_ERROR
         return {"rows": rows, "total": total, "summary": summary, "options": options, "conn_error": conn_error}
@@ -1796,7 +1808,7 @@ def transaksi_barang_export(request):
     if resp is None:
         # Same policy as _report_export: surface the failure instead of
         # silently downloading an empty sheet.
-        request.session["flash_error"] = f"Gagal export: {last_exc.args[-1] if last_exc.args else last_exc}"
+        request.session["flash_error"] = mssql.friendly_error(last_exc, "Gagal export")
         return redirect("/admin-panel/inventory/transaksi")
     log_activity(request, "export", "Export transaksi-barang")
     return resp
@@ -1963,7 +1975,7 @@ def fmi_stok(request):
                     r["_rid"] = start + i + 1
                 options = {"divisi": _opt_divisi(profile)}
             except pyodbc.Error as exc:
-                conn_error = f"Gagal membaca FMI stok: {exc.args[-1] if exc.args else exc}"
+                conn_error = mssql.friendly_error(exc, "Gagal membaca FMI stok")
         else:
             conn_error = CONN_ERROR
         if f["warning"]:
@@ -1993,7 +2005,7 @@ def fmi_stok_export(request):
     try:
         rows = _fmi_stok_rows(profile, f)
     except pyodbc.Error as exc:
-        request.session["flash_error"] = f"Gagal export: {exc.args[-1] if exc.args else exc}"
+        request.session["flash_error"] = mssql.friendly_error(exc, "Gagal export")
         return redirect("/admin-panel/analitik/fmi-stok")
     log_activity(request, "export", f"Export fmi-stok: {len(rows)} baris")
     return reporting.xlsx_response("fmi-stok", _FMI_STOK_COLUMNS, rows)
@@ -2032,7 +2044,7 @@ def kas_harian(request):
                     summary = reporting.clean_rows(reporting.dictify(cur))[0]
                     options = {"kas": _opt_kas(profile)}
             except pyodbc.Error as exc:
-                conn_error = f"Gagal membaca kas: {exc.args[-1] if exc.args else exc}"
+                conn_error = mssql.friendly_error(exc, "Gagal membaca kas")
         else:
             conn_error = CONN_ERROR
         if f["warning"]:
@@ -2065,7 +2077,7 @@ def kas_harian_export(request):
             cur.execute(order_sql, params)
             resp = reporting.xlsx_stream_response("kas-harian", _KAS_COLUMNS, cur)
     except pyodbc.Error as exc:
-        request.session["flash_error"] = f"Gagal export: {exc.args[-1] if exc.args else exc}"
+        request.session["flash_error"] = mssql.friendly_error(exc, "Gagal export")
         return redirect("/admin-panel/kas/harian")
     log_activity(request, "export", "Export kas-harian")
     return resp

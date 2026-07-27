@@ -14,6 +14,7 @@ the same trusted LAN as the app server.
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -21,6 +22,43 @@ from contextlib import contextmanager
 import pyodbc
 
 from core.encryption import EncryptionKeyMissing, PasswordDecryptError, decrypt_checked
+
+
+class ProfileAuthError(pyodbc.Error):
+    """Masalah POS_FERNET_KEY dilempar sebagai pyodbc.Error supaya SEMUA
+    `except pyodbc.Error` di views menangkapnya jadi banner Indonesia, bukan 500.
+
+    PasswordDecryptError/EncryptionKeyMissing adalah RuntimeError, jadi tanpa
+    pembungkus ini sebuah key yang dirotasi/rusak menembus ~28 handler di
+    apps/monitoring/views.py dan menghasilkan 500 di hampir tiap halaman data.
+    Format args = (SQLSTATE, pesan) seperti pyodbc, jadi `exc.args[-1]` yang
+    sudah dipakai di puluhan f-string langsung menghasilkan kalimat Indonesia."""
+
+
+# Prefiks driver ODBC ("[Microsoft][ODBC Driver 17 for SQL Server]") tak berarti
+# apa-apa bagi admin toko — dibuang dari pesan yang tampil ke pengguna.
+_ODBC_NOISE = re.compile(r"\[Microsoft\]\[[^\]]+\]")
+
+
+def friendly_error(exc, prefix: str = "Gagal membaca data") -> str:
+    """Pesan bahasa Indonesia untuk pengguna akhir dari sebuah pyodbc.Error.
+
+    Dipakai di semua view sebagai ganti f"...: {exc.args[-1]}", yang membocorkan
+    SQLSTATE + teks driver bahasa Inggris ke banner berbahasa Indonesia."""
+    args = getattr(exc, "args", ()) or ()
+    raw = str(args[-1] if args else exc)
+    state = args[0] if args else ""
+    if isinstance(exc, ProfileAuthError):
+        return raw  # sudah kalimat Indonesia dari core/encryption.py
+    if state in ("08001", "08S01", "HYT00") or "timeout" in raw.lower():
+        return f"{prefix}: server tidak dapat dihubungi. Periksa jaringan/koneksi."
+    if state == "28000":
+        return f"{prefix}: username atau password server salah."
+    if state == "42S02":
+        return f"{prefix}: tabel yang dibutuhkan tidak ada di server ini."
+    # ponytail: sisanya apa adanya minus prefiks driver. Menambah pemetaan
+    # SQLSTATE baru hanya kalau ada yang benar-benar muncul di lapangan.
+    return f"{prefix}: {_ODBC_NOISE.sub('', raw).strip()}"
 
 # Per-request active connection. Each HTTP request may target a different
 # ServerProfile chosen by THAT user (stored in their session, stamped here by
@@ -103,9 +141,7 @@ def test_connection(host, port, db_name, username, password) -> dict:
         latency = round((time.perf_counter() - start) * 1000)
         return {"ok": True, "message": f"Koneksi berhasil (~{latency} ms)", "latency_ms": latency}
     except pyodbc.Error as exc:
-        # exc.args[0] is the SQLSTATE; args[1] the driver message.
-        detail = exc.args[1] if len(exc.args) > 1 else str(exc)
-        return {"ok": False, "message": f"Gagal terhubung: {detail}", "latency_ms": None}
+        return {"ok": False, "message": friendly_error(exc, "Gagal terhubung"), "latency_ms": None}
 
 
 def test_profile(profile) -> dict:
@@ -131,16 +167,23 @@ def cursor(profile, autocommit=True):
     Use autocommit=False for write transactions, then call conn.commit() yourself.
 
     Password decrypt is CHECKED (fail loud): a corrupt/rotated POS_FERNET_KEY
-    raises PasswordDecryptError here instead of silently connecting with a blank
-    password and surfacing as a confusing SQL Server login error. `safe_decrypt`
-    stays for display-only paths that must never raise.
+    raises here instead of silently connecting with a blank password and
+    surfacing as a confusing SQL Server login error. `safe_decrypt` stays for
+    display-only paths that must never raise.
+
+    Re-raised as ProfileAuthError (a pyodbc.Error) so the ~28 `except
+    pyodbc.Error` handlers in the views turn it into a banner instead of a 500.
     """
+    try:
+        password = decrypt_checked(profile.password_encrypted)
+    except (PasswordDecryptError, EncryptionKeyMissing) as exc:
+        raise ProfileAuthError("HY000", str(exc)) from exc
     conn = _connect(
         profile.host,
         profile.port,
         profile.db_name,
         profile.username,
-        decrypt_checked(profile.password_encrypted),
+        password,
         autocommit=autocommit,
     )
     try:
