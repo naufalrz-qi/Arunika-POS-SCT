@@ -64,6 +64,10 @@ class Command(BaseCommand):
         parser.add_argument("--csv", default=None, help="Tulis baris pembanding harga ke CSV")
         parser.add_argument("--sample", type=int, default=8, help="Jumlah baris contoh per bagian (default 8)")
         parser.add_argument(
+            "--baris", type=int, default=5000,
+            help="Baris pembelian toko yang diperiksa di bagian 5; 0 = SEMUA (default 5000)",
+        )
+        parser.add_argument(
             "--lewati-log", action="store_true",
             help="Lewati bagian 3 (memindai tbl_log berjuta baris dengan LIKE '%%…%%' — lambat)",
         )
@@ -95,6 +99,7 @@ class Command(BaseCommand):
         toko = self._resolve(opts["toko"], "Testing", "toko")
         gudang = self._resolve(opts["gudang"], "testgudang", "gudang")
         n = opts["sample"]
+        self._top = f"TOP {opts['baris']}" if opts["baris"] else ""
 
         self.stdout.write(SEP)
         self.stdout.write(f"DIAGNOSTIK HARGA BELI  (read-only)")
@@ -344,7 +349,7 @@ class Command(BaseCommand):
         beli = {k: v[-1][1] for k, v in riwayat.items()}
 
         tcur.execute(
-            "SELECT TOP 5000 h.no_transaksi, h.tanggal, d.kd_barang, d.kd_satuan, d.qty, d.harga_beli "
+            f"SELECT {self._top} h.no_transaksi, h.tanggal, d.kd_barang, d.kd_satuan, d.qty, d.harga_beli "
             "FROM t_pembelian_detail d "
             "INNER JOIN t_pembelian h ON d.no_transaksi = h.no_transaksi "
             "ORDER BY h.tanggal DESC"
