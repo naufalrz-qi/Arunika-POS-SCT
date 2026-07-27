@@ -14,7 +14,11 @@ const open = ref(false);
 <template>
   <div class="relative">
     <button
+      type="button"
       class="flex h-10 items-center gap-2.5 rounded-lg border border-white/10 bg-white/5 pl-1.5 pr-3 text-white transition-all duration-200 hover:border-white/20 hover:bg-white/10"
+      :aria-expanded="open"
+      aria-haspopup="menu"
+      aria-label="Menu pengguna"
       @click="open = !open"
       @blur="open = false"
     >

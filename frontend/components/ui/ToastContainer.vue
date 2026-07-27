@@ -31,7 +31,15 @@ const styles = {
 <template>
   <Teleport to="body">
     <!-- w-80 tetap (320px) meluber di viewport 320px begitu ditambah right-4. -->
-    <div class="fixed right-4 top-4 z-[60] flex w-[calc(100vw-2rem)] max-w-80 flex-col gap-2">
+    <!-- role=status + aria-live: tanpa ini setiap konfirmasi simpan/hapus lewat
+         tanpa pernah terdengar oleh pembaca layar. "polite" supaya tidak
+         memotong pengumuman yang sedang berjalan. -->
+    <div
+      role="status"
+      aria-live="polite"
+      aria-atomic="false"
+      class="fixed right-4 top-4 z-[60] flex w-[calc(100vw-2rem)] max-w-80 flex-col gap-2"
+    >
       <TransitionGroup
         enter-active-class="transition duration-200 ease-out"
         enter-from-class="opacity-0 translate-x-4"
@@ -44,7 +52,16 @@ const styles = {
           :class="['flex items-start justify-between gap-3 rounded-lg px-4 py-3 text-sm text-white shadow-lg', styles[t.type] || styles.info]"
         >
           <span>{{ t.message }}</span>
-          <button class="opacity-80 hover:opacity-100" @click="ui.dismissToast(t.id)">✕</button>
+          <button
+            type="button"
+            class="shrink-0 rounded opacity-80 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+            aria-label="Tutup notifikasi"
+            @click="ui.dismissToast(t.id)"
+          >
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
       </TransitionGroup>
     </div>

@@ -1,5 +1,5 @@
 <script setup>
-import { watch, onBeforeUnmount } from "vue";
+import { watch, onBeforeUnmount, nextTick, ref } from "vue";
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -10,17 +10,58 @@ const emit = defineEmits(["close"]);
 
 const sizes = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl" };
 
-function onKey(e) {
-  if (e.key === "Escape" && props.show) emit("close");
+const panel = ref(null);
+// Elemen yang memicu modal, supaya fokus bisa dikembalikan saat ditutup —
+// tanpa itu fokus terlempar ke <body> dan pengguna keyboard harus menelusuri
+// halaman dari awal untuk kembali ke tempatnya.
+let lastFocused = null;
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function focusables() {
+  return Array.from(panel.value?.querySelectorAll(FOCUSABLE) ?? []).filter(
+    (el) => el.offsetParent !== null || el === document.activeElement,
+  );
 }
 
-// Lock body scroll + Esc-to-close while open.
+// Tab tidak boleh keluar dari dialog: aria-modal saja hanya memberi tahu
+// pembaca layar, tidak menahan fokus.
+function trapTab(e) {
+  const items = focusables();
+  if (!items.length) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  const active = document.activeElement;
+  if (e.shiftKey && (active === first || !panel.value?.contains(active))) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && active === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+function onKey(e) {
+  if (!props.show) return;
+  if (e.key === "Escape") emit("close");
+  else if (e.key === "Tab") trapTab(e);
+}
+
+// Lock body scroll + Esc-to-close + focus trap while open.
 watch(
   () => props.show,
   (open) => {
     document.body.style.overflow = open ? "hidden" : "";
-    if (open) window.addEventListener("keydown", onKey);
-    else window.removeEventListener("keydown", onKey);
+    if (open) {
+      lastFocused = document.activeElement;
+      window.addEventListener("keydown", onKey);
+      nextTick(() => focusables()[0]?.focus());
+    } else {
+      window.removeEventListener("keydown", onKey);
+      lastFocused?.focus?.();
+      lastFocused = null;
+    }
   },
 );
 // Unmounting while open (Inertia navigation, parent v-if) would otherwise
@@ -49,6 +90,7 @@ onBeforeUnmount(() => {
         >
           <div
             v-if="show"
+            ref="panel"
             role="dialog"
             aria-modal="true"
             :aria-label="title || undefined"

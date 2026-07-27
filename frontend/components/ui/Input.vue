@@ -6,6 +6,10 @@ defineProps({
   placeholder: { type: String, default: "" },
   error: { type: String, default: "" },
   required: { type: Boolean, default: false },
+  // Tanpa ini pengelola kata sandi tak punya petunjuk untuk mengisi formulir
+  // masuk secara otomatis.
+  autocomplete: { type: String, default: undefined },
+  autofocus: { type: Boolean, default: false },
 });
 defineEmits(["update:modelValue"]);
 </script>
@@ -19,6 +23,10 @@ defineEmits(["update:modelValue"]);
       :type="type"
       :value="modelValue"
       :placeholder="placeholder"
+      :autocomplete="autocomplete"
+      :autofocus="autofocus || undefined"
+      :required="required || undefined"
+      :aria-invalid="error ? 'true' : undefined"
       @input="$emit('update:modelValue', $event.target.value)"
       :class="[
         'h-10 w-full rounded border bg-surface/50 backdrop-blur-sm px-3 py-2 text-sm text-ink transition-all duration-200 placeholder:text-ink-subtle focus:outline-none focus:ring-1 focus:ring-brand-500/50',

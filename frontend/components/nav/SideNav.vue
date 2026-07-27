@@ -67,6 +67,7 @@ const { activeTab, isActive } = useNav();
 
     <button
       type="button"
+      :aria-expanded="!sidebarCollapsed"
       class="flex items-center gap-3 border-t border-white/10 px-5 py-4 text-xs font-heading font-medium tracking-wide text-white/70 transition-all duration-200 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
       :class="sidebarCollapsed ? 'justify-center px-0' : ''"
       :title="sidebarCollapsed ? 'Perlebar sidebar' : 'Ciutkan sidebar'"

@@ -16,6 +16,7 @@ const open = ref(props.defaultOpen);
   <div class="overflow-hidden rounded-card border border-border-default bg-surface shadow-sm">
     <button
       type="button"
+      :aria-expanded="open"
       class="flex w-full items-center justify-between gap-3 px-5 py-3.5 text-left transition hover:bg-surface-3"
       @click="open = !open"
     >

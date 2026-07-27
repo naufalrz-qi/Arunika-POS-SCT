@@ -45,6 +45,8 @@ const advancedOpen = ref(
     <div class="mecha-card panel-cut bg-surface">
       <button
         type="button"
+        :aria-expanded="open"
+        aria-controls="filter-panel-body"
         @click="open = !open"
         class="flex w-full items-center justify-between px-4 py-3 text-left"
       >
@@ -59,12 +61,18 @@ const advancedOpen = ref(
         </span>
         <span class="text-ink-subtle">{{ open ? "▾" : "▸" }}</span>
       </button>
-      <form v-show="open" @submit.prevent="emit('submit')" class="border-t border-border-default p-4">
+      <form
+        id="filter-panel-body"
+        v-show="open"
+        @submit.prevent="emit('submit')"
+        class="border-t border-border-default p-4"
+      >
         <div class="grid grid-cols-1 gap-3 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
           <slot />
           <template v-if="hasAdvanced">
             <button
               type="button"
+              :aria-expanded="advancedOpen"
               @click="advancedOpen = !advancedOpen"
               class="col-span-full flex items-center gap-2 border-t border-border-default pt-3 text-left text-[11px] font-heading font-bold uppercase tracking-wide text-ink-subtle transition-colors hover:text-brand-fg"
             >

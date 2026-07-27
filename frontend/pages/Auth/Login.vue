@@ -44,6 +44,8 @@ function submit() {
             v-model="form.username"
             label="Username"
             placeholder="username"
+            autocomplete="username"
+            autofocus
             :error="form.errors.username"
             required
           />
@@ -52,6 +54,7 @@ function submit() {
             label="Password"
             type="password"
             placeholder="••••••••"
+            autocomplete="current-password"
             :error="form.errors.password"
             required
           />

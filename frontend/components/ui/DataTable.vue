@@ -107,6 +107,8 @@ function formatCell(value, col) {
         <button
           type="button"
           class="rounded-md border border-border-default px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-3"
+          :aria-expanded="columnMenuOpen"
+          aria-haspopup="true"
           @click="columnMenuOpen = !columnMenuOpen"
           @blur="columnMenuOpen = false"
         >

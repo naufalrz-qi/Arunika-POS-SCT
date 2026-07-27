@@ -61,6 +61,8 @@ watch(
         <button
           class="flex h-10 w-10 items-center justify-center rounded-lg border border-transparent text-white/70 transition-all duration-200 hover:border-white/10 hover:bg-white/5 hover:text-white lg:hidden"
           title="Menu"
+          aria-label="Buka menu navigasi"
+          :aria-expanded="drawerOpen"
           @click="drawerOpen = true"
         >
           <Icon name="menu" />
@@ -127,6 +129,7 @@ watch(
                   <button
                     type="button"
                     class="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-sm font-semibold text-white/80 transition-all duration-200 hover:bg-white/10"
+                    :aria-expanded="!!openSection[tab.key]"
                     @click="toggleSection(tab.key)"
                   >
                     <span>{{ tab.label }}</span>
