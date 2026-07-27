@@ -1814,7 +1814,11 @@ def transaksi_barang(request):
                     conn_error = mssql.friendly_error(exc, "Gagal membaca transaksi")
         else:
             conn_error = CONN_ERROR
-        return {"rows": rows, "total": total, "summary": summary, "options": options, "conn_error": conn_error}
+        # notice: halaman ini juga memangkas rentang >92 hari, tapi dulu tak
+        # pernah memberitahukannya sama sekali (bukan lewat conn_error seperti
+        # laporan lain — memang hilang begitu saja).
+        return {"rows": rows, "total": total, "summary": summary, "options": options,
+                "conn_error": conn_error, "notice": f["warning"] or None}
 
     return render(
         request,
