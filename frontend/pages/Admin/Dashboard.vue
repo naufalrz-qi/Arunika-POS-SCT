@@ -72,10 +72,10 @@ const chartData = computed(() =>
       <Card title="Fast Moving Bulan Ini" subtitle="Top 10 qty terjual — barang tanpa harga jual dikecualikan">
         <table v-if="(data.fast_movers || []).length" class="w-full text-sm">
           <thead>
-            <tr class="text-left text-xs text-ink-muted">
-              <th class="py-1.5 font-medium">Barang</th>
-              <th class="py-1.5 text-right font-medium">Qty</th>
-              <th class="py-1.5 text-right font-medium">Nilai</th>
+            <tr class="text-left">
+              <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted">Barang</th>
+              <th class="py-1.5 text-right text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted">Qty</th>
+              <th class="py-1.5 text-right text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted">Nilai</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-border-default">

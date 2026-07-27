@@ -1,0 +1,226 @@
+<script setup>
+/**
+ * Tampilan tabel — satu-satunya. Tidak tahu-menahu soal dari mana baris datang.
+ *
+ * Sebelum ini ada dua salinan yang ~80% identik: DataTable (urut/paginasi di
+ * peramban) dan ServerTable (di server). Keduanya sudah menyimpang diam-diam —
+ * pilihan per-halaman 25/50/100 lawan 25/50/100/200/500/1000, format `persen`
+ * dan `date` hanya ada di satu sisi, sel kosong dirender "" lawan "-", latar
+ * thead bg-surface-2 lawan bg-surface-3, pemisah baris divide-y lawan border-t.
+ * Pengguna yang pindah dari Log Aktivitas ke Laporan Penjualan melihat dua
+ * tabel yang seharusnya sama tapi terasa beda.
+ *
+ * Semua state di sini terkendali (controlled): pengurutan dan paginasi
+ * dilaporkan lewat event, pemanggilnya yang memutuskan cara mengerjakannya.
+ * Yang dimiliki sendiri hanya visibilitas kolom, karena itu murni preferensi
+ * tampilan.
+ */
+import { computed } from "vue";
+import { useDismissable } from "@/composables/useDismissable";
+import Spinner from "./Spinner.vue";
+import EmptyState from "./EmptyState.vue";
+import Pagination from "./Pagination.vue";
+
+const props = defineProps({
+  // columns: [{ key, label, sortable?, align?: 'left'|'right'|'center',
+  //             format?: 'number'|'rupiah'|'persen'|'date' }]
+  columns: { type: Array, required: true },
+  rows: { type: Array, default: () => [] },
+  rowKey: { type: String, default: "id" },
+  loading: { type: Boolean, default: false },
+  // Jumlah seluruh baris (server) — untuk tabel sisi-peramban sama dengan
+  // panjang baris yang sudah tersaring.
+  total: { type: Number, default: 0 },
+  page: { type: Number, default: 1 },
+  perPage: { type: Number, default: 50 },
+  perPageOptions: { type: Array, default: () => [25, 50, 100, 200, 500, 1000] },
+  sortKey: { type: String, default: "" },
+  sortDir: { type: String, default: "desc" },
+  emptyMessage: { type: String, default: "Tidak ada data untuk filter yang dipilih." },
+});
+const emit = defineEmits(["page-change", "sort-change", "per-page-change"]);
+
+const { open: columnMenuOpen, root: columnMenuRoot, toggle: toggleColumnMenu } = useDismissable();
+const hiddenKeys = defineModel("hiddenKeys", { type: Set, default: () => new Set() });
+
+const visibleColumns = computed(() => props.columns.filter((c) => !hiddenKeys.value.has(c.key)));
+
+function toggleColumn(key) {
+  const next = new Set(hiddenKeys.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  // Sisakan minimal satu kolom; tabel tanpa kolom tak bisa dipulihkan lewat UI.
+  if (next.size < props.columns.length) hiddenKeys.value = next;
+}
+
+function toggleSort(col) {
+  if (!col.sortable) return;
+  const dir = props.sortKey === col.key && props.sortDir === "asc" ? "desc" : "asc";
+  emit("sort-change", { key: col.key, dir });
+}
+
+const nf = new Intl.NumberFormat("id-ID");
+const rp = new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 });
+const pf = new Intl.NumberFormat("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+
+function fmt(value, col) {
+  if (value === null || value === undefined || value === "") return "-";
+  if (col.format === "number") return nf.format(value);
+  if (col.format === "rupiah") return rp.format(value);
+  if (col.format === "persen") return `${pf.format(value)}%`;
+  if (col.format === "date") {
+    const d = new Date(value);
+    return isNaN(d) ? value : d.toLocaleDateString("id-ID");
+  }
+  return value;
+}
+
+function alignClass(col) {
+  return col.align === "right" ? "text-right" : col.align === "center" ? "text-center" : "text-left";
+}
+
+// Elipsis hanya untuk teks bebas. Kolom angka tak pernah butuh dipotong, dan
+// memotongnya diam-diam di laporan keuangan menyembunyikan digit — persis
+// kesalahan yang paling mahal di layar ini.
+const NUMERIC_FORMATS = new Set(["number", "rupiah", "persen"]);
+function isNumeric(col) {
+  return NUMERIC_FORMATS.has(col.format) || col.align === "right";
+}
+</script>
+
+<template>
+  <div class="panel-cut-frame">
+    <div class="panel-cut overflow-hidden bg-surface">
+      <div class="flex justify-end border-b border-border-default bg-surface-2 px-3 py-1.5">
+        <div ref="columnMenuRoot" class="relative">
+          <button
+            type="button"
+            class="rounded-control border border-border-default px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-3"
+            :aria-expanded="columnMenuOpen"
+            aria-haspopup="true"
+            @click="toggleColumnMenu"
+          >
+            Kolom ({{ visibleColumns.length }}/{{ columns.length }})
+          </button>
+          <div
+            v-if="columnMenuOpen"
+            class="absolute right-0 z-20 mt-1 max-h-72 w-56 overflow-y-auto rounded-control border border-border-default bg-surface p-1.5 shadow-lg"
+          >
+            <label
+              v-for="col in columns"
+              :key="col.key"
+              class="flex items-center gap-2 rounded-control px-2 py-1.5 text-sm text-ink hover:bg-surface-3"
+            >
+              <input type="checkbox" :checked="!hiddenKeys.has(col.key)" @change="toggleColumn(col.key)" />
+              {{ col.label }}
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tinggi dibatasi supaya tabel tidak memanjang sampai bawah laman:
+           badan tabel yang di-scroll, header sticky di dalam kontainer ini. -->
+      <div class="max-h-[65vh] overflow-auto scroll-slim">
+        <table class="w-full text-xs tabular-nums">
+          <thead class="sticky top-0 z-10 bg-surface-3">
+            <tr>
+              <th
+                v-for="col in visibleColumns"
+                :key="col.key"
+                scope="col"
+                :role="col.sortable ? 'button' : undefined"
+                :tabindex="col.sortable ? 0 : undefined"
+                :aria-sort="
+                  col.sortable
+                    ? sortKey === col.key
+                      ? sortDir === 'asc'
+                        ? 'ascending'
+                        : 'descending'
+                      : 'none'
+                    : undefined
+                "
+                :class="[
+                  'whitespace-nowrap border-b-2 border-border-strong px-2 py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted',
+                  alignClass(col),
+                  col.sortable
+                    ? 'cursor-pointer select-none hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500'
+                    : '',
+                ]"
+                @click="toggleSort(col)"
+                @keydown.enter.prevent="toggleSort(col)"
+                @keydown.space.prevent="toggleSort(col)"
+              >
+                <span class="inline-flex items-center gap-1">
+                  {{ col.label }}
+                  <span v-if="col.sortable && sortKey === col.key" class="text-brand-600">
+                    {{ sortDir === "asc" ? "▲" : "▼" }}
+                  </span>
+                </span>
+              </th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border-default">
+            <tr v-if="loading">
+              <td :colspan="visibleColumns.length" class="py-12">
+                <div class="flex justify-center"><Spinner /></div>
+              </td>
+            </tr>
+            <tr v-else-if="!rows.length">
+              <td :colspan="visibleColumns.length">
+                <EmptyState :message="emptyMessage" />
+              </td>
+            </tr>
+            <tr
+              v-for="row in loading ? [] : rows"
+              :key="row[rowKey]"
+              class="even:bg-surface-2/60 hover:bg-surface-3"
+            >
+              <td
+                v-for="col in visibleColumns"
+                :key="col.key"
+                :class="['px-2 py-1 leading-snug text-ink', alignClass(col)]"
+              >
+                <!-- Nilai panjang (nama barang/supplier) dipotong dengan elipsis:
+                     tanpa ini satu baris saja bisa memaksa tabel melebar dan
+                     memunculkan scroll horizontal di layar 1366px. Teks utuh
+                     tetap terbaca lewat tooltip. Isi slot tak disentuh — di situ
+                     ada badge/tombol yang tak boleh dipotong. -->
+                <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
+                  <span v-if="isNumeric(col)" class="block whitespace-nowrap">{{ fmt(row[col.key], col) }}</span>
+                  <span v-else class="block max-w-[26ch] truncate" :title="String(row[col.key] ?? '')">
+                    {{ fmt(row[col.key], col) }}
+                  </span>
+                </slot>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div
+        v-if="!loading && total"
+        class="flex flex-wrap items-center justify-between gap-2 border-t border-border-default bg-surface-2 px-3 py-1.5 text-xs text-ink-muted"
+      >
+        <div class="flex items-center gap-2">
+          <label :for="`${rowKey}-per-page`">Per halaman:</label>
+          <select
+            :id="`${rowKey}-per-page`"
+            :value="perPage"
+            @change="emit('per-page-change', Number($event.target.value))"
+            class="h-8 rounded-control border border-border-strong bg-surface px-2 text-xs text-ink"
+          >
+            <option v-for="n in perPageOptions" :key="n" :value="n">{{ n }}</option>
+          </select>
+        </div>
+        <Pagination
+          v-if="total > perPage"
+          :page="page"
+          :total="total"
+          :per-page="perPage"
+          @update:page="emit('page-change', $event)"
+        />
+        <span v-else>Menampilkan semua {{ total }} data</span>
+      </div>
+    </div>
+  </div>
+</template>

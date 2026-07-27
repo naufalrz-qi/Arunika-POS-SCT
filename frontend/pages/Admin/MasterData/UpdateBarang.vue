@@ -500,8 +500,8 @@ async function openRiwayat(item) {
         <div class="max-h-[55vh] overflow-y-auto scroll-slim">
           <table class="w-full text-sm">
             <thead class="sticky top-0 bg-surface">
-              <tr class="text-left text-ink-muted">
-                <th class="py-1.5 w-8">
+              <tr class="text-left">
+                <th class="py-1.5 w-8 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted">
                   <input
                     type="checkbox"
                     :checked="sel.saran.size === saranRows.length && saranRows.length > 0"
@@ -510,12 +510,12 @@ async function openRiwayat(item) {
                     @change="toggleAll('saran', saranRows)"
                   />
                 </th>
-                <th class="py-1.5">Barang</th>
-                <th class="py-1.5">Keterangan</th>
-                <th class="py-1.5 text-right">Sekarang</th>
-                <th class="py-1.5 text-right">Saran</th>
-                <th class="py-1.5 text-right">Selisih</th>
-                <th class="py-1.5"></th>
+                <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted">Barang</th>
+                <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted">Keterangan</th>
+                <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted text-right">Sekarang</th>
+                <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted text-right">Saran</th>
+                <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted text-right">Selisih</th>
+                <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted"></th>
               </tr>
             </thead>
             <tbody>
@@ -581,8 +581,8 @@ async function openRiwayat(item) {
         <div class="max-h-[55vh] overflow-y-auto scroll-slim">
           <table class="w-full text-sm">
             <thead class="sticky top-0 bg-surface">
-              <tr class="text-left text-ink-muted">
-                <th class="py-1.5 w-8">
+              <tr class="text-left">
+                <th class="py-1.5 w-8 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted">
                   <input
                     type="checkbox"
                     :checked="sel.pecahan.size === pecahanRows.length && pecahanRows.length > 0"
@@ -591,10 +591,10 @@ async function openRiwayat(item) {
                     @change="toggleAll('pecahan', pecahanRows)"
                   />
                 </th>
-                <th class="py-1.5">Barang</th>
-                <th class="py-1.5 text-right">Tersimpan</th>
-                <th class="py-1.5 text-right">Saran</th>
-                <th class="py-1.5"></th>
+                <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted">Barang</th>
+                <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted text-right">Tersimpan</th>
+                <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted text-right">Saran</th>
+                <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted"></th>
               </tr>
             </thead>
             <tbody>
@@ -651,9 +651,9 @@ async function openRiwayat(item) {
       <div class="max-h-[45vh] overflow-y-auto scroll-slim">
         <table class="w-full text-sm">
           <thead class="sticky top-0 bg-surface">
-            <tr class="text-left text-ink-muted">
-              <th class="py-1.5">Barang</th>
-              <th class="py-1.5 text-right">Harga baru</th>
+            <tr class="text-left">
+              <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted">Barang</th>
+              <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted text-right">Harga baru</th>
             </tr>
           </thead>
           <tbody>

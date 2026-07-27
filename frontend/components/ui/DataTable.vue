@@ -1,12 +1,14 @@
 <script setup>
+/**
+ * Tabel yang seluruh datanya sudah ada di peramban: pengurutan dan paginasi
+ * dikerjakan di sini, tampilannya milik BaseTable — lihat catatan di sana soal
+ * kenapa dua salinan tabel disatukan.
+ */
 import { computed, ref, watch } from "vue";
-import Spinner from "./Spinner.vue";
-import EmptyState from "./EmptyState.vue";
-import Pagination from "./Pagination.vue";
-import { useDismissable } from "@/composables/useDismissable";
+import BaseTable from "./BaseTable.vue";
 
 const props = defineProps({
-  // columns: [{ key, label, sortable?, align?: 'left'|'right'|'center' }]
+  // columns: [{ key, label, sortable?, align?, format? }]
   columns: { type: Array, required: true },
   rows: { type: Array, default: () => [] },
   rowKey: { type: String, default: "id" },
@@ -15,25 +17,13 @@ const props = defineProps({
   emptyMessage: { type: String, default: "Tidak ada data untuk filter yang dipilih." },
 });
 
-const sortKey = ref(null);
+const sortKey = ref("");
 const sortDir = ref("asc");
 const page = ref(1);
-// `perPage` prop is the initial value; the picker below owns it after that.
+// Prop `perPage` hanya nilai awal; pemilih di footer yang memilikinya setelah itu.
 const perPage = ref(props.perPage);
-const { open: columnMenuOpen, root: columnMenuRoot, toggle: toggleColumnMenu } = useDismissable();
-const hiddenKeys = ref(new Set());
 
-const visibleColumns = computed(() => props.columns.filter((c) => !hiddenKeys.value.has(c.key)));
-
-function toggleColumn(key) {
-  const next = new Set(hiddenKeys.value);
-  if (next.has(key)) next.delete(key);
-  else next.add(key);
-  // Keep at least one column visible.
-  if (next.size < props.columns.length) hiddenKeys.value = next;
-}
-
-// Reset to first page whenever the underlying (filtered) rows change.
+// Kembali ke halaman pertama tiap kali baris (hasil filter) berubah.
 watch(
   () => props.rows,
   () => {
@@ -41,14 +31,14 @@ watch(
   },
 );
 
-function toggleSort(col) {
-  if (!col.sortable) return;
-  if (sortKey.value === col.key) {
-    sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
-  } else {
-    sortKey.value = col.key;
-    sortDir.value = "asc";
-  }
+function onSort({ key, dir }) {
+  sortKey.value = key;
+  sortDir.value = dir;
+}
+
+function onPerPage(n) {
+  perPage.value = n;
+  page.value = 1;
 }
 
 const sortedRows = computed(() => {
@@ -68,167 +58,26 @@ const pagedRows = computed(() => {
   const start = (page.value - 1) * perPage.value;
   return sortedRows.value.slice(start, start + perPage.value);
 });
-
-function setPerPage(n) {
-  perPage.value = Number(n);
-  page.value = 1;
-}
-
-const alignClass = (a) =>
-  a === "right" ? "text-right" : a === "center" ? "text-center" : "text-left";
-
-// Elipsis hanya untuk teks bebas. Kolom angka tak pernah butuh dipotong, dan
-// memotongnya diam-diam menyembunyikan digit.
-const NUMERIC_FORMATS = new Set(["number", "rupiah", "persen"]);
-function isNumeric(col) {
-  return NUMERIC_FORMATS.has(col.format) || col.align === "right";
-}
-
-const rupiahFmt = new Intl.NumberFormat("id-ID", {
-  style: "currency",
-  currency: "IDR",
-  maximumFractionDigits: 0,
-});
-
-// Default cell rendering when a page does not provide a `cell-<key>` slot.
-// `col.format`: 'number' | 'rupiah' formats with id-ID locale.
-function formatCell(value, col) {
-  if (value === null || value === undefined || value === "") return value;
-  if (col.format === "number" && typeof value === "number") return value.toLocaleString("id-ID");
-  if (col.format === "rupiah" && typeof value === "number") return rupiahFmt.format(value);
-  return value;
-}
 </script>
 
 <template>
-  <div class="panel-cut-frame">
-    <div class="overflow-hidden panel-cut bg-surface">
-    <div class="flex justify-end border-b border-border-default bg-surface-2 px-3 py-1.5">
-      <div ref="columnMenuRoot" class="relative">
-        <button
-          type="button"
-          class="rounded-control border border-border-default px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-3"
-          :aria-expanded="columnMenuOpen"
-          aria-haspopup="true"
-          @click="toggleColumnMenu"
-        >
-          Kolom ({{ visibleColumns.length }}/{{ columns.length }})
-        </button>
-        <div
-          v-if="columnMenuOpen"
-          class="absolute right-0 z-20 mt-1 w-56 max-h-72 overflow-y-auto rounded-control border border-border-default bg-surface p-1.5 shadow-lg"
-        >
-          <label
-            v-for="col in columns"
-            :key="col.key"
-            class="flex items-center gap-2 rounded-control px-2 py-1.5 text-sm text-ink hover:bg-surface-3"
-          >
-            <input
-              type="checkbox"
-              :checked="!hiddenKeys.has(col.key)"
-              @change="toggleColumn(col.key)"
-            />
-            {{ col.label }}
-          </label>
-        </div>
-      </div>
-    </div>
-    <!-- Tinggi dibatasi supaya tabel tidak memanjang sampai bawah laman:
-         badan tabel yang di-scroll, header sticky di dalam kontainer ini. -->
-    <div class="max-h-[65vh] overflow-auto scroll-slim">
-      <table class="w-full divide-y divide-border-default text-xs tabular-nums">
-        <thead class="bg-surface-2 sticky top-0 z-10">
-          <tr>
-            <th
-              v-for="col in visibleColumns"
-              :key="col.key"
-              scope="col"
-              :role="col.sortable ? 'button' : undefined"
-              :tabindex="col.sortable ? 0 : undefined"
-              :aria-sort="col.sortable ? (sortKey === col.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none') : undefined"
-              :class="[
-                'whitespace-nowrap border-b-2 border-border-strong px-2 py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted',
-                alignClass(col.align),
-                col.sortable ? 'cursor-pointer select-none hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500' : '',
-              ]"
-              @click="toggleSort(col)"
-              @keydown.enter.prevent="col.sortable && toggleSort(col)"
-              @keydown.space.prevent="col.sortable && toggleSort(col)"
-            >
-              <span class="inline-flex items-center gap-1">
-                {{ col.label }}
-                <span v-if="col.sortable && sortKey === col.key" class="text-brand-600">
-                  {{ sortDir === "asc" ? "▲" : "▼" }}
-                </span>
-              </span>
-            </th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-border-default">
-          <tr v-if="loading">
-            <td :colspan="visibleColumns.length" class="py-12">
-              <div class="flex justify-center"><Spinner /></div>
-            </td>
-          </tr>
-          <tr v-else-if="pagedRows.length === 0">
-            <td :colspan="visibleColumns.length">
-              <EmptyState :message="emptyMessage" />
-            </td>
-          </tr>
-          <tr
-            v-for="row in pagedRows"
-            :key="row[rowKey]"
-            v-show="!loading"
-            class="even:bg-surface-2/60 hover:bg-surface-3"
-          >
-            <td
-              v-for="col in visibleColumns"
-              :key="col.key"
-              :class="['px-2 py-1 leading-snug text-ink', alignClass(col.align)]"
-            >
-              <!-- Nilai panjang (nama barang/supplier) dipotong dengan elipsis:
-                   tanpa ini satu baris saja bisa memaksa tabel melebar dan
-                   memunculkan scroll horizontal di layar 1366px. Teks utuh tetap
-                   bisa dibaca lewat tooltip. Isi slot tak disentuh — di situ ada
-                   badge/tombol yang tak boleh dipotong. -->
-              <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
-                <span
-                  v-if="isNumeric(col)"
-                  class="block whitespace-nowrap"
-                >{{ formatCell(row[col.key], col) }}</span>
-                <span v-else class="block max-w-[26ch] truncate" :title="String(row[col.key] ?? '')">
-                  {{ formatCell(row[col.key], col) }}
-                </span>
-              </slot>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <div
-      v-if="!loading && sortedRows.length"
-      class="flex flex-wrap items-center justify-between gap-2 border-t border-border-default bg-surface-2 px-3 py-1.5"
-    >
-      <div class="flex items-center gap-2">
-        <label class="text-xs text-ink-muted">Per halaman:</label>
-        <select
-          :value="perPage"
-          @change="setPerPage($event.target.value)"
-          class="h-8 rounded-control border border-border-strong bg-surface px-2 text-sm text-ink"
-        >
-          <option value="25">25</option>
-          <option value="50">50</option>
-          <option value="100">100</option>
-        </select>
-      </div>
-      <Pagination
-        v-if="sortedRows.length > perPage"
-        v-model:page="page"
-        :total="sortedRows.length"
-        :per-page="perPage"
-      />
-      <span v-else class="text-sm text-ink-muted">Menampilkan semua {{ sortedRows.length }} data</span>
-    </div>
-    </div>
-  </div>
+  <BaseTable
+    :columns="columns"
+    :rows="pagedRows"
+    :row-key="rowKey"
+    :loading="loading"
+    :total="sortedRows.length"
+    :page="page"
+    :per-page="perPage"
+    :sort-key="sortKey"
+    :sort-dir="sortDir"
+    :empty-message="emptyMessage"
+    @page-change="page = $event"
+    @sort-change="onSort"
+    @per-page-change="onPerPage"
+  >
+    <template v-for="(_, name) in $slots" #[name]="slotProps">
+      <slot :name="name" v-bind="slotProps" />
+    </template>
+  </BaseTable>
 </template>
