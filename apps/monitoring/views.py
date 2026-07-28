@@ -28,7 +28,6 @@ from apps.core.models import (
     log_sync,
 )
 from apps.inventory import services as inv
-from apps.master_data import harga_beli as hb
 from apps.master_data import services as master
 from apps.transactions import services as tx
 from apps.core import reporting
@@ -757,61 +756,6 @@ def pergerakan_harga_index(request):
 
 
 # --- Sinkronisasi Harga antar-server ---------------------------------------
-
-# --- Audit Harga Beli (pembelian toko vs pembelian gudang) ----------------
-# Sinkronisasi legacy menerbitkan pembelian toko dengan harga_beli = harga JUAL
-# gudang; admin selama ini mengoreksinya manual. Halaman ini menemukan yang
-# terlewat. Gudang pembandingnya diambil dari ServerProfile.cost_source, jadi tak
-# ada pengaturan baru — atur di menu Koneksi Server.
-
-def audit_harga_beli_index(request):
-    profile = _active()
-    filters = {
-        "date_from": request.GET.get("date_from", ""),
-        "date_to": request.GET.get("date_to", ""),
-    }
-
-    # Deferred: membaca riwayat harga DUA server (penjualan gudang diagregasi,
-    # pembelian gudang penuh) lalu memindai pembelian toko. Cache dingin di
-    # profil WAN = belasan detik, jangan menahan first paint.
-    def load_audit():
-        if profile is None:
-            return {"rows": [], "conn_error": "Belum ada koneksi aktif."}
-        try:
-            return hb.audit_harga_beli(
-                profile,
-                date_from=filters["date_from"] or None,
-                date_to=filters["date_to"] or None,
-            )
-        except pyodbc.Error as exc:
-            return {"rows": [], "conn_error": mssql.friendly_error(exc, "Gagal memuat audit")}
-        except Exception:
-            log.exception("audit_harga_beli gagal")
-            return {"rows": [], "conn_error": "Gagal memuat audit harga beli."}
-
-    return render(request, "Admin/MasterData/AuditHargaBeli", props={
-        "audit": defer(load_audit),
-        "filters": filters,
-        "profil_aktif": profile.name if profile else "",
-    })
-
-
-def audit_harga_beli_terapkan(request):
-    profile = _active()
-    data = get_data(request)
-    items = data.get("items") or []
-    try:
-        n, rincian = hb.terapkan_koreksi(profile, items)
-        log_activity(request, "audit_harga_beli", f"Koreksi harga beli {profile.name}: {n} baris")
-        log_sync(request, feature="harga_beli", mode="audit", src=mssql.get_cost_source(profile),
-                 dst=profile, compared=len(items), applied=n, items=rincian)
-        request.session["flash_success"] = f"Koreksi diterapkan: {n} baris diperbarui."
-    except PermissionError as exc:
-        # Penjaga daftar-putih. Bukan kesalahan pengguna — beri tahu apa adanya.
-        request.session["flash_error"] = str(exc)
-    except pyodbc.Error as exc:
-        request.session["flash_error"] = mssql.friendly_error(exc, "Gagal menerapkan koreksi")
-    return redirect("/admin-panel/master/audit-harga-beli")
 
 
 def sync_harga_index(request):
