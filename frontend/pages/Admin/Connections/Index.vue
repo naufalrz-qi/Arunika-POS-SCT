@@ -239,8 +239,12 @@ function confirmDelete() {
           :placeholder="form.id ? 'Kosongkan jika tidak diubah' : ''"
           :error="form.errors.password"
         />
+        <!-- Bukan cuma retail: grosir juga perlu menunjuk gudang, dipakai Audit
+             Harga Beli untuk membandingkan pembelian toko dgn pembelian gudang.
+             Backend & model sudah mendukungnya sejak awal; hanya gerbang ini yang
+             menahannya. Gudang sendiri tak punya acuan di atasnya. -->
         <Select
-          v-if="form.db_type === 'retail'"
+          v-if="form.db_type !== 'gudang'"
           v-model="form.cost_source"
           label="Sumber Modal (Grosir/Gudang)"
           :options="costSourceOptions"
@@ -257,6 +261,10 @@ function confirmDelete() {
       </div>
       <p v-if="form.db_type === 'retail'" class="mt-3 text-xs text-ink-subtle">
         Server retail wajib punya acuan modal. Margin dihitung dari harga jual server sumber modal.
+      </p>
+      <p v-else-if="form.db_type === 'grosir'" class="mt-3 text-xs text-ink-subtle">
+        Opsional untuk grosir: isi dengan server gudang kalau ingin memakai Audit Harga Beli, yang
+        membandingkan pembelian di server ini dengan pembelian gudang.
       </p>
       <p class="mt-3 text-xs text-ink-subtle">
         Replica laporan: kalau diisi, laporan (penjualan/pembelian/dll) baca dari server ini alih-alih server di atas —
