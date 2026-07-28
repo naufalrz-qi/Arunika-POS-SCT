@@ -67,7 +67,6 @@ const summaryItems = computed(() => {
 <template>
   <AdminLayout title="Retur Penjualan">
     <ReportPage
-      title="Retur Penjualan"
       deferred-key="report"
       :data="report"
       :columns="columns"

@@ -29,8 +29,13 @@ def _apply_form(profile, data):
     profile.port = int(data.get("port") or 1433)
     profile.db_name = (data.get("db_name") or "").strip()
     profile.username = (data.get("username") or "").strip()
-    # Retail: acuan modal (server grosir/gudang). Non-retail: selalu kosong.
-    profile.cost_source_id = (data.get("cost_source") or None) if profile.db_type == DbType.RETAIL else None
+    # Acuan modal (server grosir/gudang). WAJIB untuk retail — margin dihitung
+    # dari harga jual server sumber. OPSIONAL untuk grosir, dipakai Audit Harga
+    # Beli membandingkan pembelian toko dgn pembelian gudang. Gudang sendiri tak
+    # punya acuan di atasnya, jadi selalu kosong.
+    profile.cost_source_id = (
+        None if profile.db_type == DbType.GUDANG else (data.get("cost_source") or None)
+    )
     # Replica opsional untuk baca laporan (disinkron via CDC, apps/transactions/cdc_sync.py).
     # Berlaku untuk semua tipe db, bukan cuma retail.
     profile.report_source_id = data.get("report_source") or None
@@ -46,6 +51,12 @@ def connections_save(request):
     _apply_form(profile, data)
     if profile.db_type == DbType.RETAIL and not profile.cost_source_id:
         request.session["flash_error"] = "Server retail wajib memilih Sumber Modal (grosir/gudang)."
+        return redirect("/admin-panel/connections")
+    # Sejak grosir boleh punya acuan modal, menunjuk diri sendiri jadi mungkin —
+    # dulu mustahil karena retail tak pernah muncul di daftar grosir/gudang.
+    # Audit yang membandingkan sebuah server dengan dirinya sendiri tak bermakna.
+    if profile.cost_source_id and conn_id and str(profile.cost_source_id) == str(conn_id):
+        request.session["flash_error"] = "Sumber modal tidak boleh server itu sendiri."
         return redirect("/admin-panel/connections")
     # The UI already hides self from the replica picker, but a crafted POST can
     # still send it — a profile whose report_source is itself is meaningless

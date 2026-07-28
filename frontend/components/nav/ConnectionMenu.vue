@@ -1,30 +1,32 @@
 <script setup>
 import { DB_TYPE_LABELS } from "@/utils/labels";
-import { computed, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { useConnectionStore } from "@/stores/connection";
+import { useDismissable } from "@/composables/useDismissable";
 import Icon from "./Icon.vue";
 
 const store = useConnectionStore();
 const { active, list, switching } = storeToRefs(store);
-const open = ref(false);
+const { open, root, close, toggle } = useDismissable();
 
 const typeName = DB_TYPE_LABELS;
 
 const dot = (status) => (status === "online" ? "bg-success-500" : status === "offline" ? "bg-danger-500" : "bg-neutral-300");
 
 function choose(c) {
-  open.value = false;
+  close();
   if (c.id !== active.value?.id) store.switchConnection(c.id);
 }
 </script>
 
 <template>
-  <div class="relative">
+  <div ref="root" class="relative">
     <button
-      class="flex h-10 items-center gap-2.5 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white transition-all duration-200 hover:border-white/20 hover:bg-white/10"
-      @click="open = !open"
-      @blur="open = false"
+      type="button"
+      class="flex h-10 items-center gap-2.5 rounded-control border border-white/10 bg-white/5 px-3 text-sm text-white transition-all duration-200 hover:border-white/20 hover:bg-white/10"
+      :aria-expanded="open"
+      aria-haspopup="menu"
+      @click="toggle"
     >
       <span v-if="switching" class="h-2 w-2 animate-pulse rounded-full bg-brand-400" />
       <span v-else :class="['h-2 w-2 rounded-full', dot(active?.status)]" />
@@ -41,8 +43,7 @@ function choose(c) {
     >
       <div
         v-if="open"
-        class="absolute right-0 z-[60] mt-2 w-72 overflow-hidden rounded-lg border border-border-default bg-surface shadow-lg"
-        @mousedown.prevent
+        class="absolute right-0 z-[60] mt-2 w-72 overflow-hidden rounded-control border border-border-default bg-surface shadow-lg"
       >
         <div class="border-b border-border-default px-4 py-2">
           <p class="text-xs font-semibold text-ink-muted">Ganti Koneksi Server</p>

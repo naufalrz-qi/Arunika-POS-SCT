@@ -39,9 +39,9 @@ watch(
     <!-- Row 1: brand + actions -->
     <div class="flex h-16 items-center gap-3 px-4 sm:px-6">
       <Link href="/admin-panel/dashboard" class="flex items-center gap-3 group">
-        <div class="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-brand-400 to-brand-700 text-white shadow-md transition-transform duration-300 group-hover:scale-105 group-hover:rotate-3">
+        <div class="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-control bg-gradient-to-br from-brand-400 to-brand-700 text-white shadow-md transition-transform duration-300 group-hover:scale-105 group-hover:rotate-3">
           <Icon name="crown" size="h-5 w-5" />
-          <div class="absolute inset-0 rounded-lg border border-white/20"></div>
+          <div class="absolute inset-0 rounded-control border border-white/20"></div>
         </div>
         <span class="hidden text-sm font-heading font-bold uppercase tracking-widest text-white sm:block">
           Sukses <span class="text-brand-300 transition-colors duration-300 group-hover:text-brand-200">Crown Toys</span>
@@ -50,7 +50,7 @@ watch(
 
       <div class="ml-auto flex items-center gap-2">
         <button
-          class="flex h-10 w-10 items-center justify-center rounded-lg border border-transparent text-white/70 transition-all duration-200 hover:border-white/10 hover:bg-white/5 hover:text-white"
+          class="flex h-10 w-10 items-center justify-center rounded-control border border-transparent text-white/70 transition-all duration-200 hover:border-white/10 hover:bg-white/5 hover:text-white"
           title="Ganti tema"
           @click="ui.toggleTheme()"
         >
@@ -59,8 +59,10 @@ watch(
         <ConnectionMenu />
         <UserMenu />
         <button
-          class="flex h-10 w-10 items-center justify-center rounded-lg border border-transparent text-white/70 transition-all duration-200 hover:border-white/10 hover:bg-white/5 hover:text-white lg:hidden"
+          class="flex h-10 w-10 items-center justify-center rounded-control border border-transparent text-white/70 transition-all duration-200 hover:border-white/10 hover:bg-white/5 hover:text-white lg:hidden"
           title="Menu"
+          aria-label="Buka menu navigasi"
+          :aria-expanded="drawerOpen"
           @click="drawerOpen = true"
         >
           <Icon name="menu" />
@@ -117,7 +119,7 @@ watch(
                 <span class="text-sm font-heading font-bold uppercase tracking-widest text-white">
                   Sukses <span class="text-brand-300">Crown Toys</span>
                 </span>
-                <button class="rounded-lg p-2 text-white/70 transition-all hover:bg-white/10 hover:rotate-90" @click="drawerOpen = false">
+                <button class="rounded-control p-2 text-white/70 transition-all hover:bg-white/10 hover:rotate-90" @click="drawerOpen = false">
                   <Icon name="close" />
                 </button>
               </div>
@@ -126,7 +128,8 @@ watch(
                 <div v-for="(tab, index) in tabs" :key="tab.key" class="mb-2 slide-right-enter opacity-0" :style="{ animationDelay: `${index * 50}ms` }">
                   <button
                     type="button"
-                    class="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-sm font-semibold text-white/80 transition-all duration-200 hover:bg-white/10"
+                    class="flex w-full items-center justify-between rounded-control px-3 py-2.5 text-sm font-semibold text-white/80 transition-all duration-200 hover:bg-white/10"
+                    :aria-expanded="!!openSection[tab.key]"
                     @click="toggleSection(tab.key)"
                   >
                     <span>{{ tab.label }}</span>
@@ -140,7 +143,7 @@ watch(
                     <template v-for="sub in tab.subsections" :key="sub.key">
                       <p
                         v-if="tab.subsections.length > 1"
-                        class="px-3 pb-1 pt-3 text-[10px] font-heading font-bold uppercase tracking-widest text-white/35"
+                        class="px-3 pb-1 pt-3 text-[11px] font-heading font-bold uppercase tracking-wide text-white/35"
                       >
                         {{ sub.label }}
                       </p>
@@ -149,7 +152,7 @@ watch(
                         :key="item.key"
                         :href="item.href"
                         :class="[
-                          'group flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all duration-200',
+                          'group flex items-center gap-3 rounded-control px-3 py-2 text-sm transition-all duration-200',
                           isActive(item.href)
                             ? 'bg-brand-600 text-white'
                             : 'text-white/60 hover:bg-white/10 hover:text-white hover:translate-x-1',

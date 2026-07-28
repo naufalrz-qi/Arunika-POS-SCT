@@ -14,6 +14,10 @@ axios.defaults.xsrfHeaderName = "X-CSRFTOKEN";
 const pages = import.meta.glob("../pages/**/*.vue");
 
 createInertiaApp({
+  // Tanpa ini setiap tab bertuliskan hal yang sama, dan admin yang membuka
+  // beberapa laporan sekaligus tak bisa membedakan tabnya. Judul per halaman
+  // dipasok AdminLayout lewat <Head>.
+  title: (title) => (title ? `${title} — Sukses Crown Toys` : "Sukses Crown Toys"),
   resolve: (name) => {
     const page = pages[`../pages/${name}.vue`];
     if (!page) {

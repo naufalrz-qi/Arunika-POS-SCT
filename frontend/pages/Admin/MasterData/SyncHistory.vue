@@ -50,10 +50,10 @@ const detail = ref(null);
     <Modal :show="!!detail" title="Detail Item Sinkronisasi" size="lg" @close="detail = null">
       <table class="w-full text-sm">
         <thead>
-          <tr class="text-ink-muted">
-            <th class="py-1 text-left">Item</th>
-            <th class="py-1 text-left">Kode</th>
-            <th class="py-1 text-left">Perubahan</th>
+          <tr class="text-left">
+            <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted text-left">Item</th>
+            <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted text-left">Kode</th>
+            <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted text-left">Perubahan</th>
           </tr>
         </thead>
         <tbody>

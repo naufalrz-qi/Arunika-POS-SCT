@@ -1,4 +1,5 @@
 <script setup>
+import { Head } from "@inertiajs/vue3";
 import TopNav from "@/components/nav/TopNav.vue";
 import SideNav from "@/components/nav/SideNav.vue";
 import ToastContainer from "@/components/ui/ToastContainer.vue";
@@ -12,7 +13,14 @@ const { activeSection } = useNav();
 </script>
 
 <template>
-  <div class="flex h-screen flex-col overflow-hidden bg-transparent">
+  <!-- Judul tab mengikuti judul halaman; formatnya diatur sekali di main.js.
+       AdminLayout satu-satunya pemilik judul (lihat <h1> di bawah), jadi di
+       sini pula tempatnya diteruskan ke <title>. -->
+  <Head v-if="title" :title="title" />
+  <!-- 100dvh, bukan 100vh: di browser ponsel 100vh termasuk area yang tertutup
+       toolbar, jadi baris terbawah (footer tabel: pemilih per-halaman dan
+       paginasi) tersembunyi di balik chrome browser. -->
+  <div class="flex h-[100dvh] flex-col overflow-hidden bg-transparent">
     <TopNav />
     <div class="flex min-h-0 flex-1 relative z-10 mt-3 lg:mt-4">
       <SideNav />
@@ -20,7 +28,7 @@ const { activeSection } = useNav();
         <div class="page-enter mx-auto max-w-[1600px] p-3 sm:p-4 lg:p-6">
           <div v-if="title" class="mb-6 flex items-end justify-between">
             <div>
-              <p v-if="activeSection" class="text-[11px] font-heading font-bold uppercase tracking-widest text-brand-500 mb-1">
+              <p v-if="activeSection" class="text-[11px] font-heading font-bold uppercase tracking-wide text-brand-500 mb-1">
                 // {{ activeSection.label }}
               </p>
               <h1 class="text-2xl font-heading font-bold text-ink tracking-tight">{{ title }}</h1>

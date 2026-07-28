@@ -126,7 +126,7 @@ async function openEdit(kd_barang) {
     </p>
 
     <!-- Tab: perubahan harga vs saran harga -->
-    <div class="mb-4 flex gap-1 rounded-card border border-border-default bg-surface-2 p-1 w-fit">
+    <div class="mb-4 flex gap-1 rounded-control border border-border-default bg-surface-2 p-1 w-fit">
       <button
         type="button"
         :class="[
@@ -205,7 +205,7 @@ async function openEdit(kd_barang) {
         <template #cell-aksi="{ row }">
           <Button
             size="sm"
-            variant="yellow-outline"
+            variant="accent"
             :disabled="!canEditChange(row)"
             :loading="editLoadingKd === row.kd_barang"
             :title="canEditChange(row) ? 'Edit harga & status barang' : 'Hanya untuk koneksi aktif — aktifkan koneksi ini di navbar'"
@@ -264,7 +264,7 @@ async function openEdit(kd_barang) {
           <template #cell-aksi="{ row }">
             <Button
               size="sm"
-              variant="yellow-outline"
+              variant="accent"
               :disabled="!saranIsActive"
               :loading="editLoadingKd === row.kd_barang"
               :title="saranIsActive ? 'Edit harga & status barang' : 'Hanya untuk koneksi aktif'"

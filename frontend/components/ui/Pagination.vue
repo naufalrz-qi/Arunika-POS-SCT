@@ -18,11 +18,14 @@ function go(p) {
 </script>
 
 <template>
-  <div class="flex items-center justify-between px-1 py-2 text-sm text-ink-muted">
+  <!-- Ukuran teks diwarisi dari footer tabel, bukan dipatok text-sm: dulu satu
+       baris footer memuat tiga ukuran sekaligus (label per-halaman text-xs,
+       ringkasan text-sm, isi paginasi text-sm). -->
+  <div class="flex items-center justify-between px-1 py-2 text-ink-muted">
     <span>Menampilkan {{ from }}–{{ to }} dari {{ total }}</span>
     <div class="flex items-center gap-1">
       <button
-        class="rounded-md border border-border-default px-2.5 py-1 disabled:opacity-40 hover:bg-surface-3"
+        class="rounded-control border border-border-default px-2.5 py-1 disabled:opacity-40 hover:bg-surface-3"
         :disabled="page <= 1"
         @click="go(page - 1)"
       >
@@ -30,7 +33,7 @@ function go(p) {
       </button>
       <span class="px-2">{{ page }} / {{ totalPages }}</span>
       <button
-        class="rounded-md border border-border-default px-2.5 py-1 disabled:opacity-40 hover:bg-surface-3"
+        class="rounded-control border border-border-default px-2.5 py-1 disabled:opacity-40 hover:bg-surface-3"
         :disabled="page >= totalPages"
         @click="go(page + 1)"
       >

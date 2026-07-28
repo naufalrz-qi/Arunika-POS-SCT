@@ -7,7 +7,7 @@ import ServerTable from "@/components/report/ServerTable.vue";
 import ExportButton from "@/components/ui/ExportButton.vue";
 
 const props = defineProps({
-  title: { type: String, required: true },
+  // Judul halaman sengaja tidak diterima di sini — AdminLayout yang memilikinya.
   deferredKey: { type: String, required: true }, // Inertia prop name, e.g. "report"
   data: { type: Object, default: null }, // the deferred payload
   columns: { type: Array, required: true },
@@ -25,9 +25,11 @@ const emit = defineEmits(["page-change", "sort-change", "per-page-change"]);
 
 <template>
   <div>
-    <div class="mb-4 flex items-center justify-between">
-      <h1 class="text-xl font-semibold text-ink">{{ title }}</h1>
-      <ExportButton v-if="exportHref" mode="server" :href="exportHref" />
+    <!-- Judul halaman dimiliki AdminLayout (bersama eyebrow seksi). Merender
+         ulang di sini membuat judul tercetak dua kali sekaligus dua <h1> dalam
+         satu dokumen; di sini cukup aksi kanan-atasnya. -->
+    <div v-if="exportHref" class="mb-4 flex items-center justify-end">
+      <ExportButton mode="server" :href="exportHref" />
     </div>
 
     <!-- Filter panel lives OUTSIDE Deferred so it shows instantly -->

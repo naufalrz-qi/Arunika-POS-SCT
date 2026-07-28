@@ -13,14 +13,16 @@ const open = ref(props.defaultOpen);
 </script>
 
 <template>
-  <div class="overflow-hidden rounded-card border border-border-default bg-surface shadow-sm">
+  <div class="panel-cut-frame panel-cut-frame-accent mb-4 last:mb-0">
+    <div class="mecha-card panel-cut bg-surface">
     <button
       type="button"
+      :aria-expanded="open"
       class="flex w-full items-center justify-between gap-3 px-5 py-3.5 text-left transition hover:bg-surface-3"
       @click="open = !open"
     >
       <div class="flex items-center gap-3">
-        <span v-if="icon" class="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-bg text-brand-fg">
+        <span v-if="icon" class="flex h-8 w-8 items-center justify-center rounded-control bg-brand-bg text-brand-fg">
           <Icon :name="icon" size="h-4 w-4" />
         </span>
         <div>
@@ -36,6 +38,7 @@ const open = ref(props.defaultOpen);
     </button>
     <div v-show="open" class="border-t border-border-default p-5">
       <slot />
+    </div>
     </div>
   </div>
 </template>

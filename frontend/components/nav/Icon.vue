@@ -36,8 +36,13 @@ const paths = {
   clock: "M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z",
   chevron: "M19.5 8.25l-7.5 7.5-7.5-7.5",
   refresh: "M16.023 9.348h4.992v-4.992m0 0l-3.181 3.183a8.25 8.25 0 00-11.667 0L2.985 9.348m0 0v-4.992m0 4.992h4.992M2.985 14.652H7.977m-4.992 0v4.992m0-4.992l3.181 3.183a8.25 8.25 0 0011.667 0l2.985-2.985m0 0h-4.992m4.992 0v4.992",
-  sun: "M12 3v2.25m6.364.386l-1.591 1.591M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-5.25v5.25m3.364 2.136l1.591 1.591M9 19.364l-1.591-1.591M5.25 12H3m18 0h-2.25",
-  moon: "M21.752 15.002A9.718 9.718 0 018.998 3.735c3.578 4.491 5.199 9.776 3.422 15.269a9.708 9.708 0 01-5.143-4.602c-4.354 5.146-3.914 10.471 1.028 15.968 4.3-1.324 8.396-4.566 10.562-8.68a9.702 9.702 0 001.884-8.588z",
+  // Kedua ikon tombol ganti tema ini sebelumnya path campuran yang rusak:
+  // `sun` terender sebagai muka jam bermakna jarum — membingungkan karena ada
+  // ikon `clock` betulan di daftar yang sama — dan `moon` terender sebagai
+  // sliver daun yang terpotong di luar viewBox, bukan sabit. Diganti path
+  // Heroicons v2 outline yang sebenarnya.
+  sun: "M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z",
+  moon: "M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z",
   close: "M6 18L18 6M6 6l12 12",
 };
 </script>

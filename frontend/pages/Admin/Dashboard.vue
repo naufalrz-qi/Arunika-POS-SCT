@@ -72,10 +72,10 @@ const chartData = computed(() =>
       <Card title="Fast Moving Bulan Ini" subtitle="Top 10 qty terjual — barang tanpa harga jual dikecualikan">
         <table v-if="(data.fast_movers || []).length" class="w-full text-sm">
           <thead>
-            <tr class="text-left text-xs text-ink-muted">
-              <th class="py-1.5 font-medium">Barang</th>
-              <th class="py-1.5 text-right font-medium">Qty</th>
-              <th class="py-1.5 text-right font-medium">Nilai</th>
+            <tr class="text-left">
+              <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted">Barang</th>
+              <th class="py-1.5 text-right text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted">Qty</th>
+              <th class="py-1.5 text-right text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted">Nilai</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-border-default">
@@ -96,7 +96,13 @@ const chartData = computed(() =>
       </Card>
 
       <Card title="Aktivitas Terbaru">
-        <ul class="divide-y divide-border-default">
+        <!-- Kartu sebelahnya ("Fast Moving") punya kalimat pengganti saat kosong,
+             kartu ini tidak — jadi <ul>-nya hanya kosong melompong dan terbaca
+             seperti gagal memuat, bukan "belum ada aktivitas". -->
+        <p v-if="!(data.recent_activity || []).length" class="text-sm text-ink-muted">
+          Belum ada aktivitas tercatat.
+        </p>
+        <ul v-else class="divide-y divide-border-default">
           <li v-for="a in data.recent_activity || []" :key="a.id" class="flex items-center justify-between py-3">
             <div class="flex items-center gap-3">
               <div class="flex h-8 w-8 items-center justify-center rounded-full bg-surface-3 text-xs font-semibold text-ink-muted">
