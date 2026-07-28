@@ -110,7 +110,7 @@ const columns = [
 
     <DataTable :columns="columns" row-key="kd_barang" :rows="displayed" :per-page="100" empty-message="Tidak ada data stok.">
       <template #cell-stok_akhir="{ value }">
-        <span :class="value <= 0 ? 'font-semibold text-danger-600' : 'font-semibold'">{{ num(value) }}</span>
+        <span :class="value <= 0 ? 'font-semibold text-danger-fg' : 'font-semibold'">{{ num(value) }}</span>
       </template>
       <template #cell-harga_average="{ value }">{{ rupiah(value) }}</template>
       <template #cell-harga_jual="{ value }">{{ rupiah(value) }}</template>

@@ -19,6 +19,9 @@ function onClient() {
 </script>
 
 <template>
-  <Button v-if="mode === 'server'" variant="success" size="sm" :href="href">{{ label }}</Button>
-  <Button v-else variant="success" size="sm" :disabled="disabled" @click="onClient">{{ label }}</Button>
+  <!-- `secondary`, bukan `success` (hijau pekat). Ekspor bukan tindakan utama
+       halaman mana pun — yang utama selalu tombol saring/tarik data. Dengan dua
+       tombol berwarna sekaligus, tak ada yang menunjukkan mana yang dituju. -->
+  <Button v-if="mode === 'server'" variant="secondary" size="sm" :href="href">{{ label }}</Button>
+  <Button v-else variant="secondary" size="sm" :disabled="disabled" @click="onClient">{{ label }}</Button>
 </template>

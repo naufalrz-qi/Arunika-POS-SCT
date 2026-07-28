@@ -14,14 +14,13 @@ const props = defineProps({
   href: { type: String, default: "" },
 });
 
-// Tanpa `panel-cut-sm`: clip-path memotong SEMUA yang dilukis elemen ini —
-// termasuk `border` (putus di 4 sudut diagonal) dan setiap `box-shadow` (glow
-// hover di bawah hilang total, karena shadow dilukis di luar kotak). Lihat
-// catatan panjang di main.css .panel-cut-frame. Solusi bevel butuh elemen
-// pembungkus, yang tak tersedia untuk satu <button>; jadi kontrol memakai
-// radius kecil — bevel tetap milik permukaan (kartu, tabel, panel).
+// Tombol di sini hanya berpindah warna saat disentuh. Sebelumnya tiap varian
+// membawa glow box-shadow berwarna, backdrop-blur, lapisan putih 10% lewat
+// ::before, dan skala 0.98 saat ditekan — lima efek untuk satu tindakan. Di
+// panel filter yang punya dua tombol dan di modal yang punya dua lagi, itu
+// membuat kontrol lebih ramai daripada data yang mereka saring.
 const base =
-  "inline-flex items-center justify-center gap-2 font-heading font-bold tracking-wide rounded-control transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 disabled:opacity-50 disabled:cursor-not-allowed active:translate-y-px active:scale-[0.98] border relative overflow-hidden group before:absolute before:inset-0 before:bg-white/10 before:opacity-0 hover:before:opacity-100 before:transition-opacity";
+  "inline-flex items-center justify-center gap-2 font-medium rounded-control border transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 focus-visible:ring-offset-surface disabled:opacity-50 disabled:cursor-not-allowed";
 
 // Enam varian, semuanya terpakai. Sebelumnya ada sepuluh: `warning`, `info`,
 // `yellow`, dan `accent` (merah) nol pemakaian — `variant="warning"` dan
@@ -29,17 +28,17 @@ const base =
 // Button. Nama `yellow-outline` menggambarkan warna, bukan makna, jadi diganti
 // `accent`: aksi yang menonjol tapi bukan destruktif (alur saran/ubah harga).
 const variants = {
-  primary: "bg-brand-600/90 text-white border-brand-500 hover:bg-brand-500 hover:border-brand-400 hover:shadow-[0_0_15px_var(--glow-brand)] backdrop-blur-sm",
-  secondary: "bg-surface/80 text-ink border-border-strong hover:bg-surface-2 hover:border-brand-400 hover:text-brand-600 hover:shadow-[0_0_12px_var(--glow-brand)] backdrop-blur-sm",
-  ghost: "text-ink-muted border-transparent hover:bg-surface-3/50 hover:text-ink",
-  danger: "bg-danger-600/90 text-white border-danger-500 hover:bg-danger-500 hover:border-danger-400 hover:shadow-[0_0_15px_var(--glow-danger)] backdrop-blur-sm",
-  success: "bg-success-600/90 text-white border-success-500 hover:bg-success-500 hover:border-success-400 hover:shadow-[0_0_15px_var(--glow-success)] backdrop-blur-sm",
-  accent: "bg-surface/80 text-ink border-rx-yellow hover:bg-warning-bg hover:text-warning-fg hover:shadow-[0_0_12px_var(--glow-accent)] backdrop-blur-sm",
+  primary: "bg-brand-600 text-white border-brand-600 hover:bg-brand-700 hover:border-brand-700",
+  secondary: "bg-surface text-ink border-border-strong hover:bg-surface-2",
+  ghost: "text-ink-muted border-transparent hover:bg-surface-3 hover:text-ink",
+  danger: "bg-danger-600 text-white border-danger-600 hover:bg-danger-700 hover:border-danger-700",
+  success: "bg-success-600 text-white border-success-600 hover:bg-success-700 hover:border-success-700",
+  accent: "bg-warning-bg text-warning-fg border-warning-600/40 hover:bg-warning-bg hover:border-warning-600",
 };
 
 const sizes = {
-  sm: "text-[11px] px-3 py-1.5 h-8",
-  md: "text-xs px-5 py-2.5 h-10",
+  sm: "text-xs px-2.5 py-1 h-7",
+  md: "text-sm px-4 py-2 h-9",
 };
 
 // Varian tak dikenal dulu menghasilkan `undefined` di daftar kelas, jadi

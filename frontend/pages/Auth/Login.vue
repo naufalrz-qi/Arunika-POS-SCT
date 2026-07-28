@@ -24,22 +24,16 @@ function submit() {
   <div class="flex min-h-screen items-center justify-center bg-surface-2 p-4">
     <div class="w-full max-w-sm">
       <div class="mb-6 text-center">
-        <div class="relative mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-control bg-gradient-to-br from-brand-400 to-brand-700 text-white shadow-lg">
-          <Icon name="crown" size="h-7 w-7" />
-          <div class="absolute inset-0 rounded-control border border-white/20"></div>
+        <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-control bg-brand-600 text-white">
+          <Icon name="crown" size="h-6 w-6" />
         </div>
-        <h1 class="text-xl font-heading font-bold uppercase tracking-wide text-ink">
-          Sukses <span class="text-brand-600">Crown Toys</span>
-        </h1>
-        <p class="text-sm text-ink-muted">Masuk untuk melanjutkan</p>
+        <h1 class="text-lg font-semibold text-ink">Sukses Crown Toys</h1>
+        <p class="mt-0.5 text-sm text-ink-muted">Masuk untuk melanjutkan</p>
       </div>
 
-      <!-- Layar pertama yang dilihat pengguna: dulu memakai rounded-card dan
-           rounded-2xl tanpa bevel sama sekali, jadi tak terlihat seperti
-           produknya sendiri. -->
-      <div class="panel-cut-frame panel-cut-frame-accent">
-        <div class="panel-cut overflow-hidden bg-surface">
-        <div class="panel-strip h-1" />
+      <!-- Layar pertama yang dilihat pengguna. Kotaknya sama persis dengan
+           tabel di dalam aplikasi — satu-satunya permukaan yang terangkat. -->
+      <div class="surface-raised overflow-hidden">
         <form class="space-y-4 p-6" @submit.prevent="submit">
           <Banner
             v-if="sesiBerakhir"
@@ -68,7 +62,6 @@ function submit() {
           />
           <Button type="submit" class="w-full" :loading="form.processing">Masuk</Button>
         </form>
-        </div>
       </div>
     </div>
   </div>

@@ -51,9 +51,9 @@ const detail = ref(null);
       <table class="w-full text-sm">
         <thead>
           <tr class="text-left">
-            <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted text-left">Item</th>
-            <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted text-left">Kode</th>
-            <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted text-left">Perubahan</th>
+            <th class="py-1.5 text-[11px] font-semibold text-ink-muted text-left">Item</th>
+            <th class="py-1.5 text-[11px] font-semibold text-ink-muted text-left">Kode</th>
+            <th class="py-1.5 text-[11px] font-semibold text-ink-muted text-left">Perubahan</th>
           </tr>
         </thead>
         <tbody>

@@ -73,9 +73,9 @@ const chartData = computed(() =>
         <table v-if="(data.fast_movers || []).length" class="w-full text-sm">
           <thead>
             <tr class="text-left">
-              <th class="py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted">Barang</th>
-              <th class="py-1.5 text-right text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted">Qty</th>
-              <th class="py-1.5 text-right text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted">Nilai</th>
+              <th class="py-1.5 text-[11px] font-semibold text-ink-muted">Barang</th>
+              <th class="py-1.5 text-right text-[11px] font-semibold text-ink-muted">Qty</th>
+              <th class="py-1.5 text-right text-[11px] font-semibold text-ink-muted">Nilai</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-border-default">
@@ -89,7 +89,7 @@ const chartData = computed(() =>
         <p v-else class="text-sm text-ink-muted">Belum ada penjualan bulan ini.</p>
         <Link
           href="/admin-panel/analitik/fmi-penjualan"
-          class="mt-3 inline-block text-xs font-medium text-brand-500 hover:underline"
+          class="mt-3 inline-block text-xs font-medium text-brand-fg hover:underline"
         >
           Lihat semua (analisis Pareto) →
         </Link>

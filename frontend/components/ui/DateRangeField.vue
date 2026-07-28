@@ -45,21 +45,21 @@ const presets = [
   <div class="space-y-2">
     <div class="grid grid-cols-2 gap-2">
       <label class="block">
-        <span class="mb-1.5 block text-[11px] font-heading font-semibold tracking-wide text-ink-muted">Dari {{ label }}</span>
+        <span class="mb-1 block text-xs font-medium text-ink-muted">Dari {{ label }}</span>
         <input
           type="date"
           :value="from"
           @input="emit('update:from', $event.target.value)"
-          class="h-10 w-full rounded border border-border-strong bg-surface/50 px-3 text-sm text-ink transition-all duration-200 hover:border-brand-400 focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 focus:outline-none"
+          class="h-9 w-full rounded-control border border-border-strong bg-surface px-2.5 text-sm text-ink transition-colors duration-150 focus:border-brand-500 focus:ring-2 focus:ring-brand-500 focus:outline-none"
         />
       </label>
       <label class="block">
-        <span class="mb-1.5 block text-[11px] font-heading font-semibold tracking-wide text-ink-muted">Sampai {{ label }}</span>
+        <span class="mb-1 block text-xs font-medium text-ink-muted">Sampai {{ label }}</span>
         <input
           type="date"
           :value="to"
           @input="emit('update:to', $event.target.value)"
-          class="h-10 w-full rounded border border-border-strong bg-surface/50 px-3 text-sm text-ink transition-all duration-200 hover:border-brand-400 focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 focus:outline-none"
+          class="h-9 w-full rounded-control border border-border-strong bg-surface px-2.5 text-sm text-ink transition-colors duration-150 focus:border-brand-500 focus:ring-2 focus:ring-brand-500 focus:outline-none"
         />
       </label>
     </div>

@@ -147,15 +147,15 @@ const columns = [
         </Card>
         <Card>
           <p class="text-xs text-ink-muted">Masuk (satuan terkecil)</p>
-          <p class="text-lg font-semibold text-success-700">{{ num(summary.totalDebet) }}</p>
+          <p class="text-lg font-semibold text-success-fg">{{ num(summary.totalDebet) }}</p>
         </Card>
         <Card>
           <p class="text-xs text-ink-muted">Keluar (satuan terkecil)</p>
-          <p class="text-lg font-semibold text-danger-600">{{ num(summary.totalKredit) }}</p>
+          <p class="text-lg font-semibold text-danger-fg">{{ num(summary.totalKredit) }}</p>
         </Card>
         <Card>
           <p class="text-xs text-ink-muted">Selisih (satuan terkecil)</p>
-          <p class="text-lg font-semibold text-brand-700">{{ num(summary.saldo) }}</p>
+          <p class="text-lg font-semibold text-brand-fg">{{ num(summary.saldo) }}</p>
         </Card>
       </div>
 
@@ -185,7 +185,7 @@ const columns = [
         <template #cell-kredit="{ value }">{{ value ? num(value) : "—" }}</template>
         <template #cell-harga="{ value }">{{ value ? rupiah(value) : "—" }}</template>
         <template #cell-saldo="{ value }">
-          <span :class="value < 0 ? 'font-medium text-danger-600' : 'font-medium'">{{ num(value) }}</span>
+          <span :class="value < 0 ? 'font-medium text-danger-fg' : 'font-medium'">{{ num(value) }}</span>
         </template>
       </DataTable>
     </div>

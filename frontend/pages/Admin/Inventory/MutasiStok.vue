@@ -105,7 +105,7 @@ const columns = [
         <template #cell-masuk="{ value }">{{ value ? num(value) : "—" }}</template>
         <template #cell-keluar="{ value }">{{ value ? num(value) : "—" }}</template>
         <template #cell-stok="{ value }">
-          <span :class="value < 0 ? 'font-semibold text-danger-600' : 'font-semibold'">{{ num(value) }}</span>
+          <span :class="value < 0 ? 'font-semibold text-danger-fg' : 'font-semibold'">{{ num(value) }}</span>
         </template>
       </DataTable>
     </Deferred>

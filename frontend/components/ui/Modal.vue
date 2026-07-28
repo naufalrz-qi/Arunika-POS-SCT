@@ -88,32 +88,30 @@ onBeforeUnmount(() => {
           leave-active-class="transition duration-100 ease-in"
           leave-to-class="opacity-0 scale-95"
         >
-          <!-- Modal adalah permukaan, jadi memakai bevel seperti kartu dan tabel;
-               border dan shadow-nya hidup di .panel-cut-frame karena clip-path
-               memakan keduanya di elemen yang diclip. -->
+          <!-- Modal melayang di atas halaman, bukan bagian dari kanvasnya, jadi
+               ia boleh memakai bayangan sekalipun permukaan lain rata — tanpa
+               itu ia menempel ke latar. -->
           <div
             v-if="show"
             ref="panel"
             role="dialog"
             aria-modal="true"
             :aria-label="title || undefined"
-            :class="['panel-cut-frame panel-cut-frame-accent relative w-full shadow-xl', sizes[size]]"
+            :class="['surface-raised relative flex max-h-[85vh] w-full flex-col overflow-hidden shadow-lg', sizes[size]]"
           >
-            <div class="panel-cut flex max-h-[85vh] flex-col bg-surface">
-            <div class="flex shrink-0 items-center justify-between border-b border-border-default bg-surface-3 px-5 py-3.5">
-              <h3 class="text-base font-heading font-semibold text-ink">{{ title }}</h3>
+            <div class="flex shrink-0 items-center justify-between border-b border-border-default px-4 py-3">
+              <h3 class="text-base font-semibold text-ink">{{ title }}</h3>
               <button class="rounded-control p-1 text-ink-muted hover:bg-surface-3 hover:text-ink" aria-label="Tutup" title="Tutup" @click="emit('close')">
                 <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
-            <div class="min-h-0 overflow-y-auto px-5 py-4">
+            <div class="min-h-0 overflow-y-auto px-4 py-4">
               <slot />
             </div>
-            <div v-if="$slots.footer" class="flex shrink-0 justify-end gap-2 border-t border-border-default bg-surface-2 px-5 py-3.5">
+            <div v-if="$slots.footer" class="flex shrink-0 justify-end gap-2 border-t border-border-default bg-surface-2 px-4 py-3">
               <slot name="footer" />
-            </div>
             </div>
           </div>
         </Transition>

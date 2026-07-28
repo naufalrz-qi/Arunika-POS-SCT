@@ -25,7 +25,7 @@ function save() {
   <AdminLayout title="Profil Saya">
     <Card class="max-w-lg">
       <div class="mb-4 flex items-center gap-3">
-        <div class="flex h-12 w-12 items-center justify-center rounded-full bg-brand-100 text-lg font-semibold text-brand-700">
+        <div class="flex h-12 w-12 items-center justify-center rounded-full bg-brand-bg text-lg font-semibold text-brand-fg">
           {{ (profile.name || profile.username || "?").charAt(0).toUpperCase() }}
         </div>
         <div>

@@ -61,8 +61,8 @@ const advancedOpen = ref(
 </script>
 
 <template>
-  <div class="panel-cut-frame panel-cut-frame-accent mb-4">
-    <div class="mecha-card panel-cut bg-surface">
+  <div class="surface-flat mb-4">
+    <div>
       <button
         type="button"
         :aria-expanded="open"
@@ -74,7 +74,7 @@ const advancedOpen = ref(
           <span class="text-sm font-semibold text-ink">Filter</span>
           <span
             v-if="activeCount"
-            class="rounded-full bg-brand-500 px-2 py-0.5 text-[10px] font-bold leading-none text-white"
+            class="rounded-full bg-brand-bg px-2 py-0.5 text-[10px] font-semibold leading-none text-brand-fg"
           >
             {{ activeCount }} aktif
           </span>
@@ -109,10 +109,9 @@ const advancedOpen = ref(
               type="button"
               :aria-expanded="advancedOpen"
               @click="advancedOpen = !advancedOpen"
-              class="col-span-full flex items-center gap-2 border-t border-border-default pt-3 text-left text-[11px] font-heading font-bold uppercase tracking-wide text-ink-subtle transition-colors hover:text-brand-fg"
+              class="col-span-full flex items-center gap-2 border-t border-border-default pt-3 text-left text-xs font-semibold text-ink-muted transition-colors hover:text-ink"
             >
-              <span class="h-3 w-0.5 rounded-full bg-rx-yellow"></span>
-              Filter Lanjutan
+              Filter lanjutan
               <Icon
                 name="chevron"
                 size="h-3.5 w-3.5"

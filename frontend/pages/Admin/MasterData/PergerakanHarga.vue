@@ -145,7 +145,7 @@ async function openEdit(kd_barang) {
         ]"
         @click="tab = 'saran'"
       >
-        Saran Harga<span v-if="data" class="ml-1.5 rounded-full bg-rx-yellow px-1.5 text-[10px] font-bold text-ink">{{ saran.length }}</span>
+        Saran Harga<span v-if="data" class="ml-1.5 rounded-full bg-warning-bg px-1.5 text-[10px] font-semibold text-warning-fg">{{ saran.length }}</span>
       </button>
     </div>
 
@@ -198,7 +198,7 @@ async function openEdit(kd_barang) {
           <span class="font-semibold text-ink">{{ rupiah(value) }}</span>
         </template>
         <template #cell-selisih="{ value }">
-          <span :class="value < 0 ? 'text-danger-600' : 'text-success-700'">
+          <span :class="value < 0 ? 'text-danger-fg' : 'text-success-fg'">
             {{ value > 0 ? "+" : "" }}{{ rupiah(value) }}
           </span>
         </template>
@@ -257,7 +257,7 @@ async function openEdit(kd_barang) {
             <span class="font-semibold text-ink tabular-nums">{{ rupiah(value) }}</span>
           </template>
           <template #cell-selisih="{ value }">
-            <span :class="['tabular-nums', value < 0 ? 'text-danger-600' : 'text-success-700']">
+            <span :class="['tabular-nums', value < 0 ? 'text-danger-fg' : 'text-success-fg']">
               {{ value > 0 ? "+" : "" }}{{ rupiah(value) }}
             </span>
           </template>

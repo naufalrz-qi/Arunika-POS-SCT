@@ -147,7 +147,7 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
                   :key="m.key"
                   :class="[
                     'flex items-center gap-3 rounded-control border px-3 py-2.5 cursor-pointer transition-colors',
-                    checked[m.key] ? 'border-brand-500/60 bg-brand-50' : 'border-border-default hover:bg-surface-2',
+                    checked[m.key] ? 'border-brand-500/60 bg-brand-bg' : 'border-border-default hover:bg-surface-2',
                   ]"
                 >
                   <input type="checkbox" v-model="checked[m.key]" class="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500" />

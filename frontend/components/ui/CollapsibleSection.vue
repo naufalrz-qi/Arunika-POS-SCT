@@ -13,16 +13,15 @@ const open = ref(props.defaultOpen);
 </script>
 
 <template>
-  <div class="panel-cut-frame panel-cut-frame-accent mb-4 last:mb-0">
-    <div class="mecha-card panel-cut bg-surface">
+  <div class="surface-flat mb-4 last:mb-0">
     <button
       type="button"
       :aria-expanded="open"
-      class="flex w-full items-center justify-between gap-3 px-5 py-3.5 text-left transition hover:bg-surface-3"
+      class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-2"
       @click="open = !open"
     >
       <div class="flex items-center gap-3">
-        <span v-if="icon" class="flex h-8 w-8 items-center justify-center rounded-control bg-brand-bg text-brand-fg">
+        <span v-if="icon" class="flex h-7 w-7 items-center justify-center rounded-control bg-surface-3 text-ink-muted">
           <Icon :name="icon" size="h-4 w-4" />
         </span>
         <div>
@@ -33,12 +32,11 @@ const open = ref(props.defaultOpen);
       <Icon
         name="chevron"
         size="h-4 w-4"
-        :class="['shrink-0 text-ink-muted transition-transform duration-200', open ? '' : '-rotate-90']"
+        :class="['shrink-0 text-ink-subtle transition-transform duration-200', open ? '' : '-rotate-90']"
       />
     </button>
-    <div v-show="open" class="border-t border-border-default p-5">
+    <div v-show="open" class="border-t border-border-default p-4">
       <slot />
-    </div>
     </div>
   </div>
 </template>
