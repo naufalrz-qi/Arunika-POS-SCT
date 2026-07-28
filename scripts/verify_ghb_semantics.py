@@ -146,6 +146,50 @@ def check_dual_mode(cur) -> None:
     assert not bad, f"[MODE DUAL] {len(bad)} kasus tidak cocok dgn GetHargaBersih"
 
 
+def check_derived_columns(cur) -> None:
+    """Kolom turunan vs dua UDF legacy lain (selain GetTotalPenjualan).
+
+    Ketiga UDF legacy saling konsisten & semuanya pakai GetHargaBersih:
+        GetTotalPenjualan       = net_pre_tax * (1 + pajak) - voucher - diskon_uang
+        GetTotalPajakPenjualan  = pajak * net_pre_tax   <- dikali langsung, TANPA /100
+        GetTotalDiskonPenjualan = total_kotor - net_pre_tax + diskon_uang
+
+    Kolom turunan kita cocok secara aljabar:
+        potongan = total_kotor - (total_bersih - pajak)
+                 = total_kotor - net_pre_tax + diskon_uang  == GetTotalDiskonPenjualan
+        pajak    = net_pre_tax * pajak_rate                 == GetTotalPajakPenjualan
+
+    Uji ini penjaga tambahan: kalau seseorang mengembalikan `/100.0` atau
+    memperlakukan diskon header sbg rupiah flat, pajak akan meleset tepat 100x
+    dan potongan mengecil jadi sekadar nilai diskon mentah -- keduanya ketahuan
+    di sini walau GetTotalPenjualan entah bagaimana lolos."""
+    print("\n[KOLOM TURUNAN] potongan & pajak vs GetTotalDiskon/PajakPenjualan ...", flush=True)
+    cur.execute(f"""
+        SELECT n.no_transaksi,
+               n.total_kotor - (n.total_bersih - n.pajak) AS potongan_kode,
+               dbo.GetTotalDiskonPenjualan(n.no_transaksi) AS potongan_udf,
+               n.pajak AS pajak_kode,
+               dbo.GetTotalPajakPenjualan(n.no_transaksi) AS pajak_udf
+        FROM ({_nota_net(HDR_NONZERO)}) n
+    """)
+    bad_d, bad_p, n = [], [], 0
+    for no, pot_k, pot_u, pjk_k, pjk_u in cur.fetchall():
+        if pot_u is None or pjk_u is None:
+            continue  # nota tanpa baris pasangan di UDF -- bukan kegagalan uji
+        n += 1
+        if abs(float(pot_k) - float(pot_u)) > TOL:
+            bad_d.append((no.strip(), float(pot_k), float(pot_u)))
+        if abs(float(pjk_k) - float(pjk_u)) > TOL:
+            bad_p.append((no.strip(), float(pjk_k), float(pjk_u)))
+    for label, bad, udf in (("potongan", bad_d, "GetTotalDiskonPenjualan"),
+                            ("pajak", bad_p, "GetTotalPajakPenjualan")):
+        for no, ours, theirs in bad[:5]:
+            print(f"    MISMATCH {label} {no}: kode={ours:,.2f} udf={theirs:,.2f}")
+        assert not bad, f"[KOLOM TURUNAN] {len(bad)} nota: {label} tidak cocok {udf}"
+    assert n > 0, "[KOLOM TURUNAN] tidak ada nota terambil -- uji tidak bermakna"
+    print(f"    OK: {n} nota cocok utk potongan DAN pajak (toleransi {TOL})")
+
+
 def dump_csv(cur, path: str) -> None:
     """Daftar audit: nota terdampak, total lama (formula pra-perbaikan) vs baru."""
     lama_line = ("(d.qty * (d.harga_jual - COALESCE(d.diskon1,0) - COALESCE(d.diskon2,0) "
@@ -194,6 +238,7 @@ def main() -> int:
         check_dual_mode(cur)
         check_notas(cur, "NOTA TERDAMPAK", HDR_NONZERO)
         check_notas(cur, "KONTROL (tanpa diskon header/pajak)", HDR_ZERO, top="TOP 500")
+        check_derived_columns(cur)
         if args.csv:
             dump_csv(cur, args.csv)
     finally:

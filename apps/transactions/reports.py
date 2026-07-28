@@ -8,31 +8,6 @@ Each report contributes:
 import datetime as dt
 
 
-def _line_net(price_col: str, alias: str = "d") -> str:
-    """qty * (price - d1 - d2 - d3 - d4), NULL-safe.
-
-    diskon1-4 are flat Rupiah-per-unit amounts, not percentages — verified
-    against t_penjualan_detail.total on the legacy schema (e.g. harga_jual
-    39902.85, diskon1 2.85 -> total 39900; harga_jual 168000, diskon1 26250
-    -> total 141750). Treating them as a "1 - d/100" percent factor is wrong
-    even for small values, and goes catastrophically negative once diskon1
-    exceeds 100 (which happens for ~1% of real rows).
-    """
-    return (
-        f"({alias}.qty * ({alias}.{price_col}"
-        f" - COALESCE({alias}.diskon1, 0)"
-        f" - COALESCE({alias}.diskon2, 0)"
-        f" - COALESCE({alias}.diskon3, 0)"
-        f" - COALESCE({alias}.diskon4, 0)))"
-    )
-
-
-HDR_DISKON = (
-    "(COALESCE(h.diskon1, 0) + COALESCE(h.diskon2, 0)"
-    " + COALESCE(h.diskon3, 0) + COALESCE(h.diskon4, 0))"
-)
-
-
 def _ghb(price: str, diskon: list[str], pajak: str = "0", ppnbm: str = "0") -> str:
     """Emulasi UDF dbo.GetHargaBersih sbg satu ekspresi SQL (PRD §5.3: no UDF call).
 
@@ -56,6 +31,32 @@ def _ghb(price: str, diskon: list[str], pajak: str = "0", ppnbm: str = "0") -> s
     return f"(CASE WHEN ({price}) > 0 THEN {v} ELSE ({price}) END)"
 
 
+def _disk4(alias: str) -> list[str]:
+    """Keempat kolom diskon1-4 milik `alias`, NULL-safe — satu definisi dipakai
+    baik level baris (_unit_net) maupun level header (_nota_net/_pembelian_nota)."""
+    return [f"COALESCE({alias}.diskon{i}, 0)" for i in (1, 2, 3, 4)]
+
+
+def _unit_net(price_col: str, alias: str = "d") -> str:
+    """Harga bersih PER UNIT setelah diskon1-4 level baris, semantik GHB.
+
+    Menggantikan aritmetika flat lama (`price - d1 - d2 - d3 - d4`). Klaim lama
+    "diskon1-4 selalu rupiah flat" benar untuk 2.990.175 dari 2.990.262 baris
+    t_penjualan_detail, tapi salah untuk 87 sisanya: 82 baris menyimpan diskon
+    sebagai fraksi (mis. harga_jual 58400 diskon1 0.2 -> kolom `total` 140160
+    utk qty 3, bukan 175199.4 ala flat), dan 85 baris harga_jual <= 0 jadi
+    subtotal negatif palsu tanpa guard UDF.
+
+    _ghb benar untuk KEDUA mode sekaligus: cabang |d| >= 1 memang identik dgn
+    pengurangan flat, jadi 99,997% baris yang sudah benar tetap tidak bergerak."""
+    return _ghb(f"{alias}.{price_col}", _disk4(alias))
+
+
+def _line_net(price_col: str, alias: str = "d") -> str:
+    """qty * harga bersih per unit (diskon1-4 level baris, semantik GHB)."""
+    return f"({alias}.qty * {_unit_net(price_col, alias)})"
+
+
 def _search(where: list, params: list, f: dict, cols: list) -> None:
     """Append LIKE clause when f['search'] is set."""
     if f["search"]:
@@ -65,19 +66,65 @@ def _search(where: list, params: list, f: dict, cols: list) -> None:
 
 
 def _nota_net(where_sql: str) -> str:
-    """Per-nota subquery: header net total per R4.1."""
-    net = f"SUM({_line_net('harga_jual')}) - {HDR_DISKON} - COALESCE(h.diskon_uang, 0)"
+    """Per-nota subquery: header net total, semantik UDF legacy.
+
+    TIGA UDF legacy (diverifikasi dari sys.sql_modules) saling konsisten dan
+    semuanya memakai GetHargaBersih utk diskon header:
+        GetTotalPenjualan      = net_pre_tax * (1 + pajak) - voucher - diskon_uang
+        GetTotalPajakPenjualan = pajak * net_pre_tax          <- DIKALI LANGSUNG
+        GetTotalDiskonPenjualan= total_kotor - net_pre_tax + diskon_uang
+    dgn net_pre_tax = SUM(GHB(GHB(harga_jual, d.diskon1-4), h.diskon1-4) * qty).
+
+    Tiga hal yang dulu salah dan diperbaiki di sini:
+    1. h.diskon1-4 BUKAN rupiah flat. Di DB live seluruh nota berdiskon header
+       bernilai fraksi (0.05/0.1/0.25/...), tak satu pun >= 1 — versi lama
+       mengurangi Rp0,05 alih-alih 5%. Tetap dipakai _ghb (dual-mode) bukan
+       hardcode fraksi, karena mode rupiah flat masih bisa muncul dari aplikasi
+       legacy kapan saja.
+    2. h.pajak juga fraksi, bukan angka-persen: `/100.0` membuat pajak 0.05
+       dihitung 0,05% alih-alih 5%. GetTotalPajakPenjualan mengalikan `pajak`
+       langsung tanpa /100 — konfirmasi independen.
+    3. diskon_uang dikurangi PALING AKHIR (setelah pajak), bukan sebelum.
+       diskon_uang sendiri memang rupiah flat, itu sudah benar.
+
+    Diskon header diterapkan SEKALI per nota di outer (atas SUM baris), bukan
+    per baris seperti UDF. Untuk diskon persen keduanya setara secara aljabar
+    (distributif) — dicek atas seluruh nota terdampak, selisih maks 3,6e-12,
+    murni noise float. Keduanya baru berbeda pada mode rupiah flat, yang legacy
+    kurangi dari TIAP baris; nol kejadian di DB ini (tak ada header diskon
+    |d| >= 1), dan bentuk per-baris memakan 2x waktu Kas Harian/Summary. Kalau
+    suatu saat muncul header diskon rupiah flat, pindahkan _ghb header ke dalam
+    SUM (`SUM(_ghb(_unit_net(...), _disk4('h')) * d.qty)`) — h.diskon1-4 boleh
+    dirujuk di dalam SUM() karena semuanya kolom GROUP BY.
+
+    Bentuk dua level disengaja: inner mengagregasi baris, outer menerapkan
+    diskon header + pajak sekali per nota. Selain lebih murah, ini menjaga
+    jumlah ekspresi GHB per statement tetap kecil (risiko error 8632, lihat
+    docstring _ghb) — Kas Harian menanam _nota_net dua kali per statement.
+
+    Voucher sengaja TIDAK dikurangi walau GetTotalPenjualan menguranginya;
+    lihat catatan di bagian Piutang."""
+    net_pre_tax = _ghb("net_lines", ["hd1", "hd2", "hd3", "hd4"])
     return (
+        "SELECT no_transaksi, tanggal, kd_customer, kd_divisi, status_raw, kd_voucher, "
+        "kd_user, kd_kas, tanggal_jatuh_tempo, total_kotor, "
+        f"({net_pre_tax}) * pajak_rate AS pajak, "
+        f"({net_pre_tax}) * (1 + pajak_rate) - diskon_uang AS total_bersih "
+        "FROM ("
         "SELECT h.no_transaksi, MIN(h.tanggal) AS tanggal, MIN(h.kd_customer) AS kd_customer, "
         "MIN(h.kd_divisi) AS kd_divisi, MIN(h.status) AS status_raw, MIN(h.kd_voucher) AS kd_voucher, "
         "MIN(h.kd_user) AS kd_user, MIN(h.kd_kas) AS kd_kas, MIN(h.tanggal_jatuh_tempo) AS tanggal_jatuh_tempo, "
         "SUM(d.qty * d.harga_jual) AS total_kotor, "
-        f"({net}) * COALESCE(MIN(h.pajak), 0) / 100.0 AS pajak, "
-        f"({net}) * (1 + COALESCE(MIN(h.pajak), 0) / 100.0) AS total_bersih "
+        "COALESCE(MIN(h.pajak), 0) AS pajak_rate, "
+        "COALESCE(MIN(h.diskon_uang), 0) AS diskon_uang, "
+        "COALESCE(MIN(h.diskon1), 0) AS hd1, COALESCE(MIN(h.diskon2), 0) AS hd2, "
+        "COALESCE(MIN(h.diskon3), 0) AS hd3, COALESCE(MIN(h.diskon4), 0) AS hd4, "
+        f"SUM({_unit_net('harga_jual')} * d.qty) AS net_lines "
         "FROM t_penjualan h "
         "INNER JOIN t_penjualan_detail d ON h.no_transaksi = d.no_transaksi "
         f"WHERE {where_sql} "
         "GROUP BY h.no_transaksi, h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.diskon_uang, h.pajak"
+        ") nz"
     )
 
 
@@ -144,12 +191,10 @@ def penjualan_detail(f):
         "COALESCE(d.diskon3, 0) AS dd3, COALESCE(d.diskon4, 0) AS dd4, "
         "COALESCE(h.diskon1, 0) AS dt1, COALESCE(h.diskon2, 0) AS dt2, "
         "COALESCE(h.diskon3, 0) AS dt3, COALESCE(h.diskon4, 0) AS dt4, "
-        # Harga Bersih: per-unit price net of item-level diskon1-4 only. Header
-        # diskon1-4/pajak are a nota-level adjustment applied once on the SUM
-        # (see _nota_net), not something that distributes meaningfully back
-        # onto a single line — deliberately not replicated here.
-        "(d.harga_jual - COALESCE(d.diskon1, 0) - COALESCE(d.diskon2, 0) "
-        "- COALESCE(d.diskon3, 0) - COALESCE(d.diskon4, 0)) AS harga_bersih, "
+        # Harga Bersih: harga per unit net diskon1-4 level baris saja. Diskon
+        # header + pajak adalah penyesuaian level nota (lihat _nota_net) —
+        # sengaja tidak direplikasi ke satu baris di sini.
+        f"{_unit_net('harga_jual')} AS harga_bersih, "
         f"{_line_net('harga_jual')} AS subtotal "
         "FROM t_penjualan h "
         "INNER JOIN t_penjualan_detail d ON h.no_transaksi = d.no_transaksi "
@@ -203,18 +248,11 @@ def penjualan_hpp(f):
 
     # Net jual per unit terjual: GHB item (diskon baris, tanpa pajak) -> GHB
     # header (diskon nota + pajak). Dua guard `harga>0` dipertahankan bertingkat.
-    item_net = _ghb("d.harga_jual",
-                    ["COALESCE(d.diskon1,0)", "COALESCE(d.diskon2,0)",
-                     "COALESCE(d.diskon3,0)", "COALESCE(d.diskon4,0)"])
-    harga_net = _ghb(item_net,
-                     ["COALESCE(h.diskon1,0)", "COALESCE(h.diskon2,0)",
-                      "COALESCE(h.diskon3,0)", "COALESCE(h.diskon4,0)"],
-                     pajak="COALESCE(h.pajak,0)")
+    item_net = _unit_net("harga_jual")
+    harga_net = _ghb(item_net, _disk4("h"), pajak="COALESCE(h.pajak,0)")
 
     # Cost per unit dasar: pembelian terakhir (net dari diskon+pajak+ppnbm beli).
-    cost_net = _ghb("pd.harga_beli",
-                    ["COALESCE(pd.diskon1,0)", "COALESCE(pd.diskon2,0)",
-                     "COALESCE(pd.diskon3,0)", "COALESCE(pd.diskon4,0)"],
+    cost_net = _ghb("pd.harga_beli", _disk4("pd"),
                     pajak="COALESCE(pb.pajak,0)", ppnbm="COALESCE(pb.ppnbm,0)")
     cost_sub = (
         "SELECT kd_barang, harga_net_cost FROM ("
@@ -299,8 +337,8 @@ def penjualan_nota(f):
         "n.total_bersih - COALESCE(v.nominal, 0) AS total_setelah_voucher, "
         # Total Pajak2: legacy view derives this from a per-line-distributed
         # header-diskon+pajak formula that doesn't reconcile cleanly with this
-        # codebase's header-level model (HDR_DISKON applied once on the nota
-        # sum, not per line — see _line_net()/_nota_net() docstrings). Exposed
+        # codebase's model (diskon header masuk ke net_pre_tax di _nota_net,
+        # tak dipecah jadi kolom pajak terpisah). Exposed
         # as equal to `pajak` (our already-validated tax-only figure) rather
         # than guessing at the legacy per-line math; verify against real
         # invoices before treating as authoritative.
@@ -486,7 +524,7 @@ FILTERS_PEMBELIAN = {
 }
 
 def pembelian(f):
-    # subtotal applies diskon1-4 (flat Rupiah, per _line_net()'s docstring) —
+    # subtotal applies diskon1-4 (semantik GHB, per _line_net()'s docstring) —
     # t_pembelian_detail has the same diskon1-4 shape as t_penjualan_detail
     # (confirmed live); previously computed as a flat qty*harga_beli, silently
     # ignoring any per-line discount.
@@ -513,23 +551,39 @@ def pembelian(f):
 
 
 def _pembelian_nota(where_sql: str) -> str:
-    """Per-nota subquery pembelian, mirrors _nota_net(): total bersih setelah
-    diskon1-4 per baris (_line_net) + diskon header + pajak/ppnbm (persen,
-    sama seperti t_penjualan). Tidak menjumlahkan t_pembelian_biaya_angkut di
-    sini — itu tabel header (1 baris/no_transaksi); breakdown ongkos kirim
-    per supplier/periode disisihkan sebagai fitur terpisah nanti."""
-    net = f"SUM({_line_net('harga_beli')}) - {HDR_DISKON}"
-    pajak_amt = f"({net}) * COALESCE(MIN(h.pajak), 0) / 100.0"
+    """Per-nota subquery pembelian, mengikuti UDF dbo.GetTotalPembelian:
+        SUM(GHB(GHB(harga_beli, d.diskon1-4), h.diskon1-4, h.pajak, h.ppnbm) * qty)
+
+    Struktur dua level sama seperti _nota_net(), dan memperbaiki cacat yang sama:
+    diskon header dual-mode (bukan rupiah flat), pajak & ppnbm fraksi (bukan
+    `/100.0`), dan ppnbm dikalikan berurutan `(1+pajak)*(1+ppnbm)` sesuai UDF,
+    bukan dijumlah `(1 + pajak + ppnbm)`. Dampaknya nol pada data sekarang —
+    seluruh 11.697 baris t_pembelian punya diskon/pajak/ppnbm = 0 — jadi ini
+    perbaikan cacat laten, bukan perubahan angka.
+
+    Diskon header sekali per nota di outer, alasan sama seperti _nota_net().
+
+    Tidak menjumlahkan t_pembelian_biaya_angkut di sini — itu tabel header
+    (1 baris/no_transaksi); breakdown ongkos kirim per supplier/periode
+    disisihkan sebagai fitur terpisah nanti."""
+    net_pre_tax = _ghb("net_lines", ["hd1", "hd2", "hd3", "hd4"])
     return (
+        "SELECT no_transaksi, tanggal, kd_supplier, kd_divisi, total_kotor, "
+        f"({net_pre_tax}) * pajak_rate AS pajak, "
+        f"({net_pre_tax}) * (1 + pajak_rate) * (1 + ppnbm_rate) AS total_bersih "
+        "FROM ("
         "SELECT h.no_transaksi, MIN(h.tanggal) AS tanggal, MIN(h.kd_supplier) AS kd_supplier, "
         "MIN(h.kd_divisi) AS kd_divisi, "
         "SUM(d.qty * d.harga_beli) AS total_kotor, "
-        f"{pajak_amt} AS pajak, "
-        f"({net}) * (1 + COALESCE(MIN(h.pajak), 0) / 100.0 + COALESCE(MIN(h.ppnbm), 0) / 100.0) AS total_bersih "
+        "COALESCE(MIN(h.pajak), 0) AS pajak_rate, COALESCE(MIN(h.ppnbm), 0) AS ppnbm_rate, "
+        "COALESCE(MIN(h.diskon1), 0) AS hd1, COALESCE(MIN(h.diskon2), 0) AS hd2, "
+        "COALESCE(MIN(h.diskon3), 0) AS hd3, COALESCE(MIN(h.diskon4), 0) AS hd4, "
+        f"SUM({_unit_net('harga_beli')} * d.qty) AS net_lines "
         "FROM t_pembelian h "
         "INNER JOIN t_pembelian_detail d ON h.no_transaksi = d.no_transaksi "
         f"WHERE {where_sql} "
         "GROUP BY h.no_transaksi, h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.pajak, h.ppnbm"
+        ") nz"
     )
 
 
