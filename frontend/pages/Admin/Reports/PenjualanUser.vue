@@ -41,13 +41,13 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 // Detail per-transaksi (grain mengikuti view legacy mon_t_penjualan_per_user),
 // bukan agregat per user seperti sebelumnya.
 const columns = [
-  { key: "no_transaksi", label: "No. Transaksi", sortable: true },
-  { key: "tanggal", label: "Tanggal", sortable: true, format: "date" },
+  { key: "no_transaksi", label: "No. Transaksi" },
+  { key: "tanggal", label: "Tanggal", format: "date" },
   { key: "divisi", label: "Divisi" },
   { key: "status", label: "Status Transaksi" },
-  { key: "customer", label: "Customer", sortable: true },
-  { key: "nominal", label: "Nominal", align: "right", format: "rupiah", sortable: true },
-  { key: "user", label: "User", sortable: true },
+  { key: "customer", label: "Customer" },
+  { key: "nominal", label: "Nominal", align: "right", format: "rupiah" },
+  { key: "user", label: "User" },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);

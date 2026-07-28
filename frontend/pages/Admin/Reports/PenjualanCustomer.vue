@@ -30,10 +30,10 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 
 const columns = [
   { key: "kd_customer", label: "Kode" },
-  { key: "divisi", label: "Divisi", sortable: true },
+  { key: "divisi", label: "Divisi" },
   { key: "customer", label: "Customer" },
-  { key: "jml_nota", label: "Jml Nota", align: "right", sortable: true },
-  { key: "total", label: "Total Penjualan", align: "right", sortable: true },
+  { key: "jml_nota", label: "Jml Nota", align: "right" },
+  { key: "total", label: "Total Penjualan", align: "right" },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);

@@ -28,10 +28,10 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 );
 
 const columns = [
-  { key: "divisi", label: "Divisi", sortable: true },
+  { key: "divisi", label: "Divisi" },
   { key: "supplier", label: "Supplier" },
   { key: "jml_nota", label: "Jml Nota", align: "right", format: "number" },
-  { key: "total", label: "Total", align: "right", format: "rupiah", sortable: true },
+  { key: "total", label: "Total", align: "right", format: "rupiah" },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);

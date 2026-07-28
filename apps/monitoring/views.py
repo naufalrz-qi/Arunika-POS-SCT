@@ -1194,6 +1194,7 @@ def _spec_filters(f, spec):
         "date_from": f["date_from_s"], "date_to": f["date_to_s"],
         "date_mode": f["date_mode"],
         "search": f["search"], "sort": f["sort"], "sort_dir": f["sort_dir"],
+        "sort_keys": f["sort_keys"],
         "page": f["page"], "per_page": f["per_page"],
         "recent": f["recent"],
     }
@@ -1871,11 +1872,14 @@ def transaksi_barang(request):
                     conn_error = mssql.friendly_error(exc, "Gagal membaca transaksi")
         else:
             conn_error = CONN_ERROR
-        # notice: halaman ini juga memangkas rentang >92 hari, tapi dulu tak
-        # pernah memberitahukannya sama sekali (bukan lewat conn_error seperti
-        # laporan lain — memang hilang begitu saja).
+        # notice: halaman ini TIDAK memangkas rentang tanggal (_transaksi_params
+        # punya semantik tanggalnya sendiri, tanpa clamp 92 hari), jadi tak ada
+        # peringatan rentang untuk dilaporkan. Sebelumnya baris ini membaca
+        # f["warning"] — nama yang tak pernah ada di scope ini, jadi setiap
+        # pemuatan prop deferred halaman ini berakhir NameError (500), bukan
+        # tabel.
         return {"rows": rows, "total": total, "summary": summary, "options": options,
-                "conn_error": conn_error, "notice": f["warning"] or None}
+                "conn_error": conn_error, "notice": None}
 
     return render(
         request,
@@ -1885,6 +1889,7 @@ def transaksi_barang(request):
             "filters": {
                 "date_from": p["date_from_s"], "date_to": p["date_to_s"], "date_mode": "range",
                 "search": p["search"], "sort": p["sort"], "sort_dir": p["sort_dir"],
+                "sort_keys": list(rpt.SORTS_TRANSAKSI_BARANG),
                 "page": p["page"], "per_page": p["per_page"], "recent": p["recent"],
                 "kd_divisi": p["kd_divisi"], "jenis": ",".join(p["jenis"]),
             },
@@ -2093,7 +2098,7 @@ def fmi_stok(request):
         "filters": {
             "date_from": f["date_from_s"], "date_to": f["date_to_s"],
             "date_mode": f["date_mode"], "search": f["search"],
-            "sort": f["sort"], "sort_dir": f["sort_dir"],
+            "sort": f["sort"], "sort_dir": f["sort_dir"], "sort_keys": f["sort_keys"],
             "page": f["page"], "per_page": f["per_page"],
             "recent": False, "kd_divisi": f["kd_divisi"],
         },
@@ -2159,7 +2164,8 @@ def kas_harian(request):
         "report": defer(load_report),
         "filters": {
             "date_from": f["date_from_s"], "date_to": f["date_to_s"], "kd_kas": f["kd_kas"],
-            "sort": f["sort"], "sort_dir": f["sort_dir"], "page": f["page"], "per_page": f["per_page"],
+            "sort": f["sort"], "sort_dir": f["sort_dir"], "sort_keys": f["sort_keys"],
+            "page": f["page"], "per_page": f["per_page"],
         },
     })
 

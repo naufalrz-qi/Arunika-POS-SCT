@@ -18,12 +18,12 @@ const URL = "/admin-panel/laporan/pembelian-periode";
 const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerReport(URL, props.filters);
 
 const columns = [
-  { key: "periode", label: "Periode", sortable: true },
+  { key: "periode", label: "Periode" },
   { key: "jml_nota", label: "Jml Nota", align: "right", format: "number" },
   { key: "total_kotor", label: "Total Kotor", align: "right", format: "rupiah" },
   { key: "total_diskon", label: "Total Diskon", align: "right", format: "rupiah" },
   { key: "total_pajak", label: "Total Pajak", align: "right", format: "rupiah" },
-  { key: "total", label: "Total Bersih", align: "right", format: "rupiah", sortable: true },
+  { key: "total", label: "Total Bersih", align: "right", format: "rupiah" },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);

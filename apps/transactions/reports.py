@@ -696,7 +696,10 @@ def retur_pembelian(f):
 # does not; left unchanged here to stay consistent with the already-shipped
 # penjualan reports rather than silently diverging just for this one page.
 
-SORTS_PIUTANG = {"customer": "customer", "tanggal": "tanggal", "jatuh_tempo": "jatuh_tempo", "sisa_piutang": "sisa_piutang"}
+SORTS_PIUTANG = {
+    "no_transaksi": "no_transaksi", "customer": "customer", "tanggal": "tanggal",
+    "jatuh_tempo": "jatuh_tempo", "sisa_piutang": "sisa_piutang",
+}
 SUMMARY_PIUTANG = (
     "COUNT(*) AS jml_nota, COALESCE(SUM(q.total_penjualan), 0) AS total_penjualan, "
     "COALESCE(SUM(q.total_cicilan), 0) AS total_cicilan, COALESCE(SUM(q.sisa_piutang), 0) AS total_sisa_piutang"
@@ -800,7 +803,10 @@ def biaya_kategori(f):
 
 # --- Opname Stok (B15) --
 
-SORTS_OPNAME = {"kd_barang": "kd_barang", "tanggal": "tanggal", "diferensi": "diferensi"}
+SORTS_OPNAME = {
+    "no_transaksi": "no_transaksi", "kd_barang": "kd_barang", "tanggal": "tanggal",
+    "diferensi": "diferensi",
+}
 SUMMARY_OPNAME = (
     "COUNT(*) AS jml_baris, COALESCE(SUM(q.qty_fisik), 0) AS total_fisik, COALESCE(SUM(q.diferensi), 0) AS total_diferensi"
 )
@@ -934,7 +940,7 @@ def kas_summary(f):
 # kd_user) — kd_pegawai/kd_shift live on the separate _detail table, one row
 # per employee assigned in that shift change.
 
-SORTS_SHIFT = {"tanggal": "tanggal", "pegawai": "pegawai", "shift": "shift"}
+SORTS_SHIFT = {"no_transaksi": "no_transaksi", "tanggal": "tanggal", "pegawai": "pegawai", "shift": "shift"}
 SUMMARY_SHIFT = (
     "COUNT(*) AS jml_baris, COUNT(DISTINCT pegawai) AS jml_pegawai, COUNT(DISTINCT shift) AS jml_shift"
 )

@@ -42,12 +42,12 @@ function onReset() {
 }
 
 const columns = [
-  { key: "tanggal", label: "Tanggal", sortable: true },
-  { key: "transaksi", label: "Jenis", sortable: true },
-  { key: "no_transaksi", label: "No. Transaksi", sortable: true },
+  { key: "tanggal", label: "Tanggal" },
+  { key: "transaksi", label: "Jenis" },
+  { key: "no_transaksi", label: "No. Transaksi" },
   { key: "divisi", label: "Divisi" },
-  { key: "kd_barang", label: "Kode", sortable: true },
-  { key: "barang", label: "Barang", sortable: true },
+  { key: "kd_barang", label: "Kode" },
+  { key: "barang", label: "Barang" },
   { key: "masuk", label: "Masuk", align: "right", format: "number" },
   { key: "keluar", label: "Keluar", align: "right", format: "number" },
   { key: "satuan", label: "Satuan" },

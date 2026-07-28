@@ -116,6 +116,12 @@ def parse_report_params(
         "date_to_s": date_to.strftime("%Y-%m-%d"),
         "search": (g.get("search") or "").strip(),
         "sort": sort,
+        # Whitelist yang sama dikirim ke layar: dulu tiap halaman Vue menandai
+        # sendiri kolom mana yang `sortable`, dan daftar itu menyimpang dari
+        # `sorts` di sini — header yang bisa diklik tapi tak mengubah apa pun
+        # (sort tak dikenal diam-diam jatuh ke default), dan kolom yang
+        # sebenarnya bisa diurut tapi tak pernah ditawarkan.
+        "sort_keys": list(sorts),
         "sort_dir": sort_dir,
         "order_by": order_by,
         "page": page,
