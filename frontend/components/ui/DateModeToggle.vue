@@ -20,7 +20,7 @@ const modes = [
       @click="emit('update:mode', m.key)"
       :class="[
         'px-2.5 py-0.5 text-[11px] transition-colors',
-        mode === m.key ? 'bg-brand-500 font-semibold text-white' : 'text-ink-muted hover:bg-surface-3',
+        mode === m.key ? 'bg-brand-bg font-medium text-brand-fg' : 'text-ink-muted hover:bg-surface-2',
       ]"
     >
       {{ m.label }}

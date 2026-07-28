@@ -134,8 +134,9 @@ function isNumeric(col) {
 </script>
 
 <template>
-  <div class="panel-cut-frame">
-    <div class="panel-cut overflow-hidden bg-surface">
+  <!-- Satu-satunya permukaan terangkat di halaman ini; lihat catatan
+       .surface-raised di main.css. -->
+  <div class="surface-raised overflow-hidden">
       <div class="flex justify-end border-b border-border-default bg-surface-2 px-3 py-1.5">
         <div ref="columnMenuRoot" class="relative">
           <button
@@ -164,7 +165,7 @@ function isNumeric(col) {
             <button
               v-if="hiddenKeys.size"
               type="button"
-              class="mt-1 w-full border-t border-border-default px-2 pt-2 text-left text-xs text-brand-600 hover:underline"
+              class="mt-1 w-full border-t border-border-default px-2 pt-2 text-left text-xs text-brand-fg hover:underline"
               @click="resetColumns"
             >
               Tampilkan semua kolom
@@ -177,6 +178,10 @@ function isNumeric(col) {
            badan tabel yang di-scroll, header sticky di dalam kontainer ini. -->
       <div class="max-h-[65vh] overflow-auto scroll-slim">
         <table class="w-full text-xs tabular-nums">
+          <!-- Kolom yang sedang mengurut memakai satu-satunya warna yang muncul
+               di dalam tabel: garis brand 2px di tepi bawah judulnya. Itu
+               menjawab "tabel ini urut berdasarkan apa?" tanpa harus mencari
+               tanda panah kecil di antara 25 judul kolom. -->
           <thead class="sticky top-0 z-10 bg-surface-3">
             <tr>
               <th
@@ -195,8 +200,9 @@ function isNumeric(col) {
                     : undefined
                 "
                 :class="[
-                  'whitespace-nowrap border-b-2 border-border-strong px-2 py-1.5 text-[11px] font-heading font-semibold uppercase tracking-wide text-ink-muted',
+                  'whitespace-nowrap border-b border-border-strong px-2 py-1.5 text-[11px] font-semibold',
                   alignClass(col),
+                  sortKey === col.key ? 'text-ink shadow-[inset_0_-2px_0_var(--color-brand-500)]' : 'text-ink-muted',
                   col.sortable
                     ? 'cursor-pointer select-none hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500'
                     : '',
@@ -207,7 +213,7 @@ function isNumeric(col) {
               >
                 <span class="inline-flex items-center gap-1">
                   {{ col.label }}
-                  <span v-if="col.sortable && sortKey === col.key" class="text-brand-600">
+                  <span v-if="col.sortable && sortKey === col.key" class="text-brand-fg">
                     {{ sortDir === "asc" ? "▲" : "▼" }}
                   </span>
                 </span>
@@ -276,6 +282,5 @@ function isNumeric(col) {
         />
         <span v-else>Menampilkan semua {{ total }} data</span>
       </div>
-    </div>
   </div>
 </template>

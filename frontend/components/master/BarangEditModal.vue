@@ -165,7 +165,7 @@ function saveStatus(table) {
           <div
             v-for="u in item.satuan"
             :key="u.kd_satuan"
-            class="flex flex-col gap-1.5 rounded border-l-4 border-l-brand-600 bg-surface-2 p-2 sm:flex-row sm:items-end sm:gap-1.5"
+            class="flex flex-col gap-1.5 rounded-control border border-border-default bg-surface-2 p-2 sm:flex-row sm:items-end sm:gap-1.5"
           >
             <div class="min-w-max text-xs font-medium text-ink">
               {{ u.satuan || u.kd_satuan }}
@@ -176,7 +176,7 @@ function saveStatus(table) {
               <button
                 v-if="suggestion && suggestion.kd_satuan === u.kd_satuan"
                 type="button"
-                class="mt-1 inline-flex items-center gap-1 rounded-full bg-rx-yellow/20 px-2 py-0.5 text-[10px] font-semibold text-warning-fg hover:bg-rx-yellow/30"
+                class="mt-1 inline-flex items-center gap-1 rounded-full bg-warning-bg px-2 py-0.5 text-[10px] font-semibold text-warning-fg hover:brightness-95"
                 :title="`Dari keterangan: ${item.keterangan}`"
                 @click="applySuggestion"
               >

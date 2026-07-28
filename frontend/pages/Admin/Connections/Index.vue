@@ -157,7 +157,7 @@ function confirmDelete() {
         <template #cell-is_default="{ row }">
           <div class="flex flex-col items-center gap-1">
             <Badge v-if="row.id === active?.id" variant="success">Aktif (sesi Anda)</Badge>
-            <button v-else class="text-xs text-brand-600 hover:underline" @click="useConnection(row)">
+            <button v-else class="text-xs text-brand-fg hover:underline" @click="useConnection(row)">
               Pakai koneksi ini
             </button>
             <span

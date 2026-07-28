@@ -6,25 +6,18 @@ defineProps({
 </script>
 
 <template>
-  <div class="panel-cut-frame panel-cut-frame-accent mb-4 last:mb-0">
-    <div class="mecha-card panel-cut bg-surface">
-      <div v-if="title || $slots.header" class="flex items-center justify-between border-b border-border-default px-5 py-3.5 bg-surface-3">
-        <div class="flex items-center gap-3">
-          <!-- Tech accent -->
-          <div v-if="title" class="w-1 h-4 bg-brand-500 rounded-full"></div>
-          <div>
-            <h3 v-if="title" class="text-sm font-heading font-semibold tracking-wide text-ink">{{ title }}</h3>
-            <!-- Subtitle memuat kalimat utuh ("Top 10 qty terjual — barang tanpa
-                 harga jual dikecualikan"), bukan label pendek; uppercase +
-                 tracking lebar membuatnya jauh lebih lambat dibaca. -->
-            <p v-if="subtitle" class="text-[11px] font-medium tracking-wide text-ink-muted mt-0.5">{{ subtitle }}</p>
-          </div>
-        </div>
-        <slot name="header" />
+  <div class="surface-flat mb-4 last:mb-0">
+    <div v-if="title || $slots.header" class="flex items-center justify-between gap-3 border-b border-border-default px-4 py-3">
+      <div>
+        <h3 v-if="title" class="text-sm font-semibold text-ink">{{ title }}</h3>
+        <!-- Subtitle memuat kalimat utuh ("Top 10 qty terjual — barang tanpa
+             harga jual dikecualikan"), bukan label pendek. -->
+        <p v-if="subtitle" class="mt-0.5 text-xs text-ink-muted">{{ subtitle }}</p>
       </div>
-      <div class="p-5">
-        <slot />
-      </div>
+      <slot name="header" />
+    </div>
+    <div class="p-4">
+      <slot />
     </div>
   </div>
 </template>

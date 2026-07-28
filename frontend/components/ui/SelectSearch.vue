@@ -100,7 +100,7 @@ const activeId = computed(() =>
 
 <template>
   <div ref="root" class="relative">
-    <span v-if="label" class="mb-1.5 block text-[11px] font-heading font-semibold tracking-wide text-ink-muted">{{ label }}</span>
+    <span v-if="label" class="mb-1 block text-xs font-medium text-ink-muted">{{ label }}</span>
     <button
       ref="trigger"
       type="button"
@@ -112,14 +112,14 @@ const activeId = computed(() =>
       @keydown.down.prevent="move(1)"
       @keydown.up.prevent="move(-1)"
       @keydown.escape="close({ refocus: true })"
-      class="flex h-10 w-full items-center justify-between rounded-control border border-border-strong bg-surface/50 backdrop-blur-sm px-3 py-2 text-left text-sm text-ink transition-all duration-200 hover:border-brand-400 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 focus:shadow-[0_0_10px_var(--glow-brand)]"
+      class="flex h-9 w-full items-center justify-between rounded-control border border-border-strong bg-surface px-2.5 text-left text-sm text-ink transition-colors duration-150 focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500"
     >
       <span :class="modelValue === '' || modelValue === null ? 'text-ink-subtle' : ''">{{ currentLabel }}</span>
-      <Icon name="chevron" size="h-4 w-4" class="shrink-0 text-brand-500" aria-hidden="true" />
+      <Icon name="chevron" size="h-4 w-4" class="shrink-0 text-ink-muted" aria-hidden="true" />
     </button>
     <div
       v-if="open"
-      class="absolute z-20 mt-1 w-full rounded-control border border-border-strong bg-surface shadow-lg backdrop-blur-md"
+      class="absolute z-20 mt-1 w-full rounded-control border border-border-strong bg-surface shadow-lg"
     >
       <input
         ref="search"
@@ -134,7 +134,7 @@ const activeId = computed(() =>
         @keydown.enter.prevent="chooseActive"
         @keydown.escape.prevent="close({ refocus: true })"
         @keydown.tab="close()"
-        class="h-10 w-full border-b border-border-strong bg-transparent px-3 py-2 text-sm text-ink focus:outline-none focus:bg-surface-3/50"
+        class="h-9 w-full border-b border-border-strong bg-transparent px-2.5 text-sm text-ink focus:outline-none focus:bg-surface-2"
       />
       <div ref="listbox" :id="listboxId" role="listbox" class="max-h-56 overflow-y-auto scroll-slim">
         <button

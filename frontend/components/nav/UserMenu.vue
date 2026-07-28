@@ -15,18 +15,18 @@ const { open, root, close, toggle } = useDismissable();
   <div ref="root" class="relative">
     <button
       type="button"
-      class="flex h-10 items-center gap-2.5 rounded-control border border-white/10 bg-white/5 pl-1.5 pr-3 text-white transition-all duration-200 hover:border-white/20 hover:bg-white/10"
+      class="flex h-9 items-center gap-2 rounded-control border border-border-default pl-1 pr-2.5 text-ink transition-colors hover:bg-surface-2"
       :aria-expanded="open"
       aria-haspopup="menu"
       aria-label="Menu pengguna"
       @click="toggle"
     >
-      <div class="flex h-7 w-7 items-center justify-center rounded-full bg-brand-500 font-heading text-xs font-bold uppercase text-white">
+      <div class="flex h-6 w-6 items-center justify-center rounded-full bg-surface-3 text-xs font-medium uppercase text-ink-muted">
         {{ (user?.name || "?").charAt(0) }}
       </div>
       <div class="hidden text-left sm:block">
-        <p class="text-xs font-bold leading-none tracking-wide text-white">{{ user?.name }}</p>
-        <p class="text-[10px] uppercase tracking-wider text-white/60 mt-0.5">{{ ROLE_LABELS[user?.role] || user?.role }}</p>
+        <p class="text-xs font-medium leading-none">{{ user?.name }}</p>
+        <p class="mt-0.5 text-[11px] leading-none text-ink-subtle">{{ ROLE_LABELS[user?.role] || user?.role }}</p>
       </div>
     </button>
 
@@ -50,7 +50,7 @@ const { open, root, close, toggle } = useDismissable();
           href="/logout"
           method="post"
           as="button"
-          class="flex w-full items-center gap-2 border-t border-border-default px-4 py-2.5 text-left text-sm text-danger-600 hover:bg-danger-bg"
+          class="flex w-full items-center gap-2 border-t border-border-default px-4 py-2.5 text-left text-sm text-danger-fg hover:bg-danger-bg"
         >
           <Icon name="logout" size="h-4 w-4" /> Keluar
         </Link>

@@ -11,55 +11,54 @@ const { activeTab, isActive } = useNav();
 </script>
 
 <template>
+  <!-- Sidebar dulu berupa panel gelap yang mengambang dengan jarak dari tepi,
+       bevel bahu, dan bayangannya sendiri — satu-satunya benda gelap di
+       halaman yang selebihnya terang, jadi mata tertarik ke sana lebih dulu
+       daripada ke tabel. Sekarang ia permukaan yang sama dengan halaman,
+       dipisahkan satu garis. -->
   <aside
     v-if="activeTab"
     :class="[
-      'floating-panel hidden shrink-0 flex-col transition-all duration-300 lg:flex relative z-40 ml-3 mb-3 lg:ml-4 lg:mb-4',
-      sidebarCollapsed ? 'w-16' : 'w-64',
+      'hidden shrink-0 flex-col border-r border-border-default bg-surface transition-[width] duration-200 lg:flex',
+      sidebarCollapsed ? 'w-14' : 'w-60',
     ]"
   >
-    <!-- Decorative beveled background, kept off the real element — see
-         TopNav.vue's header for why (clip-path clips every descendant). -->
-    <div class="shoulder-panel bg-sidebar border border-white/5 absolute inset-0 -z-10"></div>
     <p
       v-if="!sidebarCollapsed"
-      class="px-5 pb-1 pt-5 text-[11px] font-heading font-bold uppercase tracking-wide text-brand-300/60"
+      class="px-4 pb-1 pt-4 text-xs font-semibold text-ink-subtle"
     >
       {{ activeTab.label }}
     </p>
-    <div v-else class="pt-5" />
+    <div v-else class="pt-4" />
 
-    <nav class="scroll-slim flex-1 overflow-y-auto px-3 pb-4">
+    <nav class="scroll-slim flex-1 overflow-y-auto px-2 pb-3">
       <template v-for="(sub, i) in activeTab.subsections" :key="sub.key">
         <p
           v-if="!sidebarCollapsed && activeTab.subsections.length > 1"
-          class="px-2 pb-1.5 pt-4 text-[11px] font-heading font-bold uppercase tracking-wide text-white/50"
+          class="px-2 pb-1 pt-3 text-xs text-ink-subtle"
         >
           {{ sub.label }}
         </p>
         <div
           v-else-if="sidebarCollapsed && activeTab.subsections.length > 1 && i > 0"
-          class="mx-3 my-3 border-t border-white/10"
+          class="mx-2 my-2 border-t border-border-default"
         />
-        <div class="space-y-1">
+        <div class="space-y-0.5">
           <Link
             v-for="item in sub.items"
             :key="item.key"
             :href="item.href"
             :title="sidebarCollapsed ? item.label : undefined"
             :class="[
-              'group flex items-center gap-3 rounded-control py-2 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60',
-              sidebarCollapsed ? 'justify-center px-0' : 'px-3',
+              'group flex items-center gap-2.5 rounded-control py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500',
+              sidebarCollapsed ? 'justify-center px-0' : 'px-2.5',
               isActive(item.href)
-                ? 'bg-brand-600 font-semibold text-white relative overflow-hidden'
-                : 'text-white/70 hover:bg-white/10 hover:text-white ' + (sidebarCollapsed ? '' : 'hover:translate-x-1'),
+                ? 'bg-brand-bg font-medium text-brand-fg'
+                : 'text-ink-muted hover:bg-surface-2 hover:text-ink',
             ]"
           >
-            <!-- V-fin accent bar on active state -->
-            <div v-if="isActive(item.href)" class="absolute left-0 top-0 bottom-0 w-1 bg-rx-yellow"></div>
-            
-            <Icon :name="item.icon" size="h-4 w-4" :class="['shrink-0 z-10', isActive(item.href) ? 'text-white' : 'text-white/70 group-hover:text-white/90']" />
-            <span v-if="!sidebarCollapsed" class="truncate z-10 text-sm">{{ item.label }}</span>
+            <Icon :name="item.icon" size="h-4 w-4" class="shrink-0" />
+            <span v-if="!sidebarCollapsed" class="truncate">{{ item.label }}</span>
           </Link>
         </div>
       </template>
@@ -68,7 +67,7 @@ const { activeTab, isActive } = useNav();
     <button
       type="button"
       :aria-expanded="!sidebarCollapsed"
-      class="flex items-center gap-3 border-t border-white/10 px-5 py-4 text-xs font-heading font-medium tracking-wide text-white/70 transition-all duration-200 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+      class="flex items-center gap-2.5 border-t border-border-default px-4 py-3 text-xs text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
       :class="sidebarCollapsed ? 'justify-center px-0' : ''"
       :title="sidebarCollapsed ? 'Perlebar sidebar' : 'Ciutkan sidebar'"
       @click="ui.toggleSidebar()"
@@ -76,9 +75,9 @@ const { activeTab, isActive } = useNav();
       <Icon
         name="chevron"
         size="h-4 w-4"
-        :class="['shrink-0 transition-transform duration-300', sidebarCollapsed ? '-rotate-90' : 'rotate-90']"
+        :class="['shrink-0 transition-transform duration-200', sidebarCollapsed ? '-rotate-90' : 'rotate-90']"
       />
-      <span v-if="!sidebarCollapsed">Ciutkan Panel</span>
+      <span v-if="!sidebarCollapsed">Ciutkan panel</span>
     </button>
   </aside>
 </template>

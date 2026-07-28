@@ -18,12 +18,10 @@ const colClass = computed(
 );
 </script>
 <template>
-  <div v-if="items.length" :class="['mb-6 grid grid-cols-2 gap-3', colClass]">
-    <div v-for="(it, index) in items" :key="it.label" :class="['panel-cut-frame panel-cut-frame-accent h-full', `stagger-${(index % 4) + 1}`]">
-      <div class="mecha-card panel-cut bg-surface p-3.5 h-full flex flex-col justify-between">
-        <p class="text-[11px] font-heading font-bold uppercase tracking-wide text-ink-muted mb-2">{{ it.label }}</p>
-        <p class="text-xl lg:text-2xl font-semibold text-ink tracking-tight">{{ it.value }}</p>
-      </div>
+  <div v-if="items.length" :class="['mb-4 grid grid-cols-2 gap-3', colClass]">
+    <div v-for="it in items" :key="it.label" class="surface-flat flex h-full flex-col justify-between px-3.5 py-3">
+      <p class="text-xs text-ink-muted">{{ it.label }}</p>
+      <p class="mt-1.5 text-xl font-semibold tabular-nums tracking-tight text-ink">{{ it.value }}</p>
     </div>
   </div>
 </template>

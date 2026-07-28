@@ -20,25 +20,21 @@ const { activeSection } = useNav();
   <!-- 100dvh, bukan 100vh: di browser ponsel 100vh termasuk area yang tertutup
        toolbar, jadi baris terbawah (footer tabel: pemilih per-halaman dan
        paginasi) tersembunyi di balik chrome browser. -->
-  <div class="flex h-[100dvh] flex-col overflow-hidden bg-transparent">
+  <div class="flex h-[100dvh] flex-col overflow-hidden bg-surface-2">
     <TopNav />
-    <div class="flex min-h-0 flex-1 relative z-10 mt-3 lg:mt-4">
+    <div class="flex min-h-0 flex-1">
       <SideNav />
-      <main class="scroll-slim min-w-0 flex-1 overflow-y-auto relative">
+      <main class="scroll-slim min-w-0 flex-1 overflow-y-auto">
         <div class="page-enter mx-auto max-w-[1600px] p-3 sm:p-4 lg:p-6">
-          <div v-if="title" class="mb-6 flex items-end justify-between">
-            <div>
-              <p v-if="activeSection" class="text-[11px] font-heading font-bold uppercase tracking-wide text-brand-500 mb-1">
-                // {{ activeSection.label }}
-              </p>
-              <h1 class="text-2xl font-heading font-bold text-ink tracking-tight">{{ title }}</h1>
-            </div>
-            <!-- Optional: decorative mecha element could go here -->
-            <div class="hidden sm:flex gap-1 h-6 items-end">
-              <div class="w-2 h-2 bg-rx-red animate-pulse-glow"></div>
-              <div class="w-2 h-4 bg-rx-yellow"></div>
-              <div class="w-8 h-4 bg-brand-600"></div>
-            </div>
+          <!-- Judul halaman: nama bagian sebagai konteks, lalu judulnya.
+               Sebelumnya baris ini juga membawa "// " di depan nama bagian dan
+               tiga kotak merah/kuning/biru berdenyut di sisi kanan — hiasan
+               yang tak menunjuk apa pun, di baris yang dibaca paling sering. -->
+          <div v-if="title" class="mb-4">
+            <p v-if="activeSection" class="text-xs text-ink-subtle">
+              {{ activeSection.label }}
+            </p>
+            <h1 class="mt-0.5 text-xl font-semibold tracking-tight text-ink">{{ title }}</h1>
           </div>
           <slot />
         </div>

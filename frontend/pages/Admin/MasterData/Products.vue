@@ -131,7 +131,7 @@ const exportColumns = columns.map(({ key, label }) => ({ key, label }));
       <DataTable :columns="columns" row-key="kd_barang" :rows="filtered" empty-message="Produk tidak ditemukan.">
         <template #cell-harga_jual="{ value }">{{ rupiah(value) }}</template>
         <template #cell-stok="{ value }">
-          <span :class="value === 0 ? 'font-medium text-danger-600' : ''">{{ value }}</span>
+          <span :class="value === 0 ? 'font-medium text-danger-fg' : ''">{{ value }}</span>
         </template>
         <template #cell-status="{ value }">
           <Badge :variant="value ? 'success' : 'danger'">{{ value ? "Aktif" : "Nonaktif" }}</Badge>
