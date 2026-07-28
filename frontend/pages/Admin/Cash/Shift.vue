@@ -18,8 +18,8 @@ const URL = "/admin-panel/kas/shift";
 const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerReport(URL, props.filters);
 
 const columns = [
-  { key: "no_transaksi", label: "No. Transaksi", sortable: true },
-  { key: "tanggal", label: "Tanggal", sortable: true, format: "date" },
+  { key: "no_transaksi", label: "No. Transaksi" },
+  { key: "tanggal", label: "Tanggal", format: "date" },
   { key: "pegawai", label: "Pegawai" },
   { key: "shift", label: "Shift" },
   { key: "keterangan", label: "Keterangan" },

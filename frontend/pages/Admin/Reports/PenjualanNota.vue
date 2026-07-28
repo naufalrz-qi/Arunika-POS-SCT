@@ -29,8 +29,8 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 );
 
 const columns = [
-  { key: "no_transaksi", label: "No. Nota", sortable: true },
-  { key: "tanggal", label: "Tanggal", sortable: true, format: "date" },
+  { key: "no_transaksi", label: "No. Nota" },
+  { key: "tanggal", label: "Tanggal", format: "date" },
   { key: "divisi", label: "Divisi" },
   { key: "customer", label: "Customer" },
   { key: "kota", label: "Kota" },
@@ -40,7 +40,7 @@ const columns = [
   { key: "total_setelah_voucher", label: "Total Setelah Voucher", align: "right", format: "rupiah" },
   { key: "pajak", label: "Pajak", align: "right", format: "rupiah" },
   { key: "pajak2", label: "Pajak 2", align: "right", format: "rupiah" },
-  { key: "total_bersih", label: "Total Bersih", align: "right", format: "rupiah", sortable: true },
+  { key: "total_bersih", label: "Total Bersih", align: "right", format: "rupiah" },
   { key: "petugas", label: "Petugas" },
 ];
 

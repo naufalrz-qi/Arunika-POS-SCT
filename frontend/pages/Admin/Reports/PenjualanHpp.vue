@@ -34,21 +34,21 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 );
 
 const columns = [
-  { key: "no_transaksi", label: "No. Transaksi", sortable: true },
-  { key: "tanggal", label: "Tanggal", sortable: true, format: "date" },
+  { key: "no_transaksi", label: "No. Transaksi" },
+  { key: "tanggal", label: "Tanggal", format: "date" },
   { key: "divisi", label: "Divisi" },
   { key: "customer", label: "Customer" },
   { key: "kd_barang", label: "Kode Barang" },
-  { key: "barang", label: "Barang", sortable: true },
-  { key: "kategori", label: "Kategori", sortable: true },
+  { key: "barang", label: "Barang" },
+  { key: "kategori", label: "Kategori" },
   { key: "qty", label: "Qty", align: "right", format: "number" },
   { key: "satuan", label: "Satuan" },
   { key: "harga", label: "Harga", align: "right", format: "rupiah" },
-  { key: "harga_pokok", label: "Harga Pokok", align: "right", format: "rupiah", sortable: true },
-  { key: "total_bersih", label: "Total Bersih", align: "right", format: "rupiah", sortable: true },
-  { key: "total_harga_pokok", label: "Total HPP", align: "right", format: "rupiah", sortable: true },
-  { key: "laba", label: "Laba", align: "right", format: "rupiah", sortable: true },
-  { key: "margin", label: "Margin %", align: "right", format: "persen", sortable: true },
+  { key: "harga_pokok", label: "Harga Pokok", align: "right", format: "rupiah" },
+  { key: "total_bersih", label: "Total Bersih", align: "right", format: "rupiah" },
+  { key: "total_harga_pokok", label: "Total HPP", align: "right", format: "rupiah" },
+  { key: "laba", label: "Laba", align: "right", format: "rupiah" },
+  { key: "margin", label: "Margin %", align: "right", format: "persen" },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);

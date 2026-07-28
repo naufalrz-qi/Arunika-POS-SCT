@@ -32,8 +32,8 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 );
 
 const columns = [
-  { key: "no_retur", label: "No. Retur", sortable: true },
-  { key: "tanggal", label: "Tanggal", sortable: true, format: "date" },
+  { key: "no_retur", label: "No. Retur" },
+  { key: "tanggal", label: "Tanggal", format: "date" },
   { key: "no_bukti", label: "No. Bukti" },
   { key: "divisi", label: "Divisi" },
   { key: "keterangan_divisi", label: "Keterangan Divisi" },
@@ -47,7 +47,7 @@ const columns = [
   { key: "harga_jual", label: "Harga Jual", align: "right", format: "rupiah" },
   { key: "sales", label: "Sales" },
   { key: "qty", label: "Qty", align: "right", format: "number" },
-  { key: "nilai", label: "Nilai", align: "right", format: "rupiah", sortable: true },
+  { key: "nilai", label: "Nilai", align: "right", format: "rupiah" },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);

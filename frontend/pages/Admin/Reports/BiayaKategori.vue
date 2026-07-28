@@ -17,9 +17,9 @@ const URL = "/admin-panel/laporan/biaya-kategori";
 const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerReport(URL, props.filters);
 
 const columns = [
-  { key: "kategori", label: "Kategori", sortable: true },
+  { key: "kategori", label: "Kategori" },
   { key: "jml_baris", label: "Jml Baris", align: "right", format: "number" },
-  { key: "total", label: "Total", align: "right", format: "rupiah", sortable: true },
+  { key: "total", label: "Total", align: "right", format: "rupiah" },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);

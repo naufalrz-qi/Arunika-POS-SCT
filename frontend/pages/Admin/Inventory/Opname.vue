@@ -18,13 +18,13 @@ const URL = "/admin-panel/inventory/opname";
 const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerReport(URL, props.filters);
 
 const columns = [
-  { key: "no_transaksi", label: "No. Opname", sortable: true },
-  { key: "tanggal", label: "Tanggal", sortable: true, format: "date" },
+  { key: "no_transaksi", label: "No. Opname" },
+  { key: "tanggal", label: "Tanggal", format: "date" },
   { key: "divisi", label: "Divisi" },
   { key: "barang", label: "Barang" },
   { key: "qty_sistem", label: "Qty Sistem", align: "right", format: "number" },
   { key: "qty_fisik", label: "Qty Fisik", align: "right", format: "number" },
-  { key: "diferensi", label: "Diferensi", align: "right", format: "number", sortable: true },
+  { key: "diferensi", label: "Diferensi", align: "right", format: "number" },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);

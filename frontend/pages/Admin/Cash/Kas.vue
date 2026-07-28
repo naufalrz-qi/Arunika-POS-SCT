@@ -17,7 +17,7 @@ const URL = "/admin-panel/kas/harian";
 const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerReport(URL, props.filters);
 
 const columns = [
-  { key: "tanggal", label: "Tanggal", sortable: true, format: "date" },
+  { key: "tanggal", label: "Tanggal", format: "date" },
   { key: "kas", label: "Kas" },
   { key: "keterangan", label: "Keterangan" },
   { key: "masuk", label: "Masuk", align: "right", format: "rupiah" },

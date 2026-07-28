@@ -32,13 +32,13 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 );
 
 const columns = [
-  { key: "no_transaksi", label: "No. Nota", sortable: true },
+  { key: "no_transaksi", label: "No. Nota" },
   { key: "tanggal", label: "Tanggal", format: "date" },
-  { key: "customer", label: "Customer", sortable: true },
-  { key: "jatuh_tempo", label: "Jatuh Tempo", sortable: true, format: "date" },
+  { key: "customer", label: "Customer" },
+  { key: "jatuh_tempo", label: "Jatuh Tempo", format: "date" },
   { key: "total_penjualan", label: "Total Penjualan", align: "right", format: "rupiah" },
   { key: "total_cicilan", label: "Total Cicilan", align: "right", format: "rupiah" },
-  { key: "sisa_piutang", label: "Sisa Piutang", align: "right", format: "rupiah", sortable: true },
+  { key: "sisa_piutang", label: "Sisa Piutang", align: "right", format: "rupiah" },
   { key: "hari_terlambat", label: "Hari Terlambat", align: "right", format: "number" },
 ];
 

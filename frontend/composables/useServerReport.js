@@ -7,11 +7,11 @@ import { router } from "@inertiajs/vue3";
 //   ["f_qty_min", "f_qty_max", "f_status", "f_jth_tempo_mode", ...] — see
 //   frontend/utils/reportFilters.js::paramNamesFor().
 export function useServerReport(url, initial = {}, filterKeys = []) {
-  // `recent` is informational only (drives the "100 terbaru" banner in the
-  // page template via props.filters.recent directly) — it must not become an
-  // editable form field, or it round-trips back as a bogus `recent=true` query
-  // param on the next request.
-  const { recent: _recent, ...formInitial } = initial;
+  // `recent` dan `sort_keys` informatif saja (yang pertama menyalakan banner
+  // "100 terbaru", yang kedua dipakai ReportPage untuk menentukan kolom mana
+  // yang bisa diurut) — keduanya tak boleh jadi field form, atau ikut
+  // terkirim balik sebagai query param palsu di permintaan berikutnya.
+  const { recent: _recent, sort_keys: _sortKeys, ...formInitial } = initial;
   const form = reactive({
     date_mode: "range",
     date_from: "",

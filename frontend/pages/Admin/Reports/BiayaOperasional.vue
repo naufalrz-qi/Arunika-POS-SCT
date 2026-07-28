@@ -19,11 +19,11 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 
 const columns = [
   { key: "no_transaksi", label: "No. Transaksi" },
-  { key: "tanggal", label: "Tanggal", sortable: true, format: "date" },
+  { key: "tanggal", label: "Tanggal", format: "date" },
   { key: "divisi", label: "Divisi" },
-  { key: "biaya", label: "Biaya", sortable: true },
+  { key: "biaya", label: "Biaya" },
   { key: "kategori", label: "Kategori" },
-  { key: "nominal", label: "Nominal", align: "right", format: "rupiah", sortable: true },
+  { key: "nominal", label: "Nominal", align: "right", format: "rupiah" },
   { key: "keterangan", label: "Keterangan" },
 ];
 

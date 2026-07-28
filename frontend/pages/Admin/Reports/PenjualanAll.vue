@@ -46,9 +46,9 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 );
 
 const columns = [
-  { key: "no_transaksi", label: "No. Transaksi", sortable: true },
-  { key: "tanggal", label: "Tanggal", sortable: true, format: "date" },
-  { key: "divisi", label: "Divisi", sortable: true },
+  { key: "no_transaksi", label: "No. Transaksi" },
+  { key: "tanggal", label: "Tanggal", format: "date" },
+  { key: "divisi", label: "Divisi" },
   { key: "customer", label: "Customer" },
   { key: "kota", label: "Kota" },
   { key: "jth_tempo", label: "Jth. Tempo", format: "date" },
@@ -56,8 +56,8 @@ const columns = [
   { key: "keterangan", label: "Ket." },
   { key: "kd_barang", label: "Kode Barang" },
   { key: "barang", label: "Barang" },
-  { key: "kategori", label: "Kategori", sortable: true },
-  { key: "sales", label: "Sales", sortable: true },
+  { key: "kategori", label: "Kategori" },
+  { key: "sales", label: "Sales" },
   { key: "qty", label: "Qty", align: "right", format: "number" },
   { key: "satuan", label: "Satuan" },
   { key: "harga", label: "Harga", align: "right", format: "rupiah" },
@@ -70,7 +70,7 @@ const columns = [
   { key: "dt3", label: "DT3", align: "right", format: "rupiah" },
   { key: "dt4", label: "DT4", align: "right", format: "rupiah" },
   { key: "harga_bersih", label: "Harga Bersih", align: "right", format: "rupiah" },
-  { key: "subtotal", label: "Subtotal", align: "right", format: "rupiah", sortable: true },
+  { key: "subtotal", label: "Subtotal", align: "right", format: "rupiah" },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);
