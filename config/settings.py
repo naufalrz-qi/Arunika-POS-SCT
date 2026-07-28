@@ -153,7 +153,10 @@ TAILSCALE_CIDR = os.environ.get("TAILSCALE_CIDR", "100.64.0.0/10")
 ADMIN_IP_ALLOWLIST = ["127.0.0.1", "::1"]
 
 LANGUAGE_CODE = "id"
-TIME_ZONE = "Asia/Jakarta"
+# Zona waktu tampilan. Penyimpanan tetap UTC (USE_TZ=True); ini yang menentukan
+# jam yang tercetak di Log Aktivitas, Riwayat Sinkronisasi, dsb. Ganti lewat
+# .env kalau server dipakai dari WITA/WIT (mis. TIME_ZONE=Asia/Makassar).
+TIME_ZONE = os.environ.get("TIME_ZONE", "Asia/Jakarta")
 USE_I18N = True
 USE_TZ = True
 

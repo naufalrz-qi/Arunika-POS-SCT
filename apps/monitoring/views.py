@@ -51,6 +51,21 @@ CONN_ERROR = "Tidak ada koneksi aktif, atau server tidak dapat dihubungi. Pilih 
 log = logging.getLogger(__name__)
 
 
+def _local(value, fmt="%Y-%m-%d %H:%M:%S"):
+    """Cetak datetime milik ORM Django di zona waktu situs (settings.TIME_ZONE).
+
+    USE_TZ=True menyimpan semuanya dalam UTC; `value.strftime(...)` langsung
+    mencetak UTC itu apa adanya, jadi Log Aktivitas dan kawan-kawannya terbaca
+    7 jam mundur di Asia/Jakarta. Hanya untuk datetime ORM — tanggal dari MS SQL
+    legacy sudah waktu lokal naif dan tak boleh ikut digeser.
+    """
+    if not value:
+        return ""
+    if timezone.is_naive(value):
+        return value.strftime(fmt)
+    return timezone.localtime(value).strftime(fmt)
+
+
 def _active():
     return mssql.get_active_profile()
 
@@ -80,7 +95,7 @@ def dashboard(request):
                 "user": a.username or "—",
                 "action": a.action,
                 "detail": a.detail,
-                "time": a.timestamp.strftime("%Y-%m-%d %H:%M"),
+                "time": _local(a.timestamp, "%Y-%m-%d %H:%M"),
             }
             for a in ActivityLog.objects.all()[:8]
         ]
@@ -129,7 +144,7 @@ def _user_dict(u):
         "name": u.get_full_name() or u.username,
         "role": u.role,
         "is_active": u.is_active,
-        "created_at": u.date_joined.strftime("%Y-%m-%d"),
+        "created_at": _local(u.date_joined, "%Y-%m-%d"),
     }
 
 
@@ -355,7 +370,7 @@ def sync_history_index(request):
         syncs = [
             {
                 "id": s.id,
-                "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "created_at": _local(s.created_at),
                 "user": s.username or "—",
                 "feature": s.feature,
                 "mode": s.mode,
@@ -606,7 +621,7 @@ def update_barang_riwayat(request):
             "nilai_lama": log.nilai_lama,
             "nilai_baru": log.nilai_baru,
             "username": log.username,
-            "created_at": log.created_at.isoformat(),
+            "created_at": timezone.localtime(log.created_at).isoformat(),
         }
         for log in logs
     ]
@@ -639,7 +654,7 @@ def riwayat_update_barang_index(request):
         rows = [
             {
                 "id": log.id,
-                "created_at": log.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "created_at": _local(log.created_at),
                 "kd_barang": log.kd_barang,
                 "nama_barang": log.nama_barang or "—",
                 "field": log.field,
@@ -699,7 +714,7 @@ def pergerakan_harga_index(request):
         rows = [
             {
                 "id": c.id,
-                "detected_at": c.detected_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "detected_at": _local(c.detected_at),
                 "kd_barang": c.kd_barang,
                 "nama_barang": c.nama_barang or "—",
                 "kd_satuan": c.kd_satuan,
@@ -725,7 +740,7 @@ def pergerakan_harga_index(request):
     last = HargaSnapshotRun.objects.order_by("-ran_at").first()
     last_run = (
         {
-            "ran_at": last.ran_at.strftime("%Y-%m-%d %H:%M"),
+            "ran_at": _local(last.ran_at, "%Y-%m-%d %H:%M"),
             "profile_name": last.profile_name or "—",
             "changes": last.changes,
             "total": last.total,
@@ -923,7 +938,7 @@ def logs_index(request):
             "action": a.action,
             "detail": a.detail,
             "ip_address": a.ip_address or "",
-            "timestamp": a.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": _local(a.timestamp),
         }
         for a in ActivityLog.objects.all()[:300]
     ]
