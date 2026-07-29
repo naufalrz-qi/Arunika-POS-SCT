@@ -118,4 +118,17 @@ Project-specific config comes from `.env` (see `.env.example` for the full annot
 
 ## Project status
 
-All admin menus render real MS SQL data — `frontend/mock/*` has been deleted. Report pages come in two stacks that should not be mixed: the server-side stack (`ReportPage.vue` + `ServerTable.vue` + `useServerReport.js`; server pagination/sort/filter, XLSX export via the backend `/export` routes) used by `Reports/*`, `Promo/*`, `Cash/*`, `Analytics/*`, Opname, and TransaksiBarang; and the client-side stack (`ReportView.vue` + `DataTable.vue` + `useReportFilters.js`; in-browser sort/paginate, lazy-loaded SheetJS export) used by the inventory pages. A CDC-based reporting replica (`apps/transactions/cdc_sync.py`, `report_source` on `ServerProfile`) exists but is parked — with `report_source` unset, reports read the primary directly. Follow the deferred convention above for any new page.
+All admin menus render real MS SQL data — `frontend/mock/*` has been deleted. Report pages come in two stacks that should not be mixed: the server-side stack (`ReportPage.vue` + `ServerTable.vue` + `useServerReport.js`; server pagination/sort/filter, XLSX export via the backend `/export` routes) used by `Reports/*`, `Promo/*`, `Cash/*`, `Analytics/*`, Opname, and TransaksiBarang; and the client-side stack (`ReportView.vue` + `DataTable.vue` + `useReportFilters.js`; in-browser sort/paginate, lazy-loaded SheetJS export) used by the inventory pages.
+
+There is a third shape, used by **Stok Akhir** and **Stok per Divisi**: columnar client-side (`useColumnarTable.js` + `BaseTable.vue`, fed by `inv.stok_akhir_kolumnar()` / `inv.stock_levels_kolumnar()`). Reach for it only when a page must search across a large dataset without round-trips — server pagination is the default and is simpler.
+
+It exists because Stok Akhir shipped the whole ~55k-row barang×divisi universe as list-of-dict (15.6 MB JSON → 54,955 reactive Vue objects → 123 MB heap) and never finished loading on Firefox Android. The same rows column-major with a string dictionary are 4.65 MB and 25 MB heap (Stok per Divisi: 2.66 MB / 13 MB).
+
+Rules if you touch it, each one bought by a measurement:
+
+- The payload never enters `ref`/`reactive` — Vue proxying 55k entries was about half the original 123 MB.
+- Never sort the *filtered* result. Sort the full index once per sort key and let filtering walk it in order; sorting per keystroke measured 1265 ms per character at 6× CPU throttle.
+- The search box is debounced (`SEARCH_DEBOUNCE_MS`). One character triggers ~110k substring scans.
+- Column kinds come from `payload.types`, set by `_kolumnar()` in `apps/inventory/services.py`. Do not sniff them from `typeof data[c][0]` — a numeric column holding one `null` then becomes a `Float64Array` full of `NaN` and the screen prints "NaN".
+- Server-side, only *today* + *no divisi filter* is cached (`stok_kolumnar:<date>` / `divisi_kolumnar:<date>`) and warmed by the scheduler for the `is_default` profile only. Caching every date/divisi combination someone clicks would pile up 5 MB payloads in the Django process.
+- On Stok per Divisi the divisi filter must stay a server round-trip: `stock_levels` aggregates differently with and without `kd_divisi`, so picking a divisi changes the numbers, not just which rows show. A CDC-based reporting replica (`apps/transactions/cdc_sync.py`, `report_source` on `ServerProfile`) exists but is parked — with `report_source` unset, reports read the primary directly. Follow the deferred convention above for any new page.

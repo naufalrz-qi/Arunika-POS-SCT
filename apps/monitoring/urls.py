@@ -29,6 +29,7 @@ urlpatterns = [
     path("logs", views.logs_index, name="logs"),
     # Inventory
     path("inventory/stock", views.stock_index, name="stock"),
+    path("inventory/stock/export", views.stock_export, name="stock_export"),
     path("inventory/histori", views.barang_histori_index, name="barang_histori"),
     path("inventory/stok-divisi", views.stok_divisi, name="stok_divisi"),
     path("inventory/mutasi-stok", views.mutasi_stok, name="mutasi_stok"),

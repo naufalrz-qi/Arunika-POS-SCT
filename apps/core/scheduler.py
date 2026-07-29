@@ -145,18 +145,22 @@ def _run_due_stok(now, profile) -> None:
     log.info("snapshot_stok %s: %s baris saldo", profile.name, res["rows"])
 
 
-def _warm_master(profile) -> None:
+def _warm_master(profile, include_stok=False) -> None:
     """Panasi cache master data profil ini. Tiap tick, bukan sekali sehari:
-    tujuannya menjaga cache TETAP hangat, bukan mengisinya sekali."""
+    tujuannya menjaga cache TETAP hangat, bukan mengisinya sekali.
+
+    `include_stok` hanya untuk profil AKTIF — lihat alasannya di
+    warm_master_cache()."""
     from apps.inventory.services import warm_master_cache
 
     t0 = time.monotonic()
     try:
-        n = warm_master_cache(profile, ttl=_warm_ttl())
+        n = warm_master_cache(profile, ttl=_warm_ttl(), include_stok=include_stok)
     except Exception as exc:  # pyodbc.Error dll — server jauh mati, coba tick berikutnya
         log.warning("pemanasan cache master gagal (%s): %s", profile.name, exc)
         return
-    log.info("cache master %s: %s key, %.2fs", profile.name, n, time.monotonic() - t0)
+    log.info("cache master %s: %s key%s, %.2fs", profile.name, n,
+             " (+stok kolumnar)" if include_stok else "", time.monotonic() - t0)
 
 
 def _run_due_jobs() -> None:
@@ -171,10 +175,17 @@ def _run_due_jobs() -> None:
     stok_on = _stok_enabled()
     harga_on = _harga_enabled()
     warm_on = _warm_enabled()
+    # Payload kolumnar Stok Akhir (~5 MB) hanya dibangun untuk profil DEFAULT.
+    # Koneksi aktif sebenarnya per-pengguna (sesi), jadi thread latar ini tak
+    # punya "yang aktif" — get_active_profile() pun jatuh ke is_default saat
+    # tak ada request. Memanaskan ke-13 profil berarti menahan 13 × 5 MB di
+    # memori proses demi halaman yang cuma menampilkan satu server. Pengguna
+    # yang memilih koneksi lain menanggung sekali cache dingin; itu diterima.
+    default_pk = ServerProfile.objects.filter(is_default=True).values_list("pk", flat=True).first()
     for profile in ServerProfile.objects.all():
         try:
             if warm_on:
-                _warm_master(profile)
+                _warm_master(profile, include_stok=profile.pk == default_pk)
             if stok_on:
                 _run_due_stok(now, profile)
             if harga_on:

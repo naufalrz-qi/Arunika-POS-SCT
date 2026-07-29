@@ -951,42 +951,153 @@ def logs_index(request):
     )
 
 
-# --- Stok Akhir (computed from movement card, table-level) -----------------
+# --- Stok Akhir (computed from movement card, dipaginasi di server) --------
+#
+# Dulu halaman ini mengirim SELURUH universe barang×divisi ke peramban dalam
+# satu prop deferred. Terukur di RTL PUSAT: 54.955 baris = 17,9 MB JSON (1,35
+# MB gzip) dan 123 MB heap JS untuk satu kali buka; di Firefox Android tabnya
+# tak pernah selesai memuat. Hanya 14.123 baris (26%) yang stoknya bukan nol,
+# dan menyaring per divisi tak menolong — server ini cuma punya satu divisi.
+#
+# Mesin stoknya tidak disentuh (inv.stok_akhir_per_tanggal — lihat catatan FMI
+# Stok soal kenapa bukan m_barang_stok_akhir). Yang berubah: siapa yang
+# memotong halaman. Polanya persis FMI Stok — hitung penuh di Python, iris di
+# server, kirim satu halaman, export lewat rute sendiri.
+_STOK_COLUMNS = [
+    {"key": "kd_divisi", "label": "Kode Div."},
+    {"key": "divisi", "label": "Divisi"},
+    {"key": "kd_barang", "label": "Kode"},
+    {"key": "barang", "label": "Barang"},
+    {"key": "kategori", "label": "Kategori"},
+    {"key": "merk", "label": "Merk"},
+    {"key": "model", "label": "Model"},
+    {"key": "warna", "label": "Warna"},
+    {"key": "ukuran", "label": "Ukuran"},
+    {"key": "stok_akhir", "label": "Stok Akhir"},
+    {"key": "harga_average", "label": "Harga Avg"},
+    {"key": "harga_jual", "label": "Harga Jual"},
+    {"key": "nominal", "label": "Nominal"},
+    {"key": "harga_beli_akhir", "label": "Harga Beli Akhir"},
+]
+
+
+def _stok_sort_key(row, key):
+    """Kunci urut aman untuk tabel yang kolomnya campur teks dan angka.
+
+    `(r.get(k) or 0)` seperti di FMI Stok hanya benar bila seluruh kolomnya
+    numerik: di kolom teks, sel kosong jadi 0 lalu dibandingkan dengan str dan
+    sort meledak TypeError. Di sini tiap kolom menghasilkan bentuk tuple yang
+    seragam, dan None selalu jatuh ke belakang.
+    """
+    v = row.get(key)
+    if v is None:
+        return (1, "", 0.0)
+    if isinstance(v, (int, float)):
+        return (0, "", float(v))
+    return (0, str(v).lower(), 0.0)
+
+
+def _stok_rows(profile, f):
+    """(baris tersaring+terurut, daftar kategori yang ada).
+
+    Kategori dikumpulkan SEBELUM filter kategori dipakai — kalau sesudah,
+    memilih satu kategori akan menghapus semua pilihan lain dari dropdown.
+    """
+    levels = inv.stok_akhir_per_tanggal(
+        profile, tanggal=f["date_to"], kd_divisi=f["kd_divisi"] or None)
+
+    kategoris = sorted({r["kategori"] for r in levels if r["kategori"]})
+
+    q = f["search"].lower()
+    kat = f["kategori"]
+    # `divisi` = NAMA divisi, bukan kode: itu yang dipegang layar (payload
+    # kolumnar mengamuskan nama, bukan kode) dan yang dikirim balik tombol
+    # export. `kd_divisi` tetap ada untuk pemanggil lain yang punya kodenya.
+    div = f["divisi"]
+    rows = [
+        r for r in levels
+        if (not kat or r["kategori"] == kat)
+        and (not div or r["divisi"] == div)
+        and (not q or q in r["barang"].lower() or q in r["kd_barang"].lower()
+             or q in (r["merk"] or "").lower())
+    ]
+    rows.sort(key=lambda r: _stok_sort_key(r, f["sort"]),
+              reverse=f["sort_dir"] == "desc")
+    return rows, kategoris
+
+
+def _stok_params(request, **kw):
+    """Parameter jalur EXPORT Stok Akhir.
+
+    Layarnya sendiri tak lagi memakai ini — sejak seluruh data dipegang klien,
+    saring/urut/paginasi terjadi di peramban. Export tetap di server (SheetJS
+    atas 55rb baris adalah lonjakan heap yang justru sedang dihindari), jadi ia
+    perlu menerima ulang keadaan filter yang sedang dilihat pengguna.
+    """
+    f = reporting.parse_report_params(request, rpt.SORTS_STOK, "barang", **kw)
+    # Halaman memakai satu parameter `tanggal`, bukan pasangan date_mode/date
+    # milik laporan rentang. Timpa hasil parse-nya supaya keduanya tak berbeda.
+    f["date_to"] = _eod(_parse_date(request.GET.get("tanggal")) or dt.datetime.now())
+    f["kd_divisi"] = (request.GET.get("kd_divisi") or "").strip()
+    f["divisi"] = (request.GET.get("divisi") or "").strip()
+    f["kategori"] = (request.GET.get("kategori") or "").strip()
+    # Daftar barang wajar dibaca A→Z; default parse_report_params DESC karena
+    # laporan lain diurut tanggal (terbaru dulu).
+    if not request.GET.get("sort_dir"):
+        f["sort_dir"] = "asc"
+    return f
+
 
 def stock_index(request):
-    kd_divisi = request.GET.get("kd_divisi", "")
+    """Kirim SELURUH katalog stok ke peramban dalam bentuk kolumnar.
+
+    Halaman ini sengaja tidak dipaginasi server: gunanya justru mencari satu SKU
+    di antara 55rb tanpa bolak-balik. Yang membuatnya mustahil dulu bukan jumlah
+    barisnya, melainkan bentuk payloadnya — 15,6 MB "list of dict" yang jadi
+    54.955 objek reaktif Vue (123 MB heap). Bentuk kolumnar + kamus mengirim
+    data yang sama dalam 5,3 MB; lihat catatan panjang di
+    apps/inventory/services.py::_kolumnar.
+
+    Tanggal satu-satunya filter yang perlu ke server. Divisi/kategori/cari
+    dikerjakan di klien atas data yang sudah ada di sana.
+    """
     tanggal = _parse_date(request.GET.get("tanggal")) or dt.datetime.now()
 
-    # Deferred: the shell renders instantly, Inertia fetches this bundle right
-    # after mount (the stock computation takes seconds on real servers).
+    # Tetap deferred: shell + panel filter terlukis seketika. Pemanas terjadwal
+    # menjaga tanggal hari ini tetap hangat, tapi tanggal lampau dan menit-menit
+    # pertama setelah server restart masih bisa puluhan detik.
     def load_stok():
         profile = _active()
-        levels, divisi_list, conn_error = [], [], None
+        payload, divisi_list, conn_error = None, [], None
         if profile:
             try:
                 divisi_list = inv.list_divisi(profile)
-                levels = inv.stok_akhir_per_tanggal(
-                    profile,
-                    tanggal=_eod(tanggal),
-                    kd_divisi=kd_divisi or None,
-                )
+                payload = inv.stok_akhir_kolumnar(profile, tanggal=_eod(tanggal))
             except pyodbc.Error as exc:
                 conn_error = mssql.friendly_error(exc, "Gagal membaca stok")
         else:
             conn_error = CONN_ERROR
-        return {"levels": levels, "divisi_list": divisi_list, "conn_error": conn_error}
+        return {"tabel": payload, "divisi_list": divisi_list, "conn_error": conn_error}
 
-    return render(
-        request,
-        "Admin/Inventory/Stock",
-        props={
-            "stok": defer(load_stok),
-            "filters": {
-                "kd_divisi": kd_divisi,
-                "tanggal": request.GET.get("tanggal", ""),
-            },
-        },
-    )
+    return render(request, "Admin/Inventory/Stock", props={
+        "stok": defer(load_stok),
+        "filters": {"tanggal": _eod(tanggal).strftime("%Y-%m-%d")},
+    })
+
+
+def stock_export(request):
+    f = _stok_params(request, max_range_days=None)
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect("/admin-panel/inventory/stock")
+    try:
+        rows, _ = _stok_rows(profile, f)
+    except pyodbc.Error as exc:
+        request.session["flash_error"] = mssql.friendly_error(exc, "Gagal export")
+        return redirect("/admin-panel/inventory/stock")
+    log_activity(request, "export", f"Export stok-akhir: {len(rows)} baris")
+    return reporting.xlsx_response("stok-akhir", _STOK_COLUMNS, rows)
 
 
 def barang_histori_index(request):
@@ -1639,27 +1750,30 @@ def stok_divisi(request):
 
     def load():
         profile = _active()
-        rows, divisi_list, snapshot, conn_error = [], [], None, None
+        tabel, divisi_list, snapshot, conn_error = None, [], None, None
         if profile:
             try:
                 t0 = time.perf_counter()
                 divisi_list = inv.list_divisi(profile)
                 snapshot = inv.snapshot_status(profile)
-                rows = inv.stock_levels(
+                # Kolumnar, sama seperti Stok Akhir: halaman ini juga mengirim
+                # seluruh ~55rb baris ke peramban supaya cek stok bisa dicari
+                # tanpa bolak-balik. Bentuk list-of-dict-nya 5,2 MB.
+                tabel = inv.stock_levels_kolumnar(
                     profile,
                     kd_divisi=kd_divisi or None,
                     date_to=_eod(dt.datetime.now()),
                 )
                 log.info(
                     "stok_divisi(%s): %s baris, %.2fs",
-                    kd_divisi or "semua", len(rows), time.perf_counter() - t0,
+                    kd_divisi or "semua", tabel["n"], time.perf_counter() - t0,
                 )
             except pyodbc.Error as exc:
                 conn_error = mssql.friendly_error(exc, "Gagal membaca stok divisi")
         else:
             conn_error = CONN_ERROR
         return {
-            "rows": rows, "divisi_list": divisi_list,
+            "tabel": tabel, "divisi_list": divisi_list,
             "snapshot": snapshot, "conn_error": conn_error,
         }
 

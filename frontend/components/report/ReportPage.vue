@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from "vue";
-import { Deferred, usePage } from "@inertiajs/vue3";
+import { Deferred, router, usePage } from "@inertiajs/vue3";
 import Banner from "@/components/ui/Banner.vue";
 import Input from "@/components/ui/Input.vue";
 import TableSkeleton from "@/components/ui/TableSkeleton.vue";
@@ -55,6 +55,32 @@ const displayed = computed(() => {
   );
 });
 const nf = new Intl.NumberFormat("id-ID");
+
+// Jembatan ke pencarian seluruh data.
+//
+// Ada dua kotak cari di layar ini: `search` di panel filter (dikerjakan server,
+// atas seluruh dataset) dan yang di bawah ini (dikerjakan peramban, hanya atas
+// baris yang sedang tampil). Yang kedua duduk tepat di atas tabel, jadi itu
+// yang lebih dulu dipakai orang — lalu mereka menyimpulkan barangnya tak ada
+// padahal cuma tak ada DI HALAMAN INI. Label "(dalam halaman ini)" saja tak
+// cukup mencegahnya.
+//
+// Tombol ini menyalin istilah yang sudah diketik ke filter server dan
+// mengirimnya. Query string sekarang dipertahankan (tanggal/divisi/kategori
+// yang sedang aktif tak ikut hilang), hanya `search` yang ditimpa dan halaman
+// kembali ke 1.
+function cariSeluruhData() {
+  const term = q.value.trim();
+  if (!term) return;
+  const [path, qs] = inertiaPage.url.split("?");
+  const params = Object.fromEntries(new URLSearchParams(qs || ""));
+  q.value = "";
+  router.get(
+    path,
+    { ...params, search: term, page: 1 },
+    { preserveState: true, preserveScroll: true },
+  );
+}
 </script>
 
 <template>
@@ -85,12 +111,32 @@ const nf = new Intl.NumberFormat("id-ID");
            panel filter, jauh dari tabel yang diexportnya. -->
       <div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end">
         <div class="sm:max-w-xs sm:flex-1">
-          <Input v-model="q" label="Cari (dalam halaman ini)" placeholder="saring baris yang tampil…" />
+          <Input
+            v-model="q"
+            label="Cari (dalam halaman ini)"
+            placeholder="saring baris yang tampil…"
+            @keydown.enter="displayed.length === 0 && cariSeluruhData()"
+          />
         </div>
-        <p class="text-xs text-ink-subtle sm:pb-2">
-          Menampilkan {{ nf.format(displayed.length) }} dari {{ nf.format(rows.length) }} baris di halaman
-          ini<template v-if="data && data.total"> · {{ nf.format(data.total) }} total</template>.
-        </p>
+        <div class="text-xs text-ink-subtle sm:pb-2">
+          <p>
+            Menampilkan {{ nf.format(displayed.length) }} dari {{ nf.format(rows.length) }} baris di halaman
+            ini<template v-if="data && data.total"> · {{ nf.format(data.total) }} total</template>.
+          </p>
+          <!-- Muncul begitu ada istilah yang diketik, bukan hanya saat nihil:
+               "ketemu 1 di halaman ini" juga menyesatkan kalau ada 40 lagi di
+               halaman lain. -->
+          <p v-if="q.trim()" class="mt-0.5">
+            <button
+              type="button"
+              class="text-brand-fg underline underline-offset-2 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+              @click="cariSeluruhData"
+            >
+              Cari "{{ q.trim() }}" di seluruh data<template v-if="data && data.total">
+                ({{ nf.format(data.total) }} baris)</template>
+            </button>
+          </p>
+        </div>
         <div v-if="exportHref" class="sm:ml-auto sm:pb-0.5">
           <ExportButton mode="server" :href="exportHref" />
         </div>

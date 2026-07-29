@@ -1095,6 +1095,14 @@ _FMI_STOK_OVERSTOCK_HARI = 90  # > sisa hari stok (atau tak pernah laku) -> Over
 
 SORTS_FMI_STOK = {"qty_stok": "qty_stok", "nilai_stok": "nilai_stok", "terjual": "terjual", "rasio": "rasio"}
 
+# Stok Akhir: diurut di Python (barisnya dari mesin pergerakan, bukan SELECT),
+# jadi nilai peta ini tak pernah masuk ORDER BY — daftar kuncinya saja yang
+# dipakai, sebagai whitelist dan sebagai `sort_keys` untuk header tabel.
+SORTS_STOK = {
+    "divisi": "divisi", "kd_barang": "kd_barang", "barang": "barang",
+    "kategori": "kategori", "stok_akhir": "stok_akhir", "nominal": "nominal",
+}
+
 
 # --- Transaksi Barang (transaksi seluruh barang, semua jenis) --------------
 SORTS_TRANSAKSI_BARANG = {
