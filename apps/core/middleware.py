@@ -27,6 +27,11 @@ def _auth_user_dict(user):
         "name": user.get_full_name() or user.username,
         "username": user.username,
         "role": user.role,
+        # Dipakai layar untuk membuang kolom yang datanya memang tak dikirim.
+        # KOSMETIK: yang benar-benar menahan datanya ada di sisi server
+        # (_hidden_fields di apps/monitoring/views.py). Jangan pernah jadikan
+        # ini satu-satunya penjaga.
+        "hidden_data_keys": sorted(user.hidden_data()),
     }
 
 

@@ -26,6 +26,7 @@ import SummaryStrip from "@/components/ui/SummaryStrip.vue";
 import ExportButton from "@/components/ui/ExportButton.vue";
 import { useReportFilters } from "@/composables/useReportFilters";
 import { useColumnarTable } from "@/composables/useColumnarTable";
+import { useHiddenData } from "@/composables/useHiddenData";
 
 const props = defineProps({
   // Bundle deferred {tabel, divisi_list, conn_error} — datang setelah mount.
@@ -58,7 +59,18 @@ const { filters: pull, loading: pulling, apply: tarikData } = useReportFilters(
 const divisiOptions = computed(() => dictOptions("divisi"));
 const kategoriOptions = computed(() => dictOptions("kategori"));
 
-const columns = [
+// Kolom nilai uang dibuang bila izinnya dicabut. Ini hanya merapikan layar —
+// field-nya memang sudah tak ada di payload (lihat _tanpa_kolom di views.py),
+// jadi tanpa penyaringan ini yang muncul cuma deretan sel "-".
+const { bisaLihat, saringKolom } = useHiddenData();
+const KOLOM_UANG = {
+  harga_jual: "harga_jual",
+  harga_average: "harga_beli",
+  harga_beli_akhir: "harga_beli",
+  nominal: "nominal",
+};
+
+const SEMUA_KOLOM = [
   { key: "kd_divisi", label: "Kode Div." },
   { key: "divisi", label: "Divisi", sortable: true },
   { key: "kd_barang", label: "Kode", sortable: true },
@@ -74,6 +86,7 @@ const columns = [
   { key: "nominal", label: "Nominal", align: "right", format: "rupiah", sortable: true },
   { key: "harga_beli_akhir", label: "Harga Beli Akhir", align: "right", format: "rupiah" },
 ];
+const columns = computed(() => saringKolom(SEMUA_KOLOM, KOLOM_UANG));
 
 const nf = new Intl.NumberFormat("id-ID");
 const rp = new Intl.NumberFormat("id-ID", {
@@ -82,11 +95,18 @@ const rp = new Intl.NumberFormat("id-ID", {
 
 // Ringkasan dihitung atas hasil saringan, langsung dari typed array — tak ada
 // baris yang dijadikan objek untuk ini.
-const summaryItems = computed(() => [
-  { label: "Baris", value: `${nf.format(total.value)} dari ${nf.format(n.value)}` },
-  { label: "Total Stok", value: nf.format(Math.round(sumOf("stok_akhir") * 1000) / 1000) },
-  { label: "Total Nilai Stok", value: rp.format(sumOf("nominal")) },
-]);
+const summaryItems = computed(() => {
+  const items = [
+    { label: "Baris", value: `${nf.format(total.value)} dari ${nf.format(n.value)}` },
+    { label: "Total Stok", value: nf.format(Math.round(sumOf("stok_akhir") * 1000) / 1000) },
+  ];
+  // Tanpa kolom `nominal`, sumOf mengembalikan 0 — menampilkan "Rp 0" sebagai
+  // total nilai persediaan bukan sekadar jelek, itu angka yang salah.
+  if (bisaLihat("nominal")) {
+    items.push({ label: "Total Nilai Stok", value: rp.format(sumOf("nominal")) });
+  }
+  return items;
+});
 
 // Export tetap dikerjakan server: SheetJS atas 55rb baris adalah lonjakan heap
 // yang justru sedang dihindari halaman ini. Kirim keadaan filter yang sedang

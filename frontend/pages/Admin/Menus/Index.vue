@@ -9,13 +9,18 @@ import Input from "@/components/ui/Input.vue";
 import Icon from "@/components/nav/Icon.vue";
 
 const props = defineProps({
-  users: { type: Array, default: () => [] }, // {id, username, name, role, allowed_menu_keys}
+  // {id, username, name, role, allowed_menu_keys, allowed_data_keys}
+  users: { type: Array, default: () => [] },
   menus: { type: Array, default: () => [] }, // assignable menus (punya .section + .icon)
   sections: { type: Array, default: () => [] }, // [{key, label}] urut tampil
+  data_keys: { type: Array, default: () => [] }, // [{key, label}] nilai uang
 });
 
 const selected = ref(null);
 const checked = reactive({});
+// Terpisah dari `checked` supaya "Pilih Semua"/"Kosongkan" milik menu tak
+// diam-diam ikut mencabut akses ke nilai uang.
+const dataChecked = reactive({});
 const saving = ref(false);
 const userSearch = ref("");
 
@@ -55,21 +60,31 @@ function select(user) {
   props.menus.forEach((m) => {
     checked[m.key] = allowed.length === 0 ? true : allowed.includes(m.key);
   });
+  // Nilai uang TIDAK memakai konvensi "kosong = semua": server mengirim daftar
+  // yang boleh dilihat apa adanya, jadi kosong berarti benar-benar tak boleh.
+  const bolehData = user.allowed_data_keys || [];
+  props.data_keys.forEach((d) => {
+    dataChecked[d.key] = bolehData.includes(d.key);
+  });
 }
 
 function save() {
   if (!selected.value) return;
   const menu_keys = props.menus.filter((m) => checked[m.key]).map((m) => m.key);
+  const data_keys = props.data_keys.filter((d) => dataChecked[d.key]).map((d) => d.key);
   saving.value = true;
   router.post(
     "/admin-panel/menus/save",
-    { user_id: selected.value.id, menu_keys },
+    { user_id: selected.value.id, menu_keys, data_keys },
     {
       preserveScroll: true,
       onSuccess: () => {
         // reflect locally
         const u = props.users.find((x) => x.id === selected.value.id);
-        if (u) u.allowed_menu_keys = menu_keys;
+        if (u) {
+          u.allowed_menu_keys = menu_keys;
+          u.allowed_data_keys = data_keys;
+        }
       },
       onFinish: () => (saving.value = false),
     },
@@ -124,6 +139,38 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
               <Button variant="secondary" size="sm" @click="setAll(false)">Kosongkan</Button>
             </div>
           </div>
+
+          <!-- Nilai uang: berdiri sendiri di atas daftar menu, bukan sebagai
+               salah satu section, karena cakupannya berbeda — ini menyaring ISI
+               halaman, bukan menentukan halaman mana yang terbuka. -->
+          <section class="mb-5 rounded-control border border-border-default p-3">
+            <div class="mb-2 border-b border-border-default pb-1.5">
+              <h3 class="text-xs font-semibold uppercase tracking-wider text-ink-muted">Nilai Uang</h3>
+              <p class="mt-1 text-xs text-ink-subtle">
+                Yang tak dicentang tidak dikirim ke peramban sama sekali, termasuk pada Export Excel.
+                Berlaku di <strong>Stok Akhir</strong>, <strong>Barang Histori</strong>, dan
+                <strong>Dashboard</strong> — halaman laporan lain masih menampilkan angka uang, jadi
+                cabut menunya juga bila perlu.
+              </p>
+            </div>
+            <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <label
+                v-for="d in data_keys"
+                :key="d.key"
+                :class="[
+                  'flex items-center gap-3 rounded-control border px-3 py-2.5 cursor-pointer transition-colors',
+                  dataChecked[d.key] ? 'border-brand-500/60 bg-brand-bg' : 'border-border-default hover:bg-surface-2',
+                ]"
+              >
+                <input
+                  type="checkbox"
+                  v-model="dataChecked[d.key]"
+                  class="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500"
+                />
+                <span class="text-sm text-ink-muted">{{ d.label }}</span>
+              </label>
+            </div>
+          </section>
 
           <!-- Per section: header + pilih semua section + item ber-ikon -->
           <div class="space-y-5">

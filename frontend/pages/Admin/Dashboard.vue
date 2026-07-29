@@ -9,6 +9,7 @@ import BarChart from "@/components/charts/BarChart.vue";
 import Icon from "@/components/nav/Icon.vue";
 import LoadingCard from "@/components/ui/LoadingCard.vue";
 import SummaryStrip from "@/components/ui/SummaryStrip.vue";
+import { useHiddenData } from "@/composables/useHiddenData";
 
 const props = defineProps({
   dashboard: { type: Object, default: null },
@@ -19,12 +20,26 @@ const data = computed(() => props.dashboard || {});
 const rupiah = (n) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n || 0);
 
-const summaryItems = computed(() => [
-  { label: "Transaksi Hari Ini", value: data.value.stats?.total_transactions ?? 0 },
-  { label: "Item Terjual", value: data.value.stats?.total_items ?? 0 },
-  { label: "Omzet", value: rupiah(data.value.stats?.revenue) },
-  { label: "Server Online", value: `${data.value.stats?.servers_online ?? 0} / ${data.value.stats?.servers_total ?? 0}` },
-]);
+const { bisaLihat } = useHiddenData();
+
+const summaryItems = computed(() => {
+  const s = data.value.stats || {};
+  const items = [
+    { label: "Transaksi Hari Ini", value: s.total_transactions ?? 0 },
+    { label: "Item Terjual", value: s.total_items ?? 0 },
+  ];
+  // `revenue` memang tak dikirim server bila izinnya dicabut; tanpa penjagaan
+  // ini kartunya tetap muncul bertuliskan "Rp 0" — angka yang salah, bukan
+  // sekadar kosong.
+  if (bisaLihat("nominal")) {
+    items.push({ label: "Omzet", value: rupiah(s.revenue) });
+  }
+  items.push({
+    label: "Server Online",
+    value: `${s.servers_online ?? 0} / ${s.servers_total ?? 0}`,
+  });
+  return items;
+});
 
 const chartData = computed(() =>
   (data.value.hourly_transactions || []).map((h) => ({ label: h.hour, value: h.count })),
@@ -75,14 +90,16 @@ const chartData = computed(() =>
             <tr class="text-left">
               <th class="py-1.5 text-[11px] font-semibold text-ink-muted">Barang</th>
               <th class="py-1.5 text-right text-[11px] font-semibold text-ink-muted">Qty</th>
-              <th class="py-1.5 text-right text-[11px] font-semibold text-ink-muted">Nilai</th>
+              <th v-if="bisaLihat('nominal')" class="py-1.5 text-right text-[11px] font-semibold text-ink-muted">
+                Nilai
+              </th>
             </tr>
           </thead>
           <tbody class="divide-y divide-border-default">
             <tr v-for="m in data.fast_movers" :key="m.kd_barang">
               <td class="py-1.5 pr-2 text-ink">{{ m.nama }}</td>
               <td class="py-1.5 text-right text-ink">{{ (m.qty ?? 0).toLocaleString("id-ID") }}</td>
-              <td class="py-1.5 text-right text-ink">{{ rupiah(m.nilai) }}</td>
+              <td v-if="bisaLihat('nominal')" class="py-1.5 text-right text-ink">{{ rupiah(m.nilai) }}</td>
             </tr>
           </tbody>
         </table>
@@ -103,17 +120,23 @@ const chartData = computed(() =>
           Belum ada aktivitas tercatat.
         </p>
         <ul v-else class="divide-y divide-border-default">
-          <li v-for="a in data.recent_activity || []" :key="a.id" class="flex items-center justify-between py-3">
-            <div class="flex items-center gap-3">
-              <div class="flex h-8 w-8 items-center justify-center rounded-full bg-surface-3 text-xs font-semibold text-ink-muted">
+          <!-- `min-w-0` di kedua tingkat flex, dan `[overflow-wrap:anywhere]`
+               pada detailnya. Tanpa itu satu baris log bisa melebarkan seluruh
+               halaman: detail "Set menu <user>: dashboard,penjualan_all,…"
+               berisi 40+ kunci menu dipisah koma TANPA spasi, jadi peramban tak
+               menemukan satu pun titik putus. `break-words` tak cukup di sini —
+               ia hanya memutus di spasi, yang memang tak ada. -->
+          <li v-for="a in data.recent_activity || []" :key="a.id" class="flex items-start justify-between gap-3 py-3">
+            <div class="flex min-w-0 items-start gap-3">
+              <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-3 text-xs font-semibold text-ink-muted">
                 {{ a.user.charAt(0).toUpperCase() }}
               </div>
-              <div>
+              <div class="min-w-0">
                 <p class="text-sm text-ink"><span class="font-medium">{{ a.user }}</span> — {{ a.action }}</p>
-                <p class="text-xs text-ink-muted">{{ a.detail }}</p>
+                <p class="text-xs text-ink-muted [overflow-wrap:anywhere]">{{ a.detail }}</p>
               </div>
             </div>
-            <span class="text-xs text-ink-subtle">{{ a.time }}</span>
+            <span class="shrink-0 whitespace-nowrap text-xs text-ink-subtle">{{ a.time }}</span>
           </li>
         </ul>
       </Card>
