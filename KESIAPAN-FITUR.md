@@ -54,9 +54,9 @@ Kolom **Sumber baca**: `replica` = bisa membaca replica laporan bila dikonfigura
 | Pembelian per Supplier | `pembelian_supplier` | laporan-server | replica | — | Siap |
 | Pembelian per Periode | `pembelian_periode` | laporan-server | replica | — | Siap |
 | Retur Pembelian | `retur_pembelian` | laporan-server | replica | — | Siap |
-| Stok Akhir | `stock` | laporan-klien | primary | — | Siap |
+| Stok Akhir | `stock` | kolumnar-klien | primary | — | Siap |
 | Barang Histori | `barang_histori` | laporan-klien | primary | — | Siap |
-| Stok per Divisi | `stok_divisi` | laporan-klien | primary | — | Siap |
+| Stok per Divisi | `stok_divisi` | kolumnar-klien | primary | — | Siap |
 | Mutasi Stok | `stok_akhir` ⚠ | laporan-klien | primary | — | Siap |
 | Stok Awal Barang | `stok_awal` | laporan-klien | primary | — | Siap |
 | Transaksi Barang | `transaksi_barang` | laporan-server | replica | — | Siap |

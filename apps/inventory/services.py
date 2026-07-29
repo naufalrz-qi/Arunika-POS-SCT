@@ -460,7 +460,7 @@ def _purchase_prices_key(tanggal) -> str:
 PURCHASE_PRICES_PREFIX = "purchase_prices:"
 
 
-def warm_master_cache(profile, ttl=None) -> int:
+def warm_master_cache(profile, ttl=None, include_stok=False) -> int:
     """Isi ulang cache master data untuk `profile` dalam SATU koneksi.
 
     Ongkos cache dingin bukan biaya query, melainkan biaya menstreaming katalog
@@ -474,6 +474,13 @@ def warm_master_cache(profile, ttl=None) -> int:
     `force=True`: sengaja membangun ulang walau entri lama masih hidup — itulah
     gunanya, mengganti isi cache di latar sebelum pengguna menemukannya kosong.
 
+    `include_stok`: ikut membangun payload kolumnar Stok Akhir hari ini. Ini
+    yang menghapus tunggu ~41 detik di halaman itu — key master di atas TIDAK
+    mencakupnya, karena biayanya ada di `_movement_sums`, bukan di tabel m_*.
+    Sengaja OPT-IN dan dipakai penjadwal hanya untuk profil AKTIF: payloadnya
+    ~5 MB, dan membangunnya untuk 13 profil tiap tick berarti menahan semuanya
+    di memori proses Django demi halaman yang cuma bisa menampilkan satu.
+
     Return jumlah key yang diisi."""
     filled = []
 
@@ -484,6 +491,9 @@ def warm_master_cache(profile, ttl=None) -> int:
     # Key berkunci tanggal: buang set hari-hari sebelumnya sebelum mengisi yang
     # baru, kalau tidak tiap hari meninggalkan satu peta puluhan ribu entri.
     invalidate_master_cache(profile.pk, prefix=PURCHASE_PRICES_PREFIX)
+    if include_stok:
+        invalidate_master_cache(profile.pk, prefix=STOK_KOLUMNAR_PREFIX)
+        invalidate_master_cache(profile.pk, prefix=DIVISI_KOLUMNAR_PREFIX)
 
     with mssql.report_cursor(profile) as cur:
         put("universe", lambda: _barang_universe(cur))
@@ -515,7 +525,21 @@ def warm_master_cache(profile, ttl=None) -> int:
         hari_ini = dt.datetime.combine(dt.date.today(), dt.time(23, 59, 59))
         put(_purchase_prices_key(hari_ini), lambda: _purchase_prices(cur, hari_ini))
 
+    # DI LUAR blok cursor di atas: stok_akhir_per_tanggal membuka report_cursor
+    # sendiri, dan ia harus membaca key-key yang baru saja diisi — kalau
+    # dijalankan di dalam blok itu, ia menahan dua koneksi ke server yang sama
+    # sepanjang perhitungan puluhan detik.
+    if include_stok:
+        put(_stok_kolumnar_key(hari_ini),
+            lambda: _kolumnar_dari(stok_akhir_per_tanggal(profile, tanggal=hari_ini)))
+        put(_divisi_kolumnar_key(hari_ini),
+            lambda: _kolumnar_dari(stock_levels(profile, date_to=hari_ini)))
+
     return len(filled)
+
+
+def _kolumnar_dari(rows: list[dict]) -> dict:
+    return _kolumnar(rows, list(rows[0].keys()) if rows else [])
 
 
 # --- Public services -------------------------------------------------------
@@ -977,6 +1001,140 @@ def stok_akhir_per_tanggal(profile, tanggal, kd_divisi=None) -> list[dict]:
         })
     out.sort(key=lambda r: (r["divisi"], r["barang"]))
     return out
+
+
+# --- Payload kolumnar Stok Akhir -------------------------------------------
+#
+# Halaman Stok Akhir memegang SELURUH katalog di peramban supaya pencarian
+# instan lintas 55rb baris, bukan cuma lintas halaman yang tampil. Bentuk
+# "list of dict" tak sanggup untuk itu — terukur 15,6 MB JSON dan 123 MB heap,
+# dan di Firefox Android tabnya tak pernah selesai memuat.
+#
+# Yang mahal bukan JSON-nya, tapi bentuknya. Dua sumber pemborosan:
+#
+#   1. Nama kunci diulang tiap baris (14 kunci × 55rb).
+#   2. Nilai diulang tiap baris. Ekstrem di sini: `divisi` cuma 2 nilai unik,
+#      `ukuran` 14, `model` 118, `kategori` 215, `merk` 1.409 — dari 54.955
+#      baris. String "CROWN TOYS" tertulis 54.754 kali.
+#
+# Terukur di RTL PUSAT (54.955 baris, 14 kolom):
+#
+#   list of dict            15,60 MB   gzip 1,33 MB
+#   kolumnar (list of list)  7,43 MB   gzip 1,16 MB
+#   kolumnar + kamus         5,30 MB   gzip 1,24 MB
+#
+# Kolom gzip nyaris tak berubah — kabel tak pernah jadi masalah, gzip sudah
+# membuang pengulangan itu sendiri. Yang ditolong bentuk ini adalah `JSON.parse`
+# (3x lebih sedikit teks) dan heap peramban.
+#
+# KOLOM-mayor, bukan baris-mayor: `list of list` tetap melahirkan 54.955 objek
+# array di JS. Kolom-mayor hanya 14 array, dan tiap kolom angka bisa dijadikan
+# satu Float64Array di klien lalu array hasil parse-nya dilepas.
+
+# Kamus hanya menolong bila nilainya benar-benar berulang. `kd_barang` unik
+# seluruhnya dan `barang` hampir seluruhnya (52.487 dari 54.955) — memberi
+# keduanya kamus justru MENAMBAH byte (satu tabel penuh + satu indeks per baris)
+# tanpa membuang apa pun.
+_DICT_MAX_RATIO = 4
+
+
+def _kolumnar(rows: list[dict], cols: list[str]) -> dict:
+    """{cols, types, dict, data, n} kolom-mayor dari list of dict.
+
+    `types[kolom]` menyatakan bentuk kolomnya, dan itu WAJIB dikirim: klien
+    dulu menebaknya dari `typeof data[c][0]`, yang salah begitu kolom angka
+    memuat satu `None` — tebakannya "num", `Float64Array.from` mengubah null
+    jadi NaN, dan layar mencetak "NaN" alih-alih "-". Menyatakannya di sini
+    menghapus seluruh kelas kesalahan itu.
+
+      dict — teks yang nilainya berulang; dikirim sebagai indeks ke `dict[c]`
+      num  — seluruhnya int/float TANPA None; di klien jadi Float64Array
+      str  — seluruhnya string
+      raw  — sisanya (campur tipe / ada None); dikirim & dipakai apa adanya
+    """
+    out_dict: dict[str, list] = {}
+    data: dict[str, list] = {}
+    types: dict[str, str] = {}
+    n = len(rows)
+    for c in cols:
+        vals = [r.get(c) for r in rows]
+        data[c] = vals
+        if all(isinstance(v, str) for v in vals):
+            uniq = sorted(set(vals))
+            # Kamus hanya menolong bila nilainya benar-benar berulang; pada
+            # kolom yang hampir unik ia justru MENAMBAH byte (satu tabel penuh
+            # plus satu indeks per baris) tanpa membuang apa pun.
+            if n and len(uniq) < n / _DICT_MAX_RATIO:
+                idx = {v: i for i, v in enumerate(uniq)}
+                out_dict[c] = uniq
+                data[c] = [idx[v] for v in vals]
+                types[c] = "dict"
+            else:
+                types[c] = "str"
+        elif all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in vals):
+            types[c] = "num"
+        else:
+            types[c] = "raw"
+    return {"cols": cols, "types": types, "dict": out_dict, "data": data, "n": n}
+
+
+def stok_akhir_kolumnar(profile, tanggal, kd_divisi=None) -> dict:
+    """Stok akhir dalam bentuk kolumnar siap kirim ke peramban.
+
+    Mesin stoknya tidak disentuh: ini pembungkus atas `stok_akhir_per_tanggal`,
+    satu-satunya sumber stok yang boleh dipercaya (lihat catatannya soal
+    `m_barang_stok_akhir` yang rusak).
+
+    Hasil untuk HARI INI tanpa filter divisi — tampilan default halaman, dan
+    satu-satunya yang layak dicache — disimpan berkunci tanggal dan dihangatkan
+    penjadwal (lihat `warm_master_cache`). Tanggal lampau dan tampilan
+    berdivisi dihitung langsung: mencachenya berarti menumpuk satu set 5 MB per
+    kombinasi yang pernah diklik seseorang.
+    """
+    if isinstance(tanggal, dt.date) and not isinstance(tanggal, dt.datetime):
+        tanggal = dt.datetime(tanggal.year, tanggal.month, tanggal.day, 23, 59, 59)
+
+    def build():
+        return _kolumnar_dari(
+            stok_akhir_per_tanggal(profile, tanggal=tanggal, kd_divisi=kd_divisi))
+
+    if kd_divisi or tanggal.date() != dt.date.today():
+        return build()
+    return _cached(profile, _stok_kolumnar_key(tanggal), build)
+
+
+STOK_KOLUMNAR_PREFIX = "stok_kolumnar:"
+DIVISI_KOLUMNAR_PREFIX = "divisi_kolumnar:"
+
+
+def _stok_kolumnar_key(tanggal) -> str:
+    return f"{STOK_KOLUMNAR_PREFIX}{tanggal:%Y-%m-%d}"
+
+
+def _divisi_kolumnar_key(tanggal) -> str:
+    return f"{DIVISI_KOLUMNAR_PREFIX}{tanggal:%Y-%m-%d}"
+
+
+def stock_levels_kolumnar(profile, kd_divisi=None, date_to=None) -> dict:
+    """Bentuk kolumnar `stock_levels` untuk halaman Stok per Divisi.
+
+    Beda dari Stok Akhir, filter divisi di sini TIDAK boleh dipindah ke klien:
+    `stock_levels` mengagregasi berbeda tergantung ada-tidaknya `kd_divisi`
+    (per (divisi, barang) versus diruntuhkan per barang), jadi memilih divisi
+    mengubah angkanya, bukan sekadar menyaring baris.
+
+    Yang dicache hanya tampilan agregat hari ini — itu yang dibuka pertama, dan
+    mencache tiap divisi berarti satu payload lagi per divisi di memori proses.
+    """
+    date_to = date_to or dt.datetime.now()
+
+    def build():
+        return _kolumnar_dari(
+            stock_levels(profile, kd_divisi=kd_divisi, date_to=date_to))
+
+    if kd_divisi or date_to.date() != dt.date.today():
+        return build()
+    return _cached(profile, _divisi_kolumnar_key(date_to), build)
 
 
 def barang_histori(profile, kd_barang=None, kd_divisi=None, date_from=None, date_to=None) -> list[dict]:

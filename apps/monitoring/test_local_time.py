@@ -14,8 +14,11 @@ UTC_SIANG = dt.datetime(2026, 7, 28, 3, 34, 56, tzinfo=dt.timezone.utc)
 
 
 class LocalTimeFormat(SimpleTestCase):
+    # Zona dipatok eksplisit, tidak diwarisi dari .env: tanpa ini test gagal di
+    # mesin siapa pun yang TIME_ZONE-nya bukan Asia/Jakarta (mis. Asia/Makassar
+    # → "11:34:56"), padahal yang diuji konversinya, bukan setelan zonanya.
+    @override_settings(TIME_ZONE="Asia/Jakarta")  # UTC+7
     def test_utc_digeser_ke_zona_situs(self):
-        # Asia/Jakarta = UTC+7 (setelan bawaan proyek).
         self.assertEqual(_local(UTC_SIANG), "2026-07-28 10:34:56")
 
     @override_settings(TIME_ZONE="Asia/Jayapura")  # UTC+9
