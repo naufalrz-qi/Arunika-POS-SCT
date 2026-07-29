@@ -16,6 +16,7 @@ from inertia import defer, render
 from apps.auth_app.models import DATA_KEY_SET, DATA_KEYS, Role, User
 from apps.connections.models import ServerProfile
 from apps.core.http import get_data
+from apps.core.middleware import ditolak
 from apps.core.menus import SECTION_LABELS, SECTIONS, assignable_menus
 from apps.core.models import (
     ActivityLog,
@@ -117,10 +118,15 @@ def dashboard(request):
 
     # Deferred: bundle servers + summary + activity so shell renders instantly.
     def load_dashboard():
+        # Status server hanya untuk superadmin. Daftar ini membuka nama host dan
+        # port setiap server MS SQL — peta infrastruktur yang tak dibutuhkan
+        # siapa pun untuk memakai aplikasi, dan tak layak dikirim ke peramban
+        # yang tak berhak. Dikosongkan di server, bukan disembunyikan di layar.
+        boleh_lihat_server = request.user.role == Role.SUPERADMIN
         servers = [
             {"id": p.id, "name": p.name, "host": f"{p.host}:{p.port}", "status": p.last_status}
             for p in ServerProfile.objects.all()
-        ]
+        ] if boleh_lihat_server else []
         # Kartu Aktivitas Terbaru di dashboard hanya menampilkan jejak pemakainya
         # sendiri; superadmin melihat semuanya. Ini kartu ringkasan pribadi —
         # "apa yang baru saja saya lakukan" — bukan jendela ke pekerjaan rekan
@@ -156,14 +162,14 @@ def dashboard(request):
         else:
             conn_error = CONN_ERROR
 
-        online = sum(1 for s in servers if s["status"] == "online")
         stats = {
             "total_transactions": summary["total_transactions"],
             "total_items": summary["total_items"],
             "revenue": summary["revenue"],
-            "servers_online": online,
-            "servers_total": len(servers),
         }
+        if boleh_lihat_server:
+            stats["servers_online"] = sum(1 for s in servers if s["status"] == "online")
+            stats["servers_total"] = len(servers)
         # Omset dibuang dari respons, bukan sekadar disembunyikan di layar.
         for f in hidden:
             stats.pop(f, None)
@@ -1248,7 +1254,11 @@ def barang_histori_index(request):
 
 def _deny_non_superadmin(request):
     if request.user.role != Role.SUPERADMIN:
-        return HttpResponseForbidden("403 Forbidden — khusus Superadmin.")
+        return ditolak(
+            request,
+            "Halaman ini khusus Superadmin.",
+            "Pengaturan menu dan izin hanya bisa diubah oleh superadmin.",
+        )
     return None
 
 

@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from "vue";
-import { Deferred, Link } from "@inertiajs/vue3";
+import { Deferred, Link, usePage } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import Card from "@/components/ui/Card.vue";
 import Badge from "@/components/ui/Badge.vue";
@@ -22,6 +22,11 @@ const rupiah = (n) =>
 
 const { bisaLihat } = useHiddenData();
 
+// Peran dibaca di dalam computed: Inertia mengganti objek props tiap kunjungan,
+// jadi salinan yang diambil saat setup akan basi setelah berpindah halaman.
+const inertiaPage = usePage();
+const bolehLihatServer = computed(() => inertiaPage.props.auth_user?.role === "superadmin");
+
 const summaryItems = computed(() => {
   const s = data.value.stats || {};
   const items = [
@@ -34,10 +39,14 @@ const summaryItems = computed(() => {
   if (bisaLihat("nominal")) {
     items.push({ label: "Omzet", value: rupiah(s.revenue) });
   }
-  items.push({
-    label: "Server Online",
-    value: `${s.servers_online ?? 0} / ${s.servers_total ?? 0}`,
-  });
+  // Status server hanya dikirim untuk superadmin; tanpa penjagaan ini kartunya
+  // tetap muncul bertuliskan "0 / 0" — terbaca seperti semua server mati.
+  if (bolehLihatServer.value) {
+    items.push({
+      label: "Server Online",
+      value: `${s.servers_online ?? 0} / ${s.servers_total ?? 0}`,
+    });
+  }
   return items;
 });
 
@@ -58,15 +67,19 @@ const chartData = computed(() =>
     <SummaryStrip :items="summaryItems" />
 
     <div class="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
-      <!-- Chart -->
-      <div class="lg:col-span-2">
+      <!-- Chart. Tanpa kartu Status Server di sebelahnya ia melebar penuh,
+           bukan menyisakan sepertiga halaman kosong. -->
+      <div :class="bolehLihatServer ? 'lg:col-span-2' : 'lg:col-span-3'">
         <Card title="Transaksi per Jam" subtitle="Hari ini">
           <BarChart :data="chartData" />
         </Card>
       </div>
 
-      <!-- Server status -->
-      <Card title="Status Server">
+      <!-- Status server: khusus superadmin. Daftarnya membuka nama host dan
+           port tiap server MS SQL, dan datanya memang tak dikirim ke yang lain
+           (lihat dashboard() di apps/monitoring/views.py) — `v-if` di sini
+           hanya merapikan tata letak. -->
+      <Card v-if="bolehLihatServer" title="Status Server">
         <ul class="space-y-3">
           <li v-for="s in data.servers || []" :key="s.id" class="flex items-center justify-between">
             <div>
