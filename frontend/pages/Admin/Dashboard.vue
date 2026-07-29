@@ -9,6 +9,7 @@ import BarChart from "@/components/charts/BarChart.vue";
 import Icon from "@/components/nav/Icon.vue";
 import LoadingCard from "@/components/ui/LoadingCard.vue";
 import SummaryStrip from "@/components/ui/SummaryStrip.vue";
+import { useHiddenData } from "@/composables/useHiddenData";
 
 const props = defineProps({
   dashboard: { type: Object, default: null },
@@ -19,12 +20,26 @@ const data = computed(() => props.dashboard || {});
 const rupiah = (n) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n || 0);
 
-const summaryItems = computed(() => [
-  { label: "Transaksi Hari Ini", value: data.value.stats?.total_transactions ?? 0 },
-  { label: "Item Terjual", value: data.value.stats?.total_items ?? 0 },
-  { label: "Omzet", value: rupiah(data.value.stats?.revenue) },
-  { label: "Server Online", value: `${data.value.stats?.servers_online ?? 0} / ${data.value.stats?.servers_total ?? 0}` },
-]);
+const { bisaLihat } = useHiddenData();
+
+const summaryItems = computed(() => {
+  const s = data.value.stats || {};
+  const items = [
+    { label: "Transaksi Hari Ini", value: s.total_transactions ?? 0 },
+    { label: "Item Terjual", value: s.total_items ?? 0 },
+  ];
+  // `revenue` memang tak dikirim server bila izinnya dicabut; tanpa penjagaan
+  // ini kartunya tetap muncul bertuliskan "Rp 0" — angka yang salah, bukan
+  // sekadar kosong.
+  if (bisaLihat("nominal")) {
+    items.push({ label: "Omzet", value: rupiah(s.revenue) });
+  }
+  items.push({
+    label: "Server Online",
+    value: `${s.servers_online ?? 0} / ${s.servers_total ?? 0}`,
+  });
+  return items;
+});
 
 const chartData = computed(() =>
   (data.value.hourly_transactions || []).map((h) => ({ label: h.hour, value: h.count })),

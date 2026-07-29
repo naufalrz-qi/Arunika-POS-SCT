@@ -13,7 +13,7 @@ from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
 from inertia import defer, render
 
-from apps.auth_app.models import Role, User
+from apps.auth_app.models import DATA_KEY_SET, DATA_KEYS, Role, User
 from apps.connections.models import ServerProfile
 from apps.core.http import get_data
 from apps.core.menus import SECTION_LABELS, SECTIONS, assignable_menus
@@ -47,6 +47,33 @@ def _eod(d):
     return d.replace(hour=23, minute=59, second=59) if d else None
 
 CONN_ERROR = "Tidak ada koneksi aktif, atau server tidak dapat dihubungi. Pilih koneksi di navbar."
+
+# --- Izin nilai uang -------------------------------------------------------
+#
+# Sebagian user tak boleh melihat harga/nominal/omset. Penyaringannya WAJIB di
+# sini, bukan di Vue: menyembunyikan kolom di layar tak menahan apa pun karena
+# datanya tetap terkirim dan terbaca di tab Network. Stok Akhir bahkan
+# mengirim seluruh katalog dalam satu payload, jadi satu permintaan memuat
+# harga ~55rb barang sekaligus.
+#
+# Satu kunci izin menutup beberapa field. `harga_average` ikut harga_beli
+# karena ia rata-rata harga perolehan — modal, bukan harga jual.
+_FIELDS_BY_DATA_KEY = {
+    "harga_jual": {"harga_jual"},
+    "harga_beli": {"harga_average", "harga_beli_akhir"},
+    "nominal": {"nominal", "revenue"},
+}
+
+
+def _hidden_fields(request) -> set[str]:
+    """Nama FIELD yang harus dibuang untuk user ini (bukan nama kunci izin)."""
+    user = getattr(request, "user", None)
+    if not user or not user.is_authenticated:
+        return set()
+    out = set()
+    for key in user.hidden_data():
+        out |= _FIELDS_BY_DATA_KEY.get(key, set())
+    return out
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +110,8 @@ def _redirect_back(data, default: str):
 # --- Dashboard -------------------------------------------------------------
 
 def dashboard(request):
+    hidden = _hidden_fields(request)
+
     # Deferred: bundle servers + summary + activity so shell renders instantly.
     def load_dashboard():
         servers = [
@@ -113,15 +142,19 @@ def dashboard(request):
             conn_error = CONN_ERROR
 
         online = sum(1 for s in servers if s["status"] == "online")
+        stats = {
+            "total_transactions": summary["total_transactions"],
+            "total_items": summary["total_items"],
+            "revenue": summary["revenue"],
+            "servers_online": online,
+            "servers_total": len(servers),
+        }
+        # Omset dibuang dari respons, bukan sekadar disembunyikan di layar.
+        for f in hidden:
+            stats.pop(f, None)
         return {
             "servers": servers,
-            "stats": {
-                "total_transactions": summary["total_transactions"],
-                "total_items": summary["total_items"],
-                "revenue": summary["revenue"],
-                "servers_online": online,
-                "servers_total": len(servers),
-            },
+            "stats": stats,
             "hourly_transactions": summary["hourly_transactions"],
             "fast_movers": summary.get("fast_movers", []),
             "recent_activity": recent,
@@ -981,6 +1014,32 @@ _STOK_COLUMNS = [
 ]
 
 
+def _tanpa_kolom(payload, hidden: set[str]):
+    """Payload kolumnar tanpa kolom `hidden` — SALINAN, bukan hasil edit.
+
+    Payload ini dicache PER PROFIL, bukan per user (`stok_kolumnar:<tanggal>`).
+    Membuang kolom dengan `del payload["data"][c]` akan menghapus kolom itu
+    untuk SEMUA user sampai pemanas berikutnya menimpanya — kegagalan hening
+    yang arahnya justru merusak, dan yang hanya muncul kalau user terbatas
+    kebetulan membuka halaman lebih dulu.
+
+    Yang disalin cuma ketiga map kecil (~14 entri); larik kolomnya tetap
+    dipakai bersama, jadi tak ada biaya memori berarti.
+    """
+    if not payload or not hidden:
+        return payload
+    keep = [c for c in payload["cols"] if c not in hidden]
+    if len(keep) == len(payload["cols"]):
+        return payload
+    return {
+        "cols": keep,
+        "n": payload["n"],
+        "types": {c: payload["types"][c] for c in keep},
+        "dict": {c: payload["dict"][c] for c in keep if c in payload["dict"]},
+        "data": {c: payload["data"][c] for c in keep},
+    }
+
+
 def _stok_sort_key(row, key):
     """Kunci urut aman untuk tabel yang kolomnya campur teks dan angka.
 
@@ -1062,6 +1121,7 @@ def stock_index(request):
     dikerjakan di klien atas data yang sudah ada di sana.
     """
     tanggal = _parse_date(request.GET.get("tanggal")) or dt.datetime.now()
+    hidden = _hidden_fields(request)
 
     # Tetap deferred: shell + panel filter terlukis seketika. Pemanas terjadwal
     # menjaga tanggal hari ini tetap hangat, tapi tanggal lampau dan menit-menit
@@ -1072,7 +1132,8 @@ def stock_index(request):
         if profile:
             try:
                 divisi_list = inv.list_divisi(profile)
-                payload = inv.stok_akhir_kolumnar(profile, tanggal=_eod(tanggal))
+                payload = _tanpa_kolom(
+                    inv.stok_akhir_kolumnar(profile, tanggal=_eod(tanggal)), hidden)
             except pyodbc.Error as exc:
                 conn_error = mssql.friendly_error(exc, "Gagal membaca stok")
         else:
@@ -1096,8 +1157,12 @@ def stock_export(request):
     except pyodbc.Error as exc:
         request.session["flash_error"] = mssql.friendly_error(exc, "Gagal export")
         return redirect("/admin-panel/inventory/stock")
+    # Kolom yang tak boleh dilihat juga tak boleh diunduh — kalau tidak,
+    # pembatasan di layar cuma kosmetik: tekan Export, dapat semuanya.
+    hidden = _hidden_fields(request)
+    columns = [c for c in _STOK_COLUMNS if c["key"] not in hidden]
     log_activity(request, "export", f"Export stok-akhir: {len(rows)} baris")
-    return reporting.xlsx_response("stok-akhir", _STOK_COLUMNS, rows)
+    return reporting.xlsx_response("stok-akhir", columns, rows)
 
 
 def barang_histori_index(request):
@@ -1105,6 +1170,15 @@ def barang_histori_index(request):
     kd_divisi = request.GET.get("kd_divisi", "")
     date_from = _parse_date(request.GET.get("date_from"))
     date_to = _parse_date(request.GET.get("date_to"))
+
+    # Kolom `harga` di sini berisi harga BELI untuk baris pembelian dan harga
+    # JUAL untuk baris penjualan — satu kolom, dua arti, ditentukan kolom
+    # `transaksi` di sebelahnya. Karena itu ia butuh KEDUA izin: menampilkannya
+    # bagi pemegang izin harga jual saja akan membocorkan modal.
+    user = getattr(request, "user", None)
+    sembunyikan_harga = bool(user and user.is_authenticated) and not (
+        user.can_see("harga_jual") and user.can_see("harga_beli")
+    )
 
     def load_histori():
         profile = _active()
@@ -1119,6 +1193,10 @@ def barang_histori_index(request):
                     date_from=date_from,
                     date_to=_eod(date_to),
                 )
+                if sembunyikan_harga:
+                    # Baris histori tidak dicache, jadi aman diubah di tempat.
+                    for r in rows:
+                        r.pop("harga", None)
             except pyodbc.Error as exc:
                 conn_error = mssql.friendly_error(exc, "Gagal membaca histori")
         else:
@@ -1168,10 +1246,15 @@ def menus_index(request):
                     "name": u.get_full_name() or u.username,
                     "role": u.role,
                     "allowed_menu_keys": u.allowed_menu_keys or [],
+                    # Dikirim sebagai "boleh melihat" walau disimpan sebagai
+                    # larangan: layar pengaturan tak boleh memaksa siapa pun
+                    # berpikir terbalik saat mencentang.
+                    "allowed_data_keys": sorted(DATA_KEY_SET - u.hidden_data()),
                 }
                 for u in users
             ],
             "menus": assignable_menus(),
+            "data_keys": DATA_KEYS,
             # Urutan + label section untuk pengelompokan di UI (hanya section
             # yang punya menu assignable).
             "sections": [
@@ -1193,8 +1276,18 @@ def menus_save(request):
     valid = {m["key"] for m in assignable_menus()}
     keys = [k for k in (data.get("menu_keys") or []) if k in valid]
     user.allowed_menu_keys = keys
-    user.save(update_fields=["allowed_menu_keys"])
+
+    # Layar mengirim yang BOLEH dilihat; yang disimpan kebalikannya. Konversi
+    # ini satu-satunya tempat kedua bentuk itu bertemu — lihat alasan memilih
+    # daftar larangan di apps/auth_app/models.py.
+    boleh = {k for k in (data.get("data_keys") or []) if k in DATA_KEY_SET}
+    user.hidden_data_keys = sorted(DATA_KEY_SET - boleh)
+
+    user.save(update_fields=["allowed_menu_keys", "hidden_data_keys"])
     log_activity(request, "menu", f"Set menu {user.username}: {','.join(keys) or '(kosong)'}")
+    if user.hidden_data_keys:
+        log_activity(request, "menu",
+                     f"Sembunyikan nilai untuk {user.username}: {','.join(user.hidden_data_keys)}")
     request.session["flash_success"] = f"Menu untuk {user.username} diperbarui."
     return redirect("/admin-panel/menus")
 

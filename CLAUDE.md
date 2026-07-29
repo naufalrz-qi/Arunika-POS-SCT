@@ -67,6 +67,10 @@ python manage.py sync_cdc        # sync report_source replica via CDC (--backfil
 
 **Routing.** `config/urls.py` mounts `apps.auth_app` at `/` and `apps.monitoring` + `apps.connections` under `/admin-panel/`. `apps/monitoring/views.py` holds most admin menu endpoints. RBAC roles: kasir / supervisor / admin / superadmin, with per-user `allowed_menu_keys`; menu definitions in `apps/core/menus.py`.
 
+**Field-level permissions (`User.hidden_data_keys`).** A second, independent axis: which *money values* a user may see (`harga_jual` / `harga_beli` / `nominal`), set alongside menus at `/admin-panel/menus`. Unlike `allowed_menu_keys` it is a **denylist** — empty means nothing is hidden, so unchecking every box hides everything instead of silently granting full access. Enforcement is server-side only: `_hidden_fields()` in `apps/monitoring/views.py` maps a permission to the field names, and the fields are dropped from the response before it leaves Django (`stock_index`, `stock_export`, `barang_histori_index`, `dashboard`). The Vue side (`useHiddenData.js`) only drops now-empty columns — it is cosmetic and must never be the sole guard.
+
+Two traps here. (1) The Stok Akhir payload is cached **per profile, not per user**, so it must be filtered with `_tanpa_kolom()`, which returns a shallow copy; editing the cached object would strip the columns for everyone until the next warm. (2) Any new route serving the same data needs the same filter — the XLSX export did, and without it the restriction is decorative. Scope is deliberately limited to Stok Akhir, Barang Histori, and Dashboard; FMI Stok, Mutasi Stok, Master Produk, and the sales/purchase reports still show money, so restricted users need those menus revoked too.
+
 ## The deferred-props convention (do this for any slow page)
 
 Heavy queries must not block first paint. Backend wraps the slow bundle in `defer(callable)`; frontend renders the shell instantly and shows a fallback until Inertia fetches the prop.

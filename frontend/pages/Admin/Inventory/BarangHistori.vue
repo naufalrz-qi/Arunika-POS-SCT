@@ -12,6 +12,7 @@ import DataTable from "@/components/ui/DataTable.vue";
 import LoadingCard from "@/components/ui/LoadingCard.vue";
 import DateRangeFilter from "@/components/report/DateRangeFilter.vue";
 import { useReportFilters } from "@/composables/useReportFilters";
+import { useHiddenData } from "@/composables/useHiddenData";
 import { downloadXlsx, stamp } from "@/utils/xlsx";
 
 const props = defineProps({
@@ -80,7 +81,8 @@ function exportXlsx() {
   // Sertakan kolom base-unit supaya SUM() di Excel benar — kolom Debet/Kredit
   // punya satuan berbeda per baris dan tak boleh dijumlah di sana.
   const exportColumns = [
-    ...columns,
+    // `.value`: columns kini computed (kolom Harga bisa dicabut per user).
+    ...columns.value,
     { key: "debet_base", label: "Masuk (satuan terkecil)" },
     { key: "kredit_base", label: "Keluar (satuan terkecil)" },
   ];
@@ -93,7 +95,15 @@ const transVariant = (t) => {
   return "success";
 };
 
-const columns = [
+// Kolom Harga berisi harga BELI untuk baris pembelian dan harga JUAL untuk
+// baris penjualan — satu kolom, dua arti. Karena itu ia butuh KEDUA izin;
+// menampilkannya bagi pemegang izin harga jual saja akan membocorkan modal.
+// Aturan yang sama ditegakkan di server (barang_histori_index), yang di sana
+// membuang field-nya dari respons; di sini cuma merapikan tabelnya.
+const { bisaLihat } = useHiddenData();
+const bolehLihatHarga = computed(() => bisaLihat("harga_jual") && bisaLihat("harga_beli"));
+
+const SEMUA_KOLOM = [
   { key: "kd_divisi", label: "Kode Div." },
   { key: "divisi", label: "Divisi", sortable: true },
   { key: "kepala_nota", label: "Kepala Nota" },
@@ -112,6 +122,9 @@ const columns = [
   // debet/kredit yang mengikuti satuan barisnya.
   { key: "saldo", label: "Saldo (terkecil)", align: "right" },
 ];
+const columns = computed(() =>
+  SEMUA_KOLOM.filter((c) => c.key !== "harga" || bolehLihatHarga.value),
+);
 </script>
 
 <template>
