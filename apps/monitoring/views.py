@@ -61,7 +61,10 @@ CONN_ERROR = "Tidak ada koneksi aktif, atau server tidak dapat dihubungi. Pilih 
 _FIELDS_BY_DATA_KEY = {
     "harga_jual": {"harga_jual"},
     "harga_beli": {"harga_average", "harga_beli_akhir"},
-    "nominal": {"nominal", "revenue"},
+    # `nilai` = kolom Nilai di kartu Fast Moving dashboard. Sempat terlewat pada
+    # rilis pertama: omset di kartu ringkasan sudah hilang, tapi rupiah per
+    # barang di tabel bawahnya masih tampil.
+    "nominal": {"nominal", "revenue", "nilai"},
 }
 
 
@@ -152,11 +155,17 @@ def dashboard(request):
         # Omset dibuang dari respons, bukan sekadar disembunyikan di layar.
         for f in hidden:
             stats.pop(f, None)
+        # Kartu Fast Moving membawa rupiah per barang; ia harus ikut dibuang,
+        # kalau tidak omset cuma hilang dari kartu ringkasan dan tetap bisa
+        # dijumlahkan sendiri dari tabel di bawahnya.
+        movers = summary.get("fast_movers", [])
+        if hidden:
+            movers = [{k: v for k, v in m.items() if k not in hidden} for m in movers]
         return {
             "servers": servers,
             "stats": stats,
             "hourly_transactions": summary["hourly_transactions"],
-            "fast_movers": summary.get("fast_movers", []),
+            "fast_movers": movers,
             "recent_activity": recent,
             "conn_error": conn_error,
         }

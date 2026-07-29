@@ -70,9 +70,12 @@ class HiddenFields(TestCase):
         self.assertEqual(
             _hidden_fields(_Req(u)), {"harga_average", "harga_beli_akhir"})
 
-    def test_nominal_ikut_menutup_omset_dashboard(self):
+    def test_nominal_ikut_menutup_omset_dan_nilai_fast_moving(self):
+        # `nilai` sempat terlewat: omset di kartu ringkasan sudah hilang, tapi
+        # rupiah per barang di tabel Fast Moving di bawahnya masih tampil —
+        # cukup untuk menjumlahkan sendiri apa yang baru saja disembunyikan.
         u = User.objects.create_user("u2", role=Role.ADMIN, hidden_data_keys=["nominal"])
-        self.assertEqual(_hidden_fields(_Req(u)), {"nominal", "revenue"})
+        self.assertEqual(_hidden_fields(_Req(u)), {"nominal", "revenue", "nilai"})
 
     def test_superadmin_tak_pernah_dibatasi(self):
         u = User.objects.create_user("boss", role=Role.SUPERADMIN,
