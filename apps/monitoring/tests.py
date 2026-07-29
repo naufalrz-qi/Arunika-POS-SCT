@@ -247,3 +247,44 @@ class DashboardAktivitasScopeTests(TestCase):
         r = self.client.get("/admin-panel/logs", HTTP_X_INERTIA="true", HTTP_X_INERTIA_VERSION="1.0")
         users = {a["user"] for a in json.loads(r.content)["props"]["logs"]}
         self.assertIn("orang_lain", users)
+
+
+class DashboardStatusServerTests(TestCase):
+    """Status server khusus superadmin.
+
+    Daftarnya membuka nama host dan port tiap server MS SQL — peta
+    infrastruktur yang tak dibutuhkan siapa pun untuk memakai aplikasi. Yang
+    diuji isi RESPONS, bukan layarnya: `v-if` di Vue tak menahan apa pun.
+    """
+
+    def setUp(self):
+        self.staf = User.objects.create_user(
+            "staf", password="rahasia-kuat-123", role=Role.ADMIN)
+        self.boss = User.objects.create_user(
+            "boss", password="rahasia-kuat-123", role=Role.SUPERADMIN)
+
+    def _dashboard(self, user):
+        import json
+
+        self.client.force_login(user)
+        r = self.client.get(
+            "/admin-panel/dashboard",
+            HTTP_X_INERTIA="true", HTTP_X_INERTIA_VERSION="1.0",
+            HTTP_X_INERTIA_PARTIAL_DATA="dashboard",
+            HTTP_X_INERTIA_PARTIAL_COMPONENT="Admin/Dashboard",
+        )
+        return json.loads(r.content)["props"]["dashboard"]
+
+    def test_admin_tak_menerima_daftar_server(self):
+        self.assertEqual(self._dashboard(self.staf)["servers"], [])
+
+    def test_admin_tak_menerima_hitungan_server(self):
+        # Kalau kuncinya tetap dikirim bernilai 0, layar membaca "0 / 0" —
+        # terbaca seperti semua server mati, bukan seperti tak berhak melihat.
+        stats = self._dashboard(self.staf)["stats"]
+        self.assertNotIn("servers_online", stats)
+        self.assertNotIn("servers_total", stats)
+
+    def test_superadmin_menerima_keduanya(self):
+        d = self._dashboard(self.boss)
+        self.assertIn("servers_total", d["stats"])
