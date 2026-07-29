@@ -16,6 +16,7 @@ from inertia import defer, render
 from apps.auth_app.models import DATA_KEY_SET, DATA_KEYS, Role, User
 from apps.connections.models import ServerProfile
 from apps.core.http import get_data
+from apps.core.middleware import ditolak
 from apps.core.menus import SECTION_LABELS, SECTIONS, assignable_menus
 from apps.core.models import (
     ActivityLog,
@@ -1253,7 +1254,11 @@ def barang_histori_index(request):
 
 def _deny_non_superadmin(request):
     if request.user.role != Role.SUPERADMIN:
-        return HttpResponseForbidden("403 Forbidden — khusus Superadmin.")
+        return ditolak(
+            request,
+            "Halaman ini khusus Superadmin.",
+            "Pengaturan menu dan izin hanya bisa diubah oleh superadmin.",
+        )
     return None
 
 

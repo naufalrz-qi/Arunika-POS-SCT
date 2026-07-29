@@ -87,6 +87,25 @@ def assignable_menus():
     return [m for m in ALL_MENUS if not m.get("superadmin_only") and not m.get("always")]
 
 
+def landing_for(user) -> str | None:
+    """Menu pertama yang boleh dibuka `user`, atau None kalau tak ada satu pun.
+
+    Dipakai saat seseorang membuka menu yang tak diberikan kepadanya: lebih baik
+    diantar ke halaman yang memang miliknya daripada dihadang tembok.
+
+    Menu ber-`always` (Bantuan & Istilah) sengaja dilewati DULU. Ia tak pernah
+    bisa dicabut, jadi ia selalu ada di daftar — dan karena letaknya di awal
+    ALL_MENUS, mengambil elemen pertama begitu saja akan mengantar semua orang
+    ke Bantuan walau mereka punya Laporan Penjualan. Ia cadangan terakhir, bukan
+    pilihan pertama; itu pula yang membuatnya selalu ada tempat mendarat.
+    """
+    menus = menus_for(user)
+    if not menus:
+        return None
+    kerja = [m for m in menus if not m.get("always")]
+    return (kerja or menus)[0]["href"]
+
+
 def menus_for(user):
     """Return the menu list visible to `user` (PRD §4.3/§4.4)."""
     from apps.auth_app.models import Role

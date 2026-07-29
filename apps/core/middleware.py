@@ -2,12 +2,11 @@
 import ipaddress
 import re
 
-from inertia import share
+from inertia import render, share
 from django.conf import settings
-from django.http import HttpResponseForbidden
 from django.shortcuts import redirect
 
-from apps.core.menus import menu_key_for_path, menus_for
+from apps.core.menus import landing_for, menu_key_for_path, menus_for
 
 # Paths reachable without authentication.
 PUBLIC_PREFIXES = ("/login", "/static", "/@vite", "/favicon")
@@ -117,20 +116,64 @@ def admin_network_guard(get_response):
         if request.path.startswith(ADMIN_PREFIX):
             user = getattr(request, "user", None)
             if not (user and user.is_authenticated and user.is_admin_tier):
-                return HttpResponseForbidden("Akses ditolak: halaman ini butuh hak akses Admin.")
+                return ditolak(
+                    request,
+                    "Halaman ini butuh hak akses Admin.",
+                    "Akun Anda tidak punya tingkat akses untuk membuka panel admin. "
+                    "Hubungi superadmin bila ini keliru.",
+                )
             if settings.ENFORCE_TAILSCALE:
                 ip = request.META.get("REMOTE_ADDR", "")
                 if not _ip_allowed(ip):
-                    return HttpResponseForbidden(
-                        "Akses ditolak: panel admin hanya bisa dibuka lewat jaringan Tailscale."
+                    return ditolak(
+                        request,
+                        "Panel admin hanya bisa dibuka lewat Tailscale.",
+                        "Sambungkan perangkat ke jaringan Tailscale kantor, lalu buka "
+                        "halaman ini lagi.",
                     )
             if not _menu_allowed(user, request.path):
-                return HttpResponseForbidden(
-                    "Akses ditolak: menu ini tidak diberikan untuk akun Anda. Hubungi superadmin."
+                # Menu yang tak diberikan: antar ke halaman yang memang miliknya
+                # alih-alih menghadang. Hanya untuk permintaan yang sekadar
+                # MEMBACA — mengalihkan sebuah POST akan menelan tulisan pengguna
+                # tanpa suara, dan ia takkan pernah tahu simpanannya gagal.
+                tujuan = landing_for(user)
+                if request.method in ("GET", "HEAD") and tujuan and tujuan != request.path:
+                    request.session["flash_error"] = (
+                        "Menu itu tidak diberikan untuk akun Anda — Anda dialihkan "
+                        "ke halaman yang bisa dibuka."
+                    )
+                    return redirect(tujuan)
+                return ditolak(
+                    request,
+                    "Menu ini tidak diberikan untuk akun Anda.",
+                    "Hubungi superadmin bila Anda memang membutuhkannya.",
                 )
         return get_response(request)
 
     return middleware
+
+
+def ditolak(request, judul: str, saran: str):
+    """Halaman penolakan yang bisa dibaca, bukan teks polos di layar putih.
+
+    Dulu ketiga jalur penolakan mengembalikan satu baris teks tanpa kop, tanpa
+    navigasi, dan tanpa jalan keluar — pengguna hanya bisa menekan tombol back.
+    Statusnya tetap 403: yang berubah tampilannya, bukan hasilnya.
+    """
+    user = getattr(request, "user", None)
+    resp = render(
+        request,
+        "Ditolak",
+        props={
+            "judul": judul,
+            "saran": saran,
+            # Ke mana ia masih boleh pergi. None kalau memang tak ke mana-mana
+            # (mis. bukan admin sama sekali) — layar menawarkan keluar saja.
+            "tujuan": landing_for(user) if user and user.is_authenticated else None,
+        },
+    )
+    resp.status_code = 403
+    return resp
 
 
 def _menu_allowed(user, path: str) -> bool:

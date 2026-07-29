@@ -165,18 +165,44 @@ class MenuRbacEnforcementTests(TestCase):
             "boss", password="rahasia-kuat-123", role=Role.SUPERADMIN
         )
 
-    def test_admin_terbatas_diblokir_dari_menu_lain(self):
+    def test_admin_terbatas_dialihkan_dari_menu_lain(self):
+        """Membuka menu yang tak diberikan tak lagi menabrak tembok 403: yang
+        sekadar MEMBACA diantar ke halaman yang memang miliknya."""
         self.client.force_login(self.admin)
         for path in ("/admin-panel/users", "/admin-panel/connections", "/admin-panel/logs"):
-            self.assertEqual(self.client.get(path).status_code, 403, path)
+            r = self.client.get(path)
+            self.assertEqual(r.status_code, 302, path)
+            self.assertEqual(r["Location"], "/admin-panel/dashboard", path)
+
+    def test_menulis_ke_menu_tercabut_tetap_ditolak(self):
+        """Pengalihan hanya untuk GET. Mengalihkan sebuah POST akan menelan
+        tulisan pengguna tanpa suara — ia takkan pernah tahu simpanannya gagal."""
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.post("/admin-panel/users/save", {}).status_code, 403)
+
+    def test_pengalihan_tak_berputar_saat_menu_tujuan_ikut_tercabut(self):
+        """Kalau dashboard sendiri yang dicabut, tujuannya bergeser ke menu lain
+        yang masih dimiliki — bukan kembali ke halaman yang baru saja ditolak."""
+        self.admin.allowed_menu_keys = ["logs"]
+        self.admin.save()
+        self.client.force_login(self.admin)
+        r = self.client.get("/admin-panel/dashboard")
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r["Location"], "/admin-panel/logs")
 
     def test_admin_terbatas_boleh_menu_miliknya(self):
         self.client.force_login(self.admin)
         self.assertEqual(self.client.get("/admin-panel/dashboard").status_code, 200)
 
-    def test_admin_diblokir_dari_menu_superadmin(self):
+    def test_admin_dialihkan_dari_menu_superadmin(self):
         self.client.force_login(self.admin)
-        self.assertEqual(self.client.get("/admin-panel/menus").status_code, 403)
+        r = self.client.get("/admin-panel/menus")
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r["Location"], "/admin-panel/dashboard")
+
+    def test_menulis_ke_menu_superadmin_tetap_ditolak(self):
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.post("/admin-panel/menus/save", {}).status_code, 403)
 
     def test_bantuan_selalu_boleh_walau_tak_diberikan(self):
         """Menu ber-`always` tak bisa dicabut: bantuan yang hilang dari sidebar
