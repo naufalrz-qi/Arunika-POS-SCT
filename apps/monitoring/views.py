@@ -121,6 +121,18 @@ def dashboard(request):
             {"id": p.id, "name": p.name, "host": f"{p.host}:{p.port}", "status": p.last_status}
             for p in ServerProfile.objects.all()
         ]
+        # Kartu Aktivitas Terbaru di dashboard hanya menampilkan jejak pemakainya
+        # sendiri; superadmin melihat semuanya. Ini kartu ringkasan pribadi —
+        # "apa yang baru saja saya lakukan" — bukan jendela ke pekerjaan rekan
+        # kerja. Halaman Log Aktivitas (/admin-panel/logs) sengaja TIDAK ikut
+        # disaring: itu memang layar audit, dan aksesnya sudah dijaga menu.
+        #
+        # Disaring lewat `username` (salinan teks di baris log), bukan relasi ke
+        # User: kolom itu didenormalisasi supaya jejak tetap terbaca setelah
+        # akunnya dihapus.
+        log_qs = ActivityLog.objects.all()
+        if request.user.role != Role.SUPERADMIN:
+            log_qs = log_qs.filter(username=request.user.username)
         recent = [
             {
                 "id": a.id,
@@ -129,7 +141,7 @@ def dashboard(request):
                 "detail": a.detail,
                 "time": _local(a.timestamp, "%Y-%m-%d %H:%M"),
             }
-            for a in ActivityLog.objects.all()[:8]
+            for a in log_qs[:8]
         ]
 
         profile = _active()

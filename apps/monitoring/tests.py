@@ -201,3 +201,49 @@ class MenuRbacEnforcementTests(TestCase):
     def test_switcher_koneksi_dikecualikan(self):
         self.assertTrue(_menu_allowed(self.admin, "/admin-panel/connections/3/set-default"))
         self.assertFalse(_menu_allowed(self.admin, "/admin-panel/connections"))
+
+
+class DashboardAktivitasScopeTests(TestCase):
+    """Kartu Aktivitas Terbaru di dashboard hanya menampilkan jejak pemakainya.
+
+    Halaman Log Aktivitas (/admin-panel/logs) sengaja TIDAK ikut disaring — itu
+    layar audit, dan aksesnya sudah dijaga lewat menu. Kalau suatu saat ada yang
+    "merapikan" keduanya jadi satu jalur, tes ini yang menahannya.
+    """
+
+    def setUp(self):
+        from apps.core.models import ActivityLog
+
+        self.staf = User.objects.create_user(
+            "staf", password="rahasia-kuat-123", role=Role.ADMIN)
+        self.boss = User.objects.create_user(
+            "boss", password="rahasia-kuat-123", role=Role.SUPERADMIN)
+        ActivityLog.objects.create(username="staf", action="login", detail="Login berhasil")
+        ActivityLog.objects.create(username="orang_lain", action="konfigurasi", detail="Ganti koneksi")
+
+    def _dashboard_users(self, user):
+        import json
+
+        self.client.force_login(user)
+        r = self.client.get(
+            "/admin-panel/dashboard",
+            HTTP_X_INERTIA="true", HTTP_X_INERTIA_VERSION="1.0",
+            HTTP_X_INERTIA_PARTIAL_DATA="dashboard",
+            HTTP_X_INERTIA_PARTIAL_COMPONENT="Admin/Dashboard",
+        )
+        rows = json.loads(r.content)["props"]["dashboard"]["recent_activity"]
+        return {a["user"] for a in rows}
+
+    def test_admin_hanya_melihat_jejaknya_sendiri(self):
+        self.assertEqual(self._dashboard_users(self.staf), {"staf"})
+
+    def test_superadmin_melihat_semua(self):
+        self.assertIn("orang_lain", self._dashboard_users(self.boss))
+
+    def test_halaman_log_tidak_ikut_disaring(self):
+        import json
+
+        self.client.force_login(self.staf)
+        r = self.client.get("/admin-panel/logs", HTTP_X_INERTIA="true", HTTP_X_INERTIA_VERSION="1.0")
+        users = {a["user"] for a in json.loads(r.content)["props"]["logs"]}
+        self.assertIn("orang_lain", users)
