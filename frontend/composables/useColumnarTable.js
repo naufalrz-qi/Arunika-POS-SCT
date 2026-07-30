@@ -248,6 +248,30 @@ export function useColumnarTable(getPayload, options = {}) {
     return s;
   }
 
+  /** {nilai: jumlah} untuk satu kolom, atas baris yang lolos saringan.
+   *
+   *  Padanan `sumOf` untuk kolom kategori — dipakai kartu ringkasan yang
+   *  menghitung anggota tiap kelompok (mis. berapa pelanggan per segmen).
+   *  Menghitungnya di sini, bukan di server, supaya angkanya IKUT saringan
+   *  klien: menyaring satu kota lalu masih melihat hitungan seluruh dataset
+   *  membuat kartu ringkasan berbohong tentang apa yang sedang tampil.
+   *
+   *  Dibaca lewat daftar indeks langsung dari kolomnya — tak ada baris yang
+   *  dijadikan objek hanya untuk dihitung. */
+  function countBy(name) {
+    version.value;
+    const c = store && store.col[name];
+    if (!c) return {};
+    const ord = order.value;
+    const out = {};
+    for (let i = 0; i < ord.length; i++) {
+      const r = ord[i];
+      const v = c.kind === "dict" ? c.dict[c.idx[r]] : c.arr[r];
+      out[v] = (out[v] || 0) + 1;
+    }
+    return out;
+  }
+
   /** Opsi dropdown untuk satu kolom.
    *
    *  Kolom berkamus gratis: tabel kamusnya memang sudah daftar nilai unik yang
@@ -292,7 +316,7 @@ export function useColumnarTable(getPayload, options = {}) {
   }
 
   return {
-    ingest, dictOptions, valueAt, sumOf,
+    ingest, dictOptions, valueAt, sumOf, countBy,
     searchInput, search, sortKey, sortDir, page, perPage, equals,
     order, total, n, pageRows,
     setSort, setPerPage, setEquals, resetFilters,

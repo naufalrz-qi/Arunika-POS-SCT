@@ -229,8 +229,22 @@ class Whitelist(SimpleTestCase):
             with self.subTest(filter=name):
                 self.assertIn(alias, sql)
 
-    def test_ringkasan_hanya_merujuk_kolom_keluaran(self):
+
+    def test_kolom_kolumnar_semuanya_ada_di_keluaran_sql(self):
+        # Payload kolumnar menyebut kolomnya secara eksplisit (KLASIFIKASI_COLS).
+        # Kalau satu alias SQL berganti nama, kolom itu jadi None untuk seluruh
+        # baris dan layar mencetak deretan "-" — tanpa error di mana pun.
+        from apps.transactions.services import KLASIFIKASI_COLS
+
         sql, _params = rpt.klasifikasi_pelanggan(_f())
-        for kolom in re.findall(r"q\.(\w+)", rpt.SUMMARY_KLASIFIKASI_PELANGGAN):
+        for kolom in KLASIFIKASI_COLS:
             with self.subTest(kolom=kolom):
                 self.assertIn(kolom, sql)
+
+    def test_saringan_klien_punya_padanan_filter_server(self):
+        # Saringan di peramban (segmen/kelas nilai/kota/cari) diterjemahkan ke
+        # parameter server saat Export, supaya file Excel-nya cocok dengan yang
+        # terlihat. Hilang satu padanan = export diam-diam mengirim semua baris.
+        for name in ("segmen", "tier_nilai", "kota"):
+            with self.subTest(saringan=name):
+                self.assertIn(name, rpt.FILTERS_KLASIFIKASI_PELANGGAN)

@@ -1204,15 +1204,13 @@ FILTERS_KLASIFIKASI_PELANGGAN = {
     "rata_nota": ("rata_nota", "number_range"),
     "jeda_hari": ("jeda_hari", "number_range"),
 }
-SUMMARY_KLASIFIKASI_PELANGGAN = (
-    "COUNT(*) AS jml_pelanggan, "
-    "COALESCE(SUM(CASE WHEN q.segmen_urut = 3 THEN 1 ELSE 0 END), 0) AS jml_baru, "
-    "COALESCE(SUM(CASE WHEN q.segmen_urut = 4 THEN 1 ELSE 0 END), 0) AS jml_setia, "
-    "COALESCE(SUM(CASE WHEN q.segmen_urut = 2 THEN 1 ELSE 0 END), 0) AS jml_jarang, "
-    "COALESCE(SUM(CASE WHEN q.segmen_urut = 1 THEN 1 ELSE 0 END), 0) AS jml_hilang, "
-    "COALESCE(SUM(q.total_belanja), 0) AS total_nilai, "
-    "COALESCE(SUM(q.total_belanja) / NULLIF(SUM(q.jml_nota), 0), 0) AS rata_nota_semua"
-)
+# Tak ada SUMMARY_ untuk laporan ini: halaman mengirim seluruh baris sekali
+# (kolumnar) dan menghitung ringkasannya di peramban atas hasil saringan KLIEN.
+# Agregat SQL akan menjawab pertanyaan yang berbeda dari yang sedang tampil —
+# menyaring satu kota lalu masih melihat hitungan seluruh dataset.
+# SORTS_ dan FILTERS_ di atas tetap dipakai: jalur export tetap server-side, dan
+# saringan klien diterjemahkan ke parameter itu supaya file Excel-nya cocok
+# dengan apa yang terlihat di layar.
 
 
 def _pseudo_where(where: list, params: list, cust_col: str, nama_col: str) -> None:
@@ -1384,7 +1382,20 @@ def barang_favorit_massal(f, top_n: int = 5):
 
     ROW_NUMBER per pelanggan, bukan TOP global: tanpa PARTITION BY, beberapa
     pelanggan besar akan memakan seluruh kuota baris dan sisanya tak kebagian
-    satu barang pun."""
+    satu barang pun.
+
+    Menyaring hanya tanggal/divisi/pencarian — TIDAK saringan kolom (segmen,
+    kota, kelas nilai). Itu disengaja: ketiganya kolom TURUNAN yang baru ada
+    setelah agregasi laporan utama, dan menyaringnya di sini lewat
+    `IN (SELECT ... FROM <laporan utama>)` memaksa SQL Server menjalankan ulang
+    seluruh agregasi _nota_net di dalam pemeriksaan IN — diukur: query timeout,
+    bukan sekadar lambat.
+
+    Penyaringan itu dikerjakan caller di Python atas himpunan kd_customer yang
+    sudah dibaca untuk sheet pertama (lihat klasifikasi_pelanggan_export). Aman
+    karena populasinya terbatas — profil terbesar ~4.800 pelanggan, dan sheet ini
+    paling banyak `top_n` baris per orang.
+    """
     where, params = _base_where(f)
     _pseudo_where(where, params, "h.kd_customer", "c.nama")
     if f["search"]:

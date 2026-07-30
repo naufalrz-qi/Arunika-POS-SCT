@@ -3,7 +3,6 @@ import datetime as dt
 import json
 import logging
 import time
-from contextlib import contextmanager
 
 import pyodbc
 from django.contrib.auth import update_session_auth_hash
@@ -2406,7 +2405,6 @@ _KLASIFIKASI_PELANGGAN = {
     "inner": rpt.klasifikasi_pelanggan,
     "sorts": rpt.SORTS_KLASIFIKASI_PELANGGAN,
     "default_sort": "segmen",
-    "summary": rpt.SUMMARY_KLASIFIKASI_PELANGGAN,
     "filters": rpt.FILTERS_KLASIFIKASI_PELANGGAN,
     "filter_keys": ["kd_divisi", *rpt.AMBANG_KLASIFIKASI],
     "filter_defaults": {k: v[0] for k, v in rpt.AMBANG_KLASIFIKASI.items()},
@@ -2420,7 +2418,51 @@ _KLASIFIKASI_PELANGGAN = {
     "filename": "klasifikasi-pelanggan",
     "columns": _KLASIFIKASI_COLUMNS,
 }
-klasifikasi_pelanggan = _report_view(_KLASIFIKASI_PELANGGAN)
+
+
+def klasifikasi_pelanggan(request):
+    """Kolumnar: SELURUH pelanggan dikirim sekali, dicari & diurut di peramban.
+
+    Bukan _report_view (paginasi server) karena pekerjaan nyata di halaman ini
+    adalah MENCARI orang — "sudah lama tak datang, yang di Lombok Timur, yang
+    belanjanya besar" — dan tiap pertanyaan itu jadi satu putaran ke server pada
+    tabel yang dipaginasi. Sesudah pseudo-pelanggan dikeluarkan, profil terbesar
+    tinggal ~4.800 baris; itu dua orde lebih kecil dari Stok Akhir yang memaksa
+    bentuk kolumnar ini ada, jadi ongkosnya sudah terbayar.
+
+    Yang TETAP ke server: periode, divisi, dan ambang segmen. Ketiganya mengubah
+    hasil hitungan SQL, bukan cuma baris mana yang tampil.
+    """
+    spec = _KLASIFIKASI_PELANGGAN
+    f = _spec_params(request, spec)
+    hidden = _hidden_fields(request) & set(_KLASIFIKASI_UANG)
+
+    def load():
+        tabel, options, conn_error = None, {}, None
+        profile = _active()
+        if not profile:
+            return {"tabel": None, "options": {}, "conn_error": CONN_ERROR, "notice": None}
+        try:
+            for read_profile in mssql.report_read_profiles(profile):
+                try:
+                    tabel = tx.klasifikasi_kolumnar(read_profile, f)
+                    options = {"divisi": _opt_divisi(read_profile)}
+                    conn_error = None
+                    break
+                except pyodbc.Error as exc:
+                    conn_error = mssql.friendly_error(exc, "Gagal membaca klasifikasi")
+        except Exception:
+            log.exception("gagal menyiapkan klasifikasi pelanggan")
+            conn_error = "Filter yang dipilih tidak bisa diproses. Kembalikan filter ke bawaan."
+        # _tanpa_kolom mengembalikan SALINAN. Payload ini belum dicache hari ini,
+        # tapi memakai jalur yang sama dengan Stok Akhir menutup jebakan itu
+        # sebelum cache pertama ditambahkan — bukan sesudah seseorang menemukan
+        # kolom uangnya hilang untuk semua orang.
+        return {"tabel": _tanpa_kolom(tabel, hidden), "options": options,
+                "conn_error": conn_error, "notice": f["warning"] or None}
+
+    return render(request, spec["component"],
+                  props={"klasifikasi": defer(load), "filters": _spec_filters(f, spec)})
 
 
 def klasifikasi_pelanggan_export(request):
@@ -2448,28 +2490,33 @@ def klasifikasi_pelanggan_export(request):
 
     resp, last_exc = None, None
     for read_profile in mssql.report_read_profiles(profile):
-        # Tiap sheet membuka cursornya sendiri lewat context manager, dijalankan
-        # berurutan oleh xlsx_multi_sheet_response — bukan dua cursor hidup
-        # bersamaan atas satu koneksi.
-        def _buka(sql, prm, rp=read_profile):
-            @contextmanager
-            def open_cursor():
-                with mssql.report_cursor(rp) as cur:
-                    cur.execute(sql, prm)
-                    yield cur
-            return open_cursor
-
         try:
-            resp = reporting.xlsx_multi_sheet_response(
-                spec["filename"],
-                [
-                    ("Klasifikasi", kolom_utama, _buka(utama_sql, params)),
-                    ("Barang Favorit", kolom_favorit, _buka(favorit_sql, favorit_params)),
-                ],
-            )
-            break
+            with mssql.report_cursor(read_profile) as cur:
+                cur.execute(utama_sql, params)
+                utama = reporting.clean_rows(reporting.dictify(cur))
+                cur.execute(favorit_sql, favorit_params)
+                favorit = reporting.clean_rows(reporting.dictify(cur))
         except pyodbc.Error as exc:
             last_exc = exc
+            continue
+
+        # Sheet 2 disaring DI PYTHON ke pelanggan yang lolos saringan sheet 1.
+        # Saringan kolom (segmen/kota/kelas nilai) adalah kolom turunan yang baru
+        # ada setelah agregasi, jadi menyaringnya di SQL berarti menjalankan ulang
+        # seluruh agregasi _nota_net di dalam pemeriksaan IN — terukur: query
+        # timeout. Tanpa penyaringan apa pun, satu file memuat dua populasi
+        # berbeda: 89 pelanggan di sheet 1, barang milik 316 orang di sheet 2.
+        ikut = {r.get("kd_customer") for r in utama}
+        favorit = [r for r in favorit if r.get("kd_customer") in ikut]
+
+        resp = reporting.xlsx_multi_sheet_response(
+            spec["filename"],
+            [
+                ("Klasifikasi", kolom_utama, utama),
+                ("Barang Favorit", kolom_favorit, favorit),
+            ],
+        )
+        break
     if resp is None:
         request.session["flash_error"] = mssql.friendly_error(last_exc, "Gagal export")
         return redirect(spec["url"])

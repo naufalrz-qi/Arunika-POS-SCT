@@ -370,27 +370,28 @@ def _fill_sheet(ws, columns, cur, chunk=2000):
             ws.append([_clean(row[i]) if i is not None else None for i in idxs])
 
 
-def xlsx_multi_sheet_response(filename, sheets, chunk=2000):
-    """XLSX dgn BEBERAPA sheet, tiap sheet dari query-nya sendiri.
+def xlsx_multi_sheet_response(filename, sheets):
+    """XLSX dgn BEBERAPA sheet, masing-masing dari list-of-dict di memori.
 
-    `sheets` = [(title, columns, open_cursor)] di mana `open_cursor` adalah
-    context manager yang menyerahkan cursor YANG SUDAH di-execute. Bentuk itu
-    dipilih supaya tiap sheet membuka lalu menutup cursornya sendiri secara
-    berurutan — tak pernah ada dua cursor hidup bersamaan atas satu koneksi
-    pyodbc, dan sheet berikutnya tak bisa mencuri hasil sheet sebelumnya.
+    `sheets` = [(title, columns, rows)].
 
-    Dipakai laporan yang satu file Excel-nya memuat dua sudut pandang berbeda
-    (mis. Klasifikasi Pelanggan: ringkasan per pelanggan + barang favoritnya).
-    Untuk satu sheet saja pakai `xlsx_stream_response` yang lebih ringkas.
+    Berbasis memori, bukan streaming cursor seperti `xlsx_stream_response`, dan
+    itu pilihan sadar: satu file multi-sheet hanya masuk akal kalau sheet-nya
+    saling berkaitan, dan menjaga kaitan itu (mis. sheet 2 hanya memuat
+    pelanggan yang ada di sheet 1) menuntut caller sudah memegang baris sheet 1
+    sebagai himpunan. Karena itu pemakainya wajib berpopulasi terbatas —
+    Klasifikasi Pelanggan ~4.800 baris. Untuk export ratusan ribu baris tetap
+    pakai `xlsx_stream_response` satu sheet.
     """
     from openpyxl import Workbook
 
     wb = Workbook(write_only=True)
-    for title, columns, open_cursor in sheets:
+    for title, columns, rows in sheets:
         # Excel menolak judul sheet > 31 karakter / berisi : \ / ? * [ ]
         ws = wb.create_sheet(re.sub(r"[:\\/?*\[\]]", "-", title)[:31])
-        with open_cursor() as cur:
-            _fill_sheet(ws, columns, cur, chunk=chunk)
+        ws.append([c["label"] for c in columns])
+        for r in rows[:EXPORT_CAP]:
+            ws.append([_clean(r.get(c["key"])) for c in columns])
     return _xlsx_download(wb, filename)
 
 
