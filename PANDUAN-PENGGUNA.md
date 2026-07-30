@@ -97,9 +97,18 @@ Cabang lain menerima nama baru itu lewat **Sinkronisasi Master Data**, bukan oto
 | Grosir / lainnya | Harga jual barang itu di **server gudang** acuannya |
 | Server gudang | Tidak ada — gudang yang jadi acuan, tidak ada harga lain untuk diikuti |
 
-Kalau sebuah server belum punya acuan gudang, tombol Saran Harga tidak muncul dan aplikasi
-memberi tahu bahwa **Sumber Modal** pada koneksi itu perlu diisi (menu Koneksi Server) sampai
-rantainya mencapai server bertipe gudang.
+**Fitur ini opsional dan tidak pernah menghalangi apa pun.** Mengisi **Sumber Modal** pada
+koneksi tidak wajib, dan kalau server gudangnya sedang mati itu juga bukan masalah — akibatnya
+hanya satu: tidak ada barang yang disarankan. Mengubah harga dan status tetap berjalan seperti
+biasa.
+
+Buka tombol **Saran Harga** untuk melihat alasannya kalau daftarnya kosong:
+
+| Yang tertulis | Artinya |
+|---|---|
+| Belum punya acuan gudang | Sumber Modal pada koneksi ini belum diisi. Isi kalau ingin memakai fitur ini; kalau tidak, abaikan saja. |
+| Server gudang tidak bisa dihubungi | Gudangnya sedang mati atau tidak terjangkau jaringan. Coba lagi nanti. |
+| Server ini bertipe gudang | Gudang yang menjadi acuan, jadi tidak ada harga lain untuk diikuti. Tombolnya tidak muncul. |
 
 ### ⚠ Sinkronisasi antar-server
 

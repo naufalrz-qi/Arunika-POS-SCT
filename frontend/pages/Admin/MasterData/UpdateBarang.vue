@@ -44,18 +44,20 @@ const showModal = computed(() => props.has_modal);
 //   keterangan     → retail, nominal di kolom keterangan
 //   gudang         → non-retail, harga di server gudang acuan
 //   gudang_sendiri → server ini SENDIRI gudangnya; tak ada yang diikuti
-//   tanpa_acuan    → rantai Sumber Modal belum sampai ke gudang
+//   tanpa_acuan    → rantai Sumber Modal belum sampai ke gudang (dan itu boleh)
+//   gudang_offline → gudang acuannya sedang mati; bukan kegagalan
 const saranSumber = computed(() => saranData.value.sumber || null);
 const saranGudang = computed(() => saranData.value.gudang || null);
 const saranPesan = computed(() => saranData.value.pesan || null);
 
-// Tombol disembunyikan hanya kalau server ini memang tak punya acuan sama sekali.
-// Selagi prop `saran` masih dimuat (sumber belum diketahui) tombolnya tetap
-// tampil — menyembunyikan lalu memunculkannya membuat toolbar melompat.
-const saranAda = computed(
-  () => saranSumber.value === null
-    || !["gudang_sendiri", "tanpa_acuan"].includes(saranSumber.value),
-);
+// Tombol tetap tampil walau daftarnya kosong, KECUALI di server gudang sendiri
+// (di sana jawabannya permanen: ia yang jadi acuan). Alasannya: penjelasan kenapa
+// tak ada saran hidup DI DALAM modal, jadi menyembunyikan tombolnya membuat
+// penjelasan itu tak pernah bisa dibaca — pengguna cuma melihat fitur yang hilang
+// tanpa tahu kenapa. Badge angka tetap hanya muncul kalau ada isinya.
+// Selagi prop `saran` masih dimuat (sumber belum diketahui) tombolnya juga tampil,
+// supaya toolbar tak melompat saat data menyusul.
+const saranAda = computed(() => saranSumber.value !== "gudang_sendiri");
 const saranJudul = computed(() =>
   saranSumber.value === "gudang"
     ? `Saran Harga dari Gudang${saranGudang.value ? ` (${saranGudang.value})` : ""}`

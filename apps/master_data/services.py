@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import math
 import re
+
+import pyodbc
 from decimal import Decimal
 
 from core import mssql
@@ -411,7 +413,32 @@ def list_saran_harga(profile) -> list[dict]:
     return out
 
 
-def list_saran_harga_gudang(profile, gudang) -> list[dict]:
+def _harga_satuan(p) -> dict:
+    """kd_barang -> {kd_satuan: harga_jual} untuk satu server."""
+    with mssql.cursor(p) as cur:
+        cur.execute("SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan")
+        out: dict[str, dict] = {}
+        for r in _dictify(cur):
+            out.setdefault(_st(r["kd_barang"]), {})[_st(r["kd_satuan"])] = _f(r["harga_jual"])
+        return out
+
+
+def harga_acuan_gudang(gudang) -> dict:
+    """Harga per satuan di server gudang, untuk dipakai sebagai acuan saran.
+
+    Dipisah dari list_saran_harga_gudang supaya kegagalannya bisa DIBEDAKAN:
+    gudang yang tak bisa dihubungi adalah keadaan yang wajar (lihat saran_harga),
+    sementara gagal membaca server AKTIF adalah masalah nyata yang harus muncul.
+    Kalau keduanya di dalam satu fungsi, satu `except` tak bisa membedakannya.
+
+    Kunci cache sama dengan yang dipakai list_barang_edit untuk sumber-modal, dan
+    di-key pada profil GUDANG-nya: beberapa grosir yang berbagi satu gudang ikut
+    memakai satu hasil baca.
+    """
+    return _cached(gudang, "cost_satuan_price", lambda: _harga_satuan(gudang))
+
+
+def list_saran_harga_gudang(profile, gudang, harga_gudang) -> list[dict]:
     """Saran harga NON-RETAIL: harga_jual barang di server gudang.
 
     Retail memakai nominal di kolom keterangan ("ECER 3.450.000") — itu harga
@@ -432,18 +459,6 @@ def list_saran_harga_gudang(profile, gudang) -> list[dict]:
     - harga gudang <= 0. Itu barang tanpa harga jual (kresek/packaging), bukan
       saran untuk menjual gratis.
     """
-    def _harga_satuan(p):
-        with mssql.cursor(p) as cur:
-            cur.execute("SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan")
-            out: dict[str, dict] = {}
-            for r in _dictify(cur):
-                out.setdefault(_st(r["kd_barang"]), {})[_st(r["kd_satuan"])] = _f(r["harga_jual"])
-            return out
-
-    # Kunci cache sama dengan yang dipakai list_barang_edit untuk sumber-modal,
-    # dan di-key pada profil GUDANG-nya: beberapa grosir yang berbagi satu gudang
-    # ikut memakai satu hasil baca.
-    harga_gudang = _cached(gudang, "cost_satuan_price", lambda: _harga_satuan(gudang))
     harga_lokal = _cached(profile, "satuan_harga_lokal", lambda: _harga_satuan(profile))
 
     with mssql.cursor(profile) as cur:
@@ -497,8 +512,18 @@ def saran_harga(profile) -> dict:
     - non-retail    -> harga_jual di server gudang, ditemukan lewat rantai
                        cost_source (lihat mssql.get_gudang_source)
     - gudang sendiri-> tak ada saran; ia YANG jadi acuan
-    - rantai buntu  -> tak ada saran + pesan yang menyuruh mengisi Sumber Modal,
-                       bukan daftar kosong tanpa penjelasan
+    - rantai buntu  -> tak ada saran; Sumber Modal memang OPSIONAL
+    - gudang mati   -> tak ada saran; bukan kegagalan
+
+    SELURUH fitur ini opsional dan tak pernah menghalangi apa pun. Sumber Modal
+    tidak wajib diisi, dan gudang yang sedang mati tidak boleh terlihat seperti
+    error: satu-satunya akibatnya adalah tak ada barang yang disarankan. Halaman
+    Update Barang tetap bisa mengubah harga dan status seperti biasa.
+
+    Karena itu pyodbc.Error dari pembacaan GUDANG ditangkap di sini, dan hanya
+    dari pembacaan gudang — kegagalan membaca server AKTIF tetap dilempar, sebab
+    itu masalah nyata yang harus terlihat. (ProfileAuthError turunan pyodbc.Error,
+    jadi kunci enkripsi yang hilang ikut tertangkap di jalur yang sama.)
 
     Dipakai halaman Update Barang DAN Pergerakan Harga. Keduanya lewat fungsi ini
     supaya tak ada dua definisi "saran harga" yang bisa menyimpang.
@@ -511,9 +536,11 @@ def saran_harga(profile) -> dict:
     if gudang is None:
         return {
             "rows": [], "sumber": "tanpa_acuan", "gudang": None,
-            "pesan": ("Server ini belum punya acuan gudang. Isi Sumber Modal pada "
-                      "koneksi ini di menu Koneksi Server, sampai rantainya "
-                      "mencapai server bertipe gudang."),
+            "pesan": ("Server ini belum punya acuan gudang, jadi tidak ada saran "
+                      "harga. Itu tidak apa-apa — saran harga sifatnya opsional. "
+                      "Kalau ingin memakainya, isi Sumber Modal pada koneksi ini "
+                      "di menu Koneksi Server sampai rantainya mencapai server "
+                      "bertipe gudang."),
         }
     if gudang.pk == profile.pk:
         return {
@@ -521,8 +548,19 @@ def saran_harga(profile) -> dict:
             "pesan": ("Server ini bertipe gudang, jadi ia yang menjadi acuan harga "
                       "bagi server lain — tidak ada harga lain untuk diikuti."),
         }
-    return {"rows": list_saran_harga_gudang(profile, gudang), "sumber": "gudang",
-            "gudang": gudang.name, "pesan": None}
+
+    try:
+        harga_gudang = harga_acuan_gudang(gudang)
+    except pyodbc.Error:
+        return {
+            "rows": [], "sumber": "gudang_offline", "gudang": gudang.name,
+            "pesan": (f"Server gudang '{gudang.name}' sedang tidak bisa dihubungi, "
+                      "jadi tidak ada saran harga untuk sekarang. Ini tidak "
+                      "mengganggu apa pun di halaman ini — harga dan status tetap "
+                      "bisa diubah seperti biasa. Coba lagi nanti."),
+        }
+    return {"rows": list_saran_harga_gudang(profile, gudang, harga_gudang),
+            "sumber": "gudang", "gudang": gudang.name, "pesan": None}
 
 
 def list_harga_pecahan(profile) -> list[dict]:

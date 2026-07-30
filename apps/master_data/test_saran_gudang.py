@@ -7,6 +7,7 @@ grosir.
 """
 from unittest import mock
 
+import pyodbc
 from django.test import TestCase
 
 from apps.connections.models import DbType, ServerProfile
@@ -91,25 +92,39 @@ class PilihMekanisme(TestCase):
         # kehilangan satu-satunya mekanisme yang memang miliknya.
         g = _profil("G", DbType.GUDANG)
         rtl = _profil("RTL", DbType.RETAIL, cost_source=g)
-        with mock.patch.object(master, "list_saran_harga", return_value=[]), \
-             mock.patch.object(master, "list_saran_harga_gudang") as m_gudang:
+        with (
+            mock.patch.object(master, "list_saran_harga", return_value=[]),
+            mock.patch.object(master, "harga_acuan_gudang") as m_baca,
+            mock.patch.object(master, "list_saran_harga_gudang") as m_gudang,
+        ):
             self.assertEqual(master.saran_harga(rtl)["sumber"], "keterangan")
         m_gudang.assert_not_called()
+        # Retail tak boleh MENYENTUH server gudang sama sekali — kalau ia ikut
+        # membacanya, gudang yang mati akan memperlambat halaman retail tanpa
+        # alasan apa pun.
+        m_baca.assert_not_called()
 
     def test_grosir_pakai_harga_gudang(self):
         g = _profil("G", DbType.GUDANG)
         gr = _profil("GR", DbType.GROSIR, cost_source=g)
-        with mock.patch.object(master, "list_saran_harga_gudang", return_value=[{"x": 1}]) as m:
+        acuan = {"B1": {"PCS": 100.0}}
+        with (
+            mock.patch.object(master, "harga_acuan_gudang", return_value=acuan),
+            mock.patch.object(master, "list_saran_harga_gudang", return_value=[{"x": 1}]) as m,
+        ):
             hasil = master.saran_harga(gr)
-        m.assert_called_once_with(gr, g)
+        m.assert_called_once_with(gr, g, acuan)
         self.assertEqual(hasil["sumber"], "gudang")
         self.assertEqual(hasil["gudang"], "G")
 
     def test_grosir_tak_pakai_keterangan(self):
         g = _profil("G", DbType.GUDANG)
         gr = _profil("GR", DbType.GROSIR, cost_source=g)
-        with mock.patch.object(master, "list_saran_harga_gudang", return_value=[]), \
-             mock.patch.object(master, "list_saran_harga") as m_ket:
+        with (
+            mock.patch.object(master, "harga_acuan_gudang", return_value={}),
+            mock.patch.object(master, "list_saran_harga_gudang", return_value=[]),
+            mock.patch.object(master, "list_saran_harga") as m_ket,
+        ):
             master.saran_harga(gr)
         m_ket.assert_not_called()
 
@@ -138,9 +153,66 @@ class PilihMekanisme(TestCase):
         gr = _profil("GR", DbType.GROSIR, cost_source=g)
         rtl = _profil("RTL", DbType.RETAIL)
         buntu = _profil("BUNTU", DbType.GROSIR)
-        with mock.patch.object(master, "list_saran_harga", return_value=[]), \
-             mock.patch.object(master, "list_saran_harga_gudang", return_value=[]):
+        mati = _profil("MATI", DbType.GROSIR, cost_source=g)
+        with (
+            mock.patch.object(master, "list_saran_harga", return_value=[]),
+            mock.patch.object(master, "harga_acuan_gudang", return_value={}),
+            mock.patch.object(master, "list_saran_harga_gudang", return_value=[]),
+        ):
             for p in (rtl, gr, g, buntu):
                 with self.subTest(profil=p.name):
                     self.assertEqual(
                         set(master.saran_harga(p)), {"rows", "sumber", "gudang", "pesan"})
+        # Jalur offline juga harus mengirim keempat kunci yang sama.
+        with mock.patch.object(master, "harga_acuan_gudang",
+                               side_effect=pyodbc.Error("08001", "mati")):
+            self.assertEqual(
+                set(master.saran_harga(mati)), {"rows", "sumber", "gudang", "pesan"})
+
+
+class GudangMati(TestCase):
+    """Gudang yang tak bisa dihubungi = tak ada saran, BUKAN kegagalan.
+
+    Sumber Modal sifatnya opsional dan saran harga cuma usulan, jadi gudang yang
+    mati tidak boleh menghalangi apa pun di halaman Update Barang — harga dan
+    status tetap harus bisa diubah. Kalau pyodbc.Error dari pembacaan gudang lolos
+    ke atas, ia jadi banner error dan membuat keadaan normal terlihat rusak.
+    """
+
+    def setUp(self):
+        self.g = _profil("GUDANG", DbType.GUDANG)
+        self.gr = _profil("GR", DbType.GROSIR, cost_source=self.g)
+
+    def test_gudang_mati_mengembalikan_daftar_kosong(self):
+        with mock.patch.object(master, "harga_acuan_gudang",
+                               side_effect=pyodbc.Error("08001", "server mati")):
+            hasil = master.saran_harga(self.gr)
+        self.assertEqual(hasil["sumber"], "gudang_offline")
+        self.assertEqual(hasil["rows"], [])
+        self.assertEqual(hasil["gudang"], "GUDANG")
+
+    def test_pesannya_menenangkan_dan_menyebut_nama_gudang(self):
+        with mock.patch.object(master, "harga_acuan_gudang",
+                               side_effect=pyodbc.Error("08001", "server mati")):
+            pesan = master.saran_harga(self.gr)["pesan"]
+        self.assertIn("GUDANG", pesan)
+        self.assertIn("tidak mengganggu", pesan)
+
+    def test_kunci_enkripsi_hilang_ikut_tertangkap(self):
+        # ProfileAuthError turunan pyodbc.Error — POS_FERNET_KEY yang tak diset
+        # untuk profil gudang tak boleh merusak halaman server aktif.
+        with mock.patch.object(master, "harga_acuan_gudang",
+                               side_effect=mssql.ProfileAuthError("HY000", "kunci hilang")):
+            hasil = master.saran_harga(self.gr)
+        self.assertEqual(hasil["sumber"], "gudang_offline")
+
+    def test_kegagalan_server_AKTIF_tetap_dilempar(self):
+        # Beda dari gudang: gagal membaca server yang sedang dipakai adalah masalah
+        # nyata dan harus terlihat, bukan disamarkan jadi "tak ada saran".
+        with (
+            mock.patch.object(master, "harga_acuan_gudang", return_value={}),
+            mock.patch.object(master, "list_saran_harga_gudang",
+                              side_effect=pyodbc.Error("08001", "server aktif mati")),
+        ):
+            with self.assertRaises(pyodbc.Error):
+                master.saran_harga(self.gr)
