@@ -3,6 +3,7 @@ import datetime as dt
 import json
 import logging
 import time
+from contextlib import contextmanager
 
 import pyodbc
 from django.contrib.auth import update_session_auth_hash
@@ -65,7 +66,13 @@ _FIELDS_BY_DATA_KEY = {
     # `nilai` = kolom Nilai di kartu Fast Moving dashboard. Sempat terlewat pada
     # rilis pertama: omset di kartu ringkasan sudah hilang, tapi rupiah per
     # barang di tabel bawahnya masih tampil.
-    "nominal": {"nominal", "revenue", "nilai"},
+    #
+    # `total_belanja`/`rata_nota`/`tier_nilai` + dua kunci ringkasannya milik
+    # Klasifikasi Pelanggan (baris, ringkasan, DAN kedua sheet export-nya):
+    # halaman itu memang berisi belanja per orang, jadi tanpa ini kunci `nominal`
+    # jadi hiasan justru di halaman yang paling terang soal uang.
+    "nominal": {"nominal", "revenue", "nilai", "total_belanja", "rata_nota",
+                "tier_nilai", "total_nilai", "rata_nota_semua"},
 }
 
 
@@ -78,6 +85,20 @@ def _hidden_fields(request) -> set[str]:
     for key in user.hidden_data():
         out |= _FIELDS_BY_DATA_KEY.get(key, set())
     return out
+
+
+def _kolom_tanpa_uang(request, spec, columns=None):
+    """`columns` tanpa kolom uang yang tak boleh dilihat user ini.
+
+    Dipakai jalur export: di sana penyaringan tak bisa dilakukan dengan membuang
+    key dari dict baris (baris datang sebagai tuple langsung dari cursor, demi
+    memori datar), jadi yang dicabut adalah DAFTAR KOLOM-nya. Efeknya sama —
+    nilainya tak pernah sampai ke sel."""
+    columns = spec["columns"] if columns is None else columns
+    hidden = _hidden_fields(request) & set(spec.get("money_fields", ()))
+    if not hidden:
+        return columns
+    return [c for c in columns if c["key"] not in hidden]
 
 log = logging.getLogger(__name__)
 
@@ -1374,9 +1395,14 @@ def _spec_params(request, spec, export=False):
         request, spec["sorts"], spec["default_sort"],
         # Export (XLSX/CSV) melepas clamp 92 hari — akses rentang berapapun; jalur
         # interaktif tetap di-clamp supaya tak sengaja scan seluruh histori di layar.
-        max_range_days=None if export else reporting.MAX_RANGE_DAYS,
+        # Sebuah spec boleh melepas clamp itu juga (max_range_days=None) bila
+        # pertanyaannya memang tentang riwayat panjang, bukan penjualan satu
+        # periode — lihat Klasifikasi Pelanggan.
+        max_range_days=None if export else spec.get("max_range_days", reporting.MAX_RANGE_DAYS),
         enable_recent=spec.get("enable_recent", False) and not export,
         recent_sort=spec.get("recent_sort"),
+        default_from_days=spec.get("default_from_days"),
+        default_sort_dir=spec.get("default_sort_dir", "desc"),
     )
     for k in spec.get("filter_keys", []):
         f[k] = (request.GET.get(k) or "").strip()
@@ -1395,6 +1421,13 @@ def _spec_filters(f, spec):
     }
     for k in spec.get("filter_keys", []):
         filters[k] = f[k]
+    # Filter yang punya nilai bawaan bermakna (ambang klasifikasi) dikirim
+    # TERISI, bukan kosong. Kotak ambang yang tampil kosong menyembunyikan
+    # aturan yang sedang berlaku: pengguna melihat 195 pelanggan "Hilang" tanpa
+    # cara tahu bahwa batasnya 180 hari, dan mengubahnya jadi menebak-nebak.
+    for k, default in (spec.get("filter_defaults") or {}).items():
+        if not filters.get(k):
+            filters[k] = str(default)
     return filters
 
 
@@ -1441,6 +1474,15 @@ def _report_view(spec):
                     conn_error = "Filter yang dipilih tidak bisa diproses. Kembalikan filter ke bawaan."
             else:
                 conn_error = CONN_ERROR
+            # Izin nilai uang (User.hidden_data_keys). Opt-in per spec lewat
+            # `money_fields`: laporan yang tak menyebutkannya tak berubah
+            # perilakunya. Dijatuhkan DI SINI, setelah SQL — bukan dengan
+            # membangun SELECT lain — supaya cuma ada satu query untuk dirawat,
+            # dan tak mungkin ada jalur yang lupa menyaring.
+            hidden = _hidden_fields(request) & set(spec.get("money_fields", ()))
+            if hidden:
+                rows = [{k: v for k, v in r.items() if k not in hidden} for r in rows]
+                summary = {k: v for k, v in summary.items() if k not in hidden}
             # Peringatan rentang tanggal BUKAN kegagalan koneksi — kanal sendiri
             # supaya tak dirender sebagai banner error (atau digabung ke dalamnya).
             return {"rows": rows, "total": total, "summary": summary,
@@ -1469,12 +1511,17 @@ def _report_export(spec):
         # _report_view). TOP EXPORT_CAP jaga batas baris Excel (~1jt); clamp
         # rentang tanggal sudah dilepas di _spec_params(export=True).
         order_sql = f"SELECT TOP {reporting.EXPORT_CAP} * FROM ({inner}) AS q ORDER BY {f['order_by']}"
+        # Kolom uang dicabut dari DAFTAR KOLOM, jadi nilainya tak pernah ditulis
+        # ke sel walau tetap ikut di hasil query. Export adalah jalur yang paling
+        # mudah terlewat saat menambah pembatasan — dan pembatasan yang terlewat
+        # di sini membuat pembatasan di layar tak berarti apa-apa.
+        columns = _kolom_tanpa_uang(request, spec)
         resp, last_exc = None, None
         for read_profile in mssql.report_read_profiles(profile):
             try:
                 with mssql.report_cursor(read_profile) as cur:
                     cur.execute(order_sql, params)
-                    resp = reporting.xlsx_stream_response(spec["filename"], spec["columns"], cur)
+                    resp = reporting.xlsx_stream_response(spec["filename"], columns, cur)
                 break
             except pyodbc.Error as exc:
                 last_exc = exc
@@ -2317,6 +2364,168 @@ def fmi_stok_export(request):
         return redirect("/admin-panel/analitik/fmi-stok")
     log_activity(request, "export", f"Export fmi-stok: {len(rows)} baris")
     return reporting.xlsx_response("fmi-stok", _FMI_STOK_COLUMNS, rows)
+
+
+# --- Klasifikasi Pelanggan (untuk follow-up) --------------------------------
+# Dua hal yang beda dari laporan lain, keduanya karena pertanyaannya soal
+# RIWAYAT pelanggan, bukan penjualan satu periode:
+#   max_range_days=None   — clamp 92 hari membuat "belum belanja >1 tahun"
+#                           mustahil dijawab.
+#   default_from_days=730 — bawaan awal-bulan akan menandai semua orang 'Baru'.
+# `enable_recent` sengaja TIDAK dipakai: mode itu memotong hasil ke 100 baris
+# teratas, dan daftar follow-up yang terpotong diam-diam lebih buruk daripada
+# daftar yang lambat.
+# `nilai` milik sheet Barang Favorit, bukan tabel utama — tapi ia HARUS ada di
+# daftar yang sama. Tanpa itu sheet kedua lolos dari pencabutan sementara sheet
+# pertama tersaring: file export yang setengah tersensor, dan pembatasan yang
+# terlihat bekerja di layar padahal tidak. Ini persis jenis kelalaian yang sudah
+# pernah terjadi sekali di proyek ini.
+_KLASIFIKASI_UANG = ("total_belanja", "rata_nota", "tier_nilai",
+                     "total_nilai", "rata_nota_semua", "nilai")
+
+_KLASIFIKASI_COLUMNS = [
+    {"key": "kd_customer", "label": "Kode"},
+    {"key": "customer", "label": "Pelanggan"},
+    {"key": "hp", "label": "HP"},
+    {"key": "telepon", "label": "Telepon"},
+    {"key": "kota", "label": "Kota"},
+    {"key": "segmen", "label": "Segmen"},
+    {"key": "jml_nota", "label": "Jml Nota"},
+    {"key": "total_belanja", "label": "Total Belanja"},
+    {"key": "rata_nota", "label": "Rata per Nota"},
+    {"key": "tier_nilai", "label": "Kelas Nilai"},
+    {"key": "nota_pertama", "label": "Belanja Pertama"},
+    {"key": "nota_terakhir", "label": "Belanja Terakhir"},
+    {"key": "jeda_hari", "label": "Jeda (hari)"},
+    {"key": "umur_hari", "label": "Lama Jadi Pelanggan (hari)"},
+]
+
+_KLASIFIKASI_PELANGGAN = {
+    "component": "Admin/Analytics/KlasifikasiPelanggan",
+    "url": "/admin-panel/analitik/klasifikasi-pelanggan",
+    "inner": rpt.klasifikasi_pelanggan,
+    "sorts": rpt.SORTS_KLASIFIKASI_PELANGGAN,
+    "default_sort": "segmen",
+    "summary": rpt.SUMMARY_KLASIFIKASI_PELANGGAN,
+    "filters": rpt.FILTERS_KLASIFIKASI_PELANGGAN,
+    "filter_keys": ["kd_divisi", *rpt.AMBANG_KLASIFIKASI],
+    "filter_defaults": {k: v[0] for k, v in rpt.AMBANG_KLASIFIKASI.items()},
+    # segmen_urut: 1=Hilang .. 5=Aktif, jadi ASC = yang paling perlu dihubungi
+    # di halaman pertama. Bawaan desc akan menaruhnya di halaman terakhir.
+    "default_sort_dir": "asc",
+    "max_range_days": None,
+    "default_from_days": 730,
+    "money_fields": _KLASIFIKASI_UANG,
+    "options": lambda p: {"divisi": _opt_divisi(p)},
+    "filename": "klasifikasi-pelanggan",
+    "columns": _KLASIFIKASI_COLUMNS,
+}
+klasifikasi_pelanggan = _report_view(_KLASIFIKASI_PELANGGAN)
+
+
+def klasifikasi_pelanggan_export(request):
+    """Export dua sheet: ringkasan per pelanggan + barang favorit tiap pelanggan.
+
+    Bespoke (bukan _report_export) karena satu file memuat dua sudut pandang.
+    Staf yang menyiapkan follow-up butuh keduanya di satu file — daftar nama
+    tanpa "biasanya beli apa" memaksa mereka membuka aplikasi lagi per orang.
+    """
+    spec = _KLASIFIKASI_PELANGGAN
+    f = _spec_params(request, spec, export=True)
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect(spec["url"])
+
+    inner, params = spec["inner"](f)
+    inner, params = reporting.apply_column_filters(inner, params, f)
+    utama_sql = (f"SELECT TOP {reporting.EXPORT_CAP} * FROM ({inner}) AS q "
+                 f"ORDER BY {f['order_by']}")
+    favorit_sql, favorit_params = rpt.barang_favorit_massal(f, top_n=5)
+
+    kolom_utama = _kolom_tanpa_uang(request, spec)
+    kolom_favorit = _kolom_tanpa_uang(request, spec, rpt.FAVORIT_COLUMNS)
+
+    resp, last_exc = None, None
+    for read_profile in mssql.report_read_profiles(profile):
+        # Tiap sheet membuka cursornya sendiri lewat context manager, dijalankan
+        # berurutan oleh xlsx_multi_sheet_response — bukan dua cursor hidup
+        # bersamaan atas satu koneksi.
+        def _buka(sql, prm, rp=read_profile):
+            @contextmanager
+            def open_cursor():
+                with mssql.report_cursor(rp) as cur:
+                    cur.execute(sql, prm)
+                    yield cur
+            return open_cursor
+
+        try:
+            resp = reporting.xlsx_multi_sheet_response(
+                spec["filename"],
+                [
+                    ("Klasifikasi", kolom_utama, _buka(utama_sql, params)),
+                    ("Barang Favorit", kolom_favorit, _buka(favorit_sql, favorit_params)),
+                ],
+            )
+            break
+        except pyodbc.Error as exc:
+            last_exc = exc
+    if resp is None:
+        request.session["flash_error"] = mssql.friendly_error(last_exc, "Gagal export")
+        return redirect(spec["url"])
+    log_activity(request, "export", "Export klasifikasi-pelanggan (2 sheet)")
+    return resp
+
+
+def klasifikasi_pelanggan_detail(request):
+    """JSON: satu pelanggan — barang favorit + nota terakhirnya (panel detail).
+
+    Mengikuti pola update_barang_detail: JSON biasa, bukan halaman Inertia, dan
+    hanya menyentuh satu kd_customer sehingga aman dipanggil per klik baris."""
+    spec = _KLASIFIKASI_PELANGGAN
+    kd_customer = (request.GET.get("kd_customer") or "").strip()
+    if not kd_customer:
+        return JsonResponse({"error": "Pelanggan tidak disebutkan."}, status=400)
+
+    profile = _active()
+    if not profile:
+        return JsonResponse({"error": CONN_ERROR}, status=503)
+
+    f = _spec_params(request, spec)
+    # Panel detail memakai nama field sendiri (`nilai`, sudah terdaftar di bawah
+    # kunci `nominal`), jadi ia harus dicabut di sini juga — bukan hanya kolom
+    # tabel utama. Rute ketiga inilah yang paling mudah terlupakan.
+    sembunyikan_nilai = "nilai" in _hidden_fields(request)
+
+    def _bersih(rows):
+        if not sembunyikan_nilai:
+            return rows
+        return [{k: v for k, v in r.items() if k != "nilai"} for r in rows]
+
+    try:
+        with mssql.report_cursor(profile) as cur:
+            cur.execute("SELECT kd_customer, nama, alamat, hp, telepon, email, status "
+                        "FROM m_customer WHERE kd_customer = ?", [kd_customer])
+            profil = (reporting.clean_rows(reporting.dictify(cur)) or [None])[0]
+
+            sql, prm = rpt.barang_favorit_pelanggan(f, kd_customer, top_n=20)
+            cur.execute(sql, prm)
+            favorit = reporting.clean_rows(reporting.dictify(cur))
+
+            sql, prm = rpt.nota_pelanggan(f, kd_customer, top_n=20)
+            cur.execute(sql, prm)
+            nota = reporting.clean_rows(reporting.dictify(cur))
+    except pyodbc.Error as exc:
+        return JsonResponse({"error": mssql.friendly_error(exc, "Gagal membaca detail")}, status=502)
+
+    return JsonResponse({
+        "kd_customer": kd_customer,
+        "profil": profil,
+        "favorit": _bersih(favorit),
+        "nota": _bersih(nota),
+        "periode": {"dari": f["date_from_s"], "sampai": f["date_to_s"]},
+    })
+
 
 # Kas & Shift
 # Kas Harian: saldo berjalan kini dihitung window function di SQL

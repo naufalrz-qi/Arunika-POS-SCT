@@ -50,6 +50,7 @@ ALL_MENUS = [
     # Analitik (FMI)
     {"key": "fmi_penjualan", "label": "FMI Penjualan", "icon": "trending", "href": "/admin-panel/analitik/fmi-penjualan", "section": "analitik"},
     {"key": "fmi_stok", "label": "FMI Stok", "icon": "chart", "href": "/admin-panel/analitik/fmi-stok", "section": "analitik"},
+    {"key": "klasifikasi_pelanggan", "label": "Klasifikasi Pelanggan", "icon": "user", "href": "/admin-panel/analitik/klasifikasi-pelanggan", "section": "analitik"},
     # Promo & Voucher
     {"key": "promo", "label": "Promo & Diskon", "icon": "tag", "href": "/admin-panel/promo/diskon", "section": "promo"},
     {"key": "voucher", "label": "Voucher", "icon": "ticket", "href": "/admin-panel/promo/voucher", "section": "promo"},

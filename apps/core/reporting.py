@@ -53,13 +53,20 @@ def month_start(today=None) -> dt.datetime:
 
 def parse_report_params(
     request, sorts, default_sort, max_range_days=MAX_RANGE_DAYS,
-    enable_recent=False, recent_sort=None,
+    enable_recent=False, recent_sort=None, default_from_days=None,
+    default_sort_dir="desc",
 ):
     """Read the standard report params from request.GET into a dict `f`.
 
     `sorts` is the whitelist: {sort_param: output_column_alias}. Anything not in
     it falls back to `default_sort` — this is the SQL-injection guard, since the
     ORDER BY clause is built from the alias, never from raw user input.
+
+    `default_from_days`: bila di-set, `date_from` bawaan (saat request tak
+    membawa tanggal) jadi `date_to - N hari` alih-alih awal bulan. Laporan yang
+    menilai RIWAYAT pelanggan — bukan penjualan satu periode — butuh jendela
+    panjang sejak muat pertama; awal-bulan akan mengklasifikasi semua orang
+    sebagai baru. `None` = perilaku month_start seperti laporan lainnya.
 
     `enable_recent`: when True and the request carries no query params at all
     (first page load, before any filter/sort/page interaction), `f["recent"]`
@@ -78,8 +85,11 @@ def parse_report_params(
         single = _parse_date(g.get("date")) or dt.datetime(today.year, today.month, today.day)
         date_from = date_to = single
     else:
-        date_from = _parse_date(g.get("date_from")) or month_start(today)
         date_to = _parse_date(g.get("date_to")) or dt.datetime(today.year, today.month, today.day)
+        date_from = _parse_date(g.get("date_from"))
+        if date_from is None:
+            date_from = (date_to - dt.timedelta(days=default_from_days)
+                         if default_from_days else month_start(today))
 
     # max_range_days=None -> tanpa clamp (jalur export/CSV: akses rentang berapapun).
     warning = None
@@ -90,7 +100,11 @@ def parse_report_params(
     sort = g.get("sort") or default_sort
     if sort not in sorts:
         sort = default_sort
-    sort_dir = "asc" if (g.get("sort_dir") or "desc").lower() == "asc" else "desc"
+    # `default_sort_dir` ada karena "terbesar dulu" tidak selalu berarti "yang
+    # paling perlu dilihat dulu". Pada kolom yang isinya peringkat urgensi
+    # (Klasifikasi Pelanggan: 1=Hilang .. 5=Aktif) desc justru membuang yang
+    # paling mendesak ke halaman terakhir.
+    sort_dir = "asc" if (g.get("sort_dir") or default_sort_dir).lower() == "asc" else "desc"
 
     if recent:
         page, per_page = 1, RECENT_LIMIT
@@ -326,6 +340,11 @@ def xlsx_response(filename, columns, rows):
         # _clean = buang karakter kontrol ilegal (openpyxl menolaknya) + normalisasi
         # Decimal/tanggal; jalur stream sudah lewat _clean, samakan di sini.
         ws.append([_clean(r.get(c["key"])) for c in columns])
+    return _xlsx_download(wb, filename)
+
+
+def _xlsx_download(wb, filename):
+    """Serialisasi workbook jadi response download (stempel waktu di nama file)."""
     resp = HttpResponse(
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
@@ -333,6 +352,46 @@ def xlsx_response(filename, columns, rows):
     resp["Content-Disposition"] = f'attachment; filename="{filename}-{stamp}.xlsx"'
     wb.save(resp)
     return resp
+
+
+def _fill_sheet(ws, columns, cur, chunk=2000):
+    """Tulis header + seluruh baris `cur` ke `ws`, streaming per `chunk`.
+
+    Kolom dipetakan lewat INDEX dari cur.description, bukan dict per baris —
+    itulah yang menjaga memori app datar walau ratusan ribu baris."""
+    ws.append([c["label"] for c in columns])
+    pos = {name: i for i, name in enumerate(d[0] for d in cur.description)}
+    idxs = [pos.get(c["key"]) for c in columns]
+    while True:
+        batch = cur.fetchmany(chunk)
+        if not batch:
+            break
+        for row in batch:
+            ws.append([_clean(row[i]) if i is not None else None for i in idxs])
+
+
+def xlsx_multi_sheet_response(filename, sheets, chunk=2000):
+    """XLSX dgn BEBERAPA sheet, tiap sheet dari query-nya sendiri.
+
+    `sheets` = [(title, columns, open_cursor)] di mana `open_cursor` adalah
+    context manager yang menyerahkan cursor YANG SUDAH di-execute. Bentuk itu
+    dipilih supaya tiap sheet membuka lalu menutup cursornya sendiri secara
+    berurutan — tak pernah ada dua cursor hidup bersamaan atas satu koneksi
+    pyodbc, dan sheet berikutnya tak bisa mencuri hasil sheet sebelumnya.
+
+    Dipakai laporan yang satu file Excel-nya memuat dua sudut pandang berbeda
+    (mis. Klasifikasi Pelanggan: ringkasan per pelanggan + barang favoritnya).
+    Untuk satu sheet saja pakai `xlsx_stream_response` yang lebih ringkas.
+    """
+    from openpyxl import Workbook
+
+    wb = Workbook(write_only=True)
+    for title, columns, open_cursor in sheets:
+        # Excel menolak judul sheet > 31 karakter / berisi : \ / ? * [ ]
+        ws = wb.create_sheet(re.sub(r"[:\\/?*\[\]]", "-", title)[:31])
+        with open_cursor() as cur:
+            _fill_sheet(ws, columns, cur, chunk=chunk)
+    return _xlsx_download(wb, filename)
 
 
 def xlsx_stream_response(filename, columns, cur, chunk=2000):
@@ -345,20 +404,5 @@ def xlsx_stream_response(filename, columns, cur, chunk=2000):
     from openpyxl import Workbook
 
     wb = Workbook(write_only=True)
-    ws = wb.create_sheet("Data")
-    ws.append([c["label"] for c in columns])
-    pos = {name: i for i, name in enumerate(d[0] for d in cur.description)}
-    idxs = [pos.get(c["key"]) for c in columns]
-    while True:
-        batch = cur.fetchmany(chunk)
-        if not batch:
-            break
-        for row in batch:
-            ws.append([_clean(row[i]) if i is not None else None for i in idxs])
-    resp = HttpResponse(
-        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M")
-    resp["Content-Disposition"] = f'attachment; filename="{filename}-{stamp}.xlsx"'
-    wb.save(resp)
-    return resp
+    _fill_sheet(wb.create_sheet("Data"), columns, cur, chunk=chunk)
+    return _xlsx_download(wb, filename)

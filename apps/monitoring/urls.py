@@ -68,6 +68,11 @@ urlpatterns = [
     path("analitik/fmi-penjualan/export", views.fmi_penjualan_export, name="fmi_penjualan_export"),
     path("analitik/fmi-stok", views.fmi_stok, name="fmi_stok"),
     path("analitik/fmi-stok/export", views.fmi_stok_export, name="fmi_stok_export"),
+    path("analitik/klasifikasi-pelanggan", views.klasifikasi_pelanggan, name="klasifikasi_pelanggan"),
+    path("analitik/klasifikasi-pelanggan/export", views.klasifikasi_pelanggan_export,
+         name="klasifikasi_pelanggan_export"),
+    path("analitik/klasifikasi-pelanggan/detail", views.klasifikasi_pelanggan_detail,
+         name="klasifikasi_pelanggan_detail"),
     # Promo & Voucher
     path("promo/diskon", views.promo, name="promo"),
     path("promo/diskon/export", views.promo_export, name="promo_export"),
