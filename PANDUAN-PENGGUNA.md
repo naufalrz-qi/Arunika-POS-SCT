@@ -93,6 +93,7 @@ kecuali tanggal daftar barang dan poin pelanggan, yang sengaja dikecualikan.
 
 - Semua laporan punya filter tanggal. **Rentang maksimal 92 hari** — kalau lebih, sistem
   memangkasnya dan menampilkan **banner biru**. Itu pemberitahuan, bukan kegagalan.
+  Pengecualiannya **Klasifikasi Pelanggan**, yang memang butuh riwayat panjang (lihat §4b).
 - Tombol **Export** mengunduh berkas Excel berisi data sesuai filter yang sedang aktif.
 - Laporan besar bisa memakai salinan data khusus, sehingga angkanya bisa telat 1–2 menit
   dari transaksi yang baru saja terjadi.
@@ -100,7 +101,43 @@ kecuali tanggal daftar barang dan poin pelanggan, yang sengaja dikecualikan.
 Laporan yang tersedia: Penjualan (Detail, per Nota, per Customer, per User, per Periode),
 Laba per Barang, Retur Penjualan, Piutang Pelanggan, Pembelian (dan per Supplier, per
 Periode), Retur Pembelian, Biaya Operasional, Biaya per Kategori, FMI Penjualan, FMI Stok,
-Promo & Diskon, Voucher.
+Klasifikasi Pelanggan, Promo & Diskon, Voucher.
+
+---
+
+## 4b. Menghubungi kembali pelanggan (Klasifikasi Pelanggan)
+
+Menu **Analitik → Klasifikasi Pelanggan** menyusun daftar siapa yang perlu dihubungi, lengkap
+dengan nomor HP-nya. Tiap pelanggan diberi satu **segmen**:
+
+| Segmen | Artinya | Biasanya untuk |
+|---|---|---|
+| **Baru** | Belanja pertamanya belum lama (bawaan: 90 hari terakhir) | Disambut, ditawari jadi langganan |
+| **Aktif** | Masih datang belakangan ini | Dibiarkan, sudah baik |
+| **Setia** | Masih datang DAN sudah banyak notanya (bawaan: minimal 5) | Diberi perhatian khusus |
+| **Mulai Jarang** | Sudah agak lama tak datang (bawaan: lebih dari 90 hari) | Diingatkan sebelum benar-benar pergi |
+| **Hilang** | Sudah lama sekali tak datang (bawaan: lebih dari 180 hari) | Ditawari promo untuk kembali |
+
+Halaman terbuka **terurut dari yang paling perlu dihubungi** (Hilang di atas), dengan jendela
+riwayat **2 tahun** — bukan 92 hari seperti laporan lain, karena "belum belanja setahun" butuh
+riwayat panjang untuk bisa terlihat.
+
+**Yang bisa dilakukan:**
+
+- **Klik nama pelanggan** → muncul kontak, **barang yang biasa ia beli**, dan nota terakhirnya.
+  Barang favorit ini bahan pembuka percakapan yang paling berguna.
+- **Ubah batasan segmen** di *Filter lanjutan → Aturan Segmen*. Toko grosir dan toko retail
+  punya ritme belanja berbeda, jadi angka bawaan tidak harus dipakai. Angka yang sedang berlaku
+  selalu terlihat di kotaknya.
+- **Saring satu segmen saja** di *Filter lanjutan → Segmen*, misalnya hanya "Hilang".
+- **Export Excel** menghasilkan **dua lembar**: `Klasifikasi` (daftar pelanggan + kontak) dan
+  `Barang Favorit` (barang teratas tiap pelanggan). Jadi daftar telepon bisa dikerjakan tanpa
+  membuka aplikasi lagi per orang.
+
+**Kenapa UMUM, ECERAN, dan OBRAL tidak muncul di sini:** ketiganya bukan nama orang, hanya
+penampung transaksi untuk pembeli yang identitasnya tidak dicatat — tidak ada siapa pun yang bisa
+dihubungi. Akun marketplace (Shopee/Tokopedia/TikTok) juga dikecualikan karena itu kanal jualan.
+Angka penjualan mereka tetap lengkap di laporan **Penjualan per Customer**.
 
 ---
 
@@ -142,7 +179,7 @@ Customer · Penjualan per User · Penjualan per Periode · Retur Penjualan · Pi
 **Stok:** Stok Akhir · Barang Histori · Stok per Divisi · Mutasi Stok · Stok Awal Barang ·
 Transaksi Barang · Opname Stok
 
-**Analitik:** FMI Penjualan · FMI Stok
+**Analitik:** FMI Penjualan · FMI Stok · Klasifikasi Pelanggan
 
 **Promo:** Promo & Diskon · Voucher
 

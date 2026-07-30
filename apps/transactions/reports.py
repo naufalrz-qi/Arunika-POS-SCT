@@ -1239,9 +1239,18 @@ def _segmen_case(f) -> tuple[str, str]:
     itu follow-up yang berbeda. Urutan sebaliknya terlihat sama masuk akal dari
     luar, jadi jangan ditukar tanpa membaca ini.
 
-    `jarang` di-clamp <= `hilang`: kalau tidak, ambang 'Mulai Jarang' yang lebih
-    besar membuat cabang pertama menyerap semuanya dan segmen itu jadi mustahil
-    tercapai — bukan error, cuma segmen yang selalu kosong tanpa alasan terlihat.
+    `jarang` di-clamp <= `hilang` supaya urutan cabang tetap koheren: tanpa itu
+    ambang 'Mulai Jarang' yang lebih besar dari 'Hilang' membuat cabang kedua
+    memeriksa syarat yang lebih longgar daripada cabang di atasnya — pembacaan
+    kode jadi menyesatkan tanpa mengubah hasil.
+
+    Efeknya: kalau jarang >= hilang, 'Mulai Jarang' memang jadi kosong. Itu
+    jawaban yang BENAR untuk ambang seperti itu — semua yang tadinya "mulai
+    jarang" sudah masuk "hilang" — dan sengaja tidak dibereskan dengan menukar
+    kedua angka. Menukar berarti mengubah "Hilang: jeda lebih dari 180" yang
+    diketik pengguna menjadi 400 di belakang punggungnya; segmen kosong yang
+    angkanya terlihat di panel filter lebih jujur daripada ambang yang diam-diam
+    diganti.
     """
     hilang = _amb(f, "hilang_hari")
     jarang = min(_amb(f, "jarang_hari"), hilang)

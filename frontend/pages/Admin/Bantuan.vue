@@ -31,6 +31,12 @@ const istilah = [
   { t: "Satuan & faktor konversi", d: "Satu barang bisa punya beberapa satuan (pcs, lusin, dus). Faktor konversi menyatakan berapa satuan terkecil per satu satuan besar. Semua stok dihitung dalam satuan terkecil lalu ditampilkan kembali." },
   { t: "Saran Harga", d: "Usulan harga jual yang dihitung sistem dari harga pokok dan margin. Usulan saja — tidak otomatis dipakai.", ke: "/admin-panel/master/update-barang", nama: "Update Barang" },
   { t: "Fast Moving Bulan Ini", d: "Panel di Dashboard: barang paling laku bulan berjalan. Istilah yang sama dengan \"Fast\" pada FMI." },
+  { t: "Segmen Pelanggan", d: "Nama kelompok pelanggan menurut kebiasaan belanjanya: Baru (belanja pertamanya belum lama), Aktif (masih rutin datang), Setia (rutin datang DAN sudah banyak nota), Mulai Jarang (sudah agak lama tidak datang), Hilang (sudah lama sekali tidak datang). Dipakai untuk menyusun daftar pelanggan yang perlu dihubungi.", ke: "/admin-panel/analitik/klasifikasi-pelanggan", nama: "Klasifikasi Pelanggan" },
+  { t: "Jeda (hari)", d: "Berapa hari sejak pelanggan itu belanja terakhir. Semakin besar, semakin lama ia tidak datang. Angka inilah yang paling menentukan segmennya — pelanggan yang baru sekali datang tapi itu setahun lalu dihitung Hilang, bukan Baru." },
+  { t: "Rata per Nota", d: "Total belanja dibagi jumlah notanya. Menjawab \"sekali datang biasanya belanja berapa\", yang bisa berbeda jauh dari total belanja: pelanggan dengan 20 nota kecil bisa bertotal sama dengan pelanggan satu nota besar." },
+  { t: "Kelas Nilai", d: "Pengelompokan Besar/Sedang/Kecil berdasarkan Rata per Nota, bukan total belanja. Batasnya bisa diubah di panel filter." },
+  { t: "Lama Jadi Pelanggan", d: "Berapa hari sejak belanja PERTAMA-nya. Dipakai membedakan pelanggan baru dari pelanggan lama yang kebetulan sedang jarang datang." },
+  { t: "UMUM / ECERAN / OBRAL", d: "Bukan nama orang, melainkan penampung transaksi untuk pembeli yang tidak dicatat identitasnya. Di halaman Klasifikasi Pelanggan ketiganya sengaja tidak ditampilkan — tidak ada yang bisa dihubungi. Akun marketplace (Shopee/Tokopedia/TikTok) juga dikecualikan karena itu kanal jualan, bukan orang." },
 ];
 </script>
 

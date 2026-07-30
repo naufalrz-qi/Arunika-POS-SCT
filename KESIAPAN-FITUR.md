@@ -63,6 +63,7 @@ Kolom **Sumber baca**: `replica` = bisa membaca replica laporan bila dikonfigura
 | Opname Stok | `opname` | laporan-server | replica | — | Siap |
 | FMI Penjualan | `fmi_penjualan` | laporan-server | replica | — | Siap |
 | FMI Stok | `fmi_stok` | laporan-server | primary | — | Siap |
+| Klasifikasi Pelanggan | `klasifikasi_pelanggan` | laporan-server | replica | — | Siap |
 | Promo & Diskon | `promo` | laporan-server | replica | — | Siap |
 | Voucher | `voucher` | laporan-server | replica | — | Siap |
 | Kas Harian | `kas` | laporan-server | primary | — | Siap dengan catatan |
@@ -100,6 +101,28 @@ RBAC di sini **3 tingkat, bukan per-menu-per-peran**:
 
 Menu ber-flag `always` (saat ini: Bantuan & Istilah) tidak bisa dicabut dan tidak muncul di
 Kelola Menu.
+
+**Izin nilai uang (`User.hidden_data_keys`)** adalah sumbu terpisah: menu boleh dibuka, tapi
+kolom rupiahnya dicabut di server. Cakupannya masih SEBAGIAN — daftar halaman yang benar-benar
+menyaring:
+
+| Halaman | Kunci yang berlaku | Jalur yang disaring |
+|---|---|---|
+| Dashboard | `nominal` | payload dashboard |
+| Stok Akhir | `harga_jual`, `harga_beli`, `nominal` | halaman + export XLSX |
+| Barang Histori | `harga_jual`, `harga_beli`, `nominal` | halaman |
+| Klasifikasi Pelanggan | `nominal` | halaman, panel detail, **kedua sheet** export |
+
+Halaman lain (FMI Stok, Mutasi Stok, Master Produk, laporan penjualan/pembelian) **masih
+menampilkan uang ke siapa pun yang boleh membukanya** — untuk membatasi seseorang, menu-menu itu
+harus dicabut, bukan sekadar mencabut kunci nilainya.
+
+Menambah kolom uang baru ke halaman yang sudah menyaring: daftarkan nama field-nya di
+`_FIELDS_BY_DATA_KEY` (`apps/monitoring/views.py`) **dan** pastikan setiap rute yang menyajikan
+data itu ikut menyaring. Kelalaian ini sudah terjadi dua kali — sekali pada export Stok Akhir,
+sekali pada sheet "Barang Favorit" di Klasifikasi Pelanggan (field-nya bernama `nilai`, bukan
+`total_belanja`, jadi ia lolos dari daftar spec sementara sheet pertama tersaring). Keduanya tak
+menimbulkan gejala apa pun di layar.
 
 ---
 
