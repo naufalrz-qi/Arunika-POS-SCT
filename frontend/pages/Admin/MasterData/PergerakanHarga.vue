@@ -278,6 +278,14 @@ async function openEdit(kd_barang) {
     </Deferred>
 
     <!-- Modal edit — komponen yang sama persis dengan Update Barang -->
-    <BarangEditModal :item="editItem" :is-retail="isRetail" :redirect-to="currentUrl" @close="editItem = null" />
+    <!-- boleh-edit-identitas ikut tipe koneksi AKTIF, bukan server yang dipilih di
+         filter: endpoint identitas selalu menulis ke koneksi aktif. -->
+    <BarangEditModal
+      :item="editItem"
+      :is-retail="isRetail"
+      :boleh-edit-identitas="profile_type === 'gudang'"
+      :redirect-to="currentUrl"
+      @close="editItem = null"
+    />
   </AdminLayout>
 </template>

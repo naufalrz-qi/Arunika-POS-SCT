@@ -479,6 +479,9 @@ _STATUS_FIELD = {
     "m_barang_satuan": BarangUpdateLog.Field.STATUS_SATUAN,
 }
 
+# Label untuk ringkasan perubahan identitas di toast (bukan nama field mentah).
+_IDENTITAS_LABEL = {"nama": "Nama", "keterangan": "Keterangan"}
+
 # Nama tabel MS SQL tak boleh muncul di toast. Label disalin dari
 # frontend/pages/Admin/MasterData/UpdateBarang.vue (bagian "Ketersediaan").
 _STATUS_LABELS = {
@@ -536,6 +539,10 @@ def update_barang_index(request):
             "active": profile.as_dict() if profile else None,
             "profile_type": profile.db_type if profile else None,
             "has_modal": bool(mssql.get_cost_source(profile)) if profile else False,
+            # Nama & keterangan = identitas katalog yang dipakai bersama semua
+            # cabang, jadi hanya gudang yang boleh mengubahnya. Flag ini cuma
+            # untuk tampilan; yang menahan penulisan ada di services.
+            "boleh_edit_identitas": bool(profile and profile.db_type == "gudang"),
             "items": defer(load_items),
             "saran": defer(load_saran, group="saran"),
             "pecahan": defer(load_pecahan, group="pecahan"),
@@ -667,6 +674,58 @@ def update_barang_status(request):
     except ValueError as exc:
         # Penolakan whitelist dari master.update_status — pesannya sudah Indonesia.
         request.session["flash_error"] = f"Gagal update status: {exc}"
+    return _redirect_back(data, "/admin-panel/master/update-barang")
+
+
+def update_barang_identitas(request):
+    """Ubah nama & keterangan barang — HANYA dari server gudang.
+
+    Penjagaan tipe server ada di master.update_nama_keterangan (server-side).
+    Di sini hanya penerjemahan hasilnya jadi pesan: input yang di-disable di Vue
+    tetap bisa dikirim lewat permintaan buatan sendiri, jadi layar bukan penjaga.
+
+    Ringkasan perubahan dibalas sebagai flash "sebelum → sesudah" dan dicatat di
+    BarangUpdateLog, jadi ia muncul juga di Riwayat pada kartu barang. Nama yang
+    berubah tanpa jejak adalah perubahan yang paling menyulitkan untuk dilacak:
+    ia menyebar ke seluruh cabang lewat Sinkronisasi Master Data.
+    """
+    profile = _active()
+    data = get_data(request)
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return _redirect_back(data, "/admin-panel/master/update-barang")
+
+    kd_barang = (data.get("kd_barang") or "").strip()
+    try:
+        ubah = master.update_nama_keterangan(
+            profile, kd_barang, data.get("nama") or "", data.get("keterangan") or "")
+    except master.BukanServerGudang as exc:
+        request.session["flash_error"] = str(exc)
+        return _redirect_back(data, "/admin-panel/master/update-barang")
+    except ValueError as exc:
+        request.session["flash_error"] = str(exc)
+        return _redirect_back(data, "/admin-panel/master/update-barang")
+    except pyodbc.Error as exc:
+        request.session["flash_error"] = mssql.friendly_error(exc, "Gagal menyimpan nama/keterangan")
+        return _redirect_back(data, "/admin-panel/master/update-barang")
+
+    if not ubah:
+        request.session["flash_success"] = f"Tidak ada perubahan untuk {kd_barang}."
+        return _redirect_back(data, "/admin-panel/master/update-barang")
+
+    nama_final = next((u["baru"] for u in ubah if u["field"] == "nama"), None)
+    log_barang_updates(
+        request, profile, kd_barang, nama_final or (data.get("nama") or "").strip(),
+        [(u["field"], "", u["lama"], u["baru"]) for u in ubah],
+    )
+    log_activity(request, "barang",
+                 f"Ubah identitas {kd_barang} ({profile.name}): "
+                 + "; ".join(f"{u['field']} '{u['lama']}' -> '{u['baru']}'" for u in ubah))
+    request.session["flash_success"] = (
+        f"{kd_barang} disimpan — "
+        + "; ".join(f"{_IDENTITAS_LABEL[u['field']]}: \"{u['lama'] or '(kosong)'}\" → "
+                    f"\"{u['baru'] or '(kosong)'}\"" for u in ubah)
+    )
     return _redirect_back(data, "/admin-panel/master/update-barang")
 
 

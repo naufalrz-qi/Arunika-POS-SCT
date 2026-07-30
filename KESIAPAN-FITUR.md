@@ -73,7 +73,7 @@ Kolom **Sumber baca**: `replica` = bisa membaca replica laporan bila dikonfigura
 | Master Produk | `products` | khusus | primary | — (hanya baca) | Siap |
 | Master Pelanggan | `customers` | khusus | primary | — (hanya baca) | Siap |
 | Master Supplier | `suppliers` | khusus | primary | — (hanya baca) | Siap |
-| Update Barang | `update_barang` | khusus | primary | **Ya** (harga, status) | Siap |
+| Update Barang | `update_barang` | khusus | primary | **Ya** (harga, status, nama & keterangan—khusus gudang) | Siap |
 | Riwayat Update Barang | `riwayat_update_barang` | khusus | SQLite | — | Siap |
 | Pergerakan Harga | `pergerakan_harga` | khusus | primary | — | Siap |
 | Sinkronisasi Harga | `sync_harga` | khusus | 2 server | **Ya** (lintas server) | Siap dengan catatan |

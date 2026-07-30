@@ -20,6 +20,7 @@ const props = defineProps({
   active: { type: Object, default: null },
   profile_type: { type: String, default: null },
   has_modal: { type: Boolean, default: false },
+  boleh_edit_identitas: { type: Boolean, default: false },
   items: { type: Object, default: null },
   saran: { type: Object, default: null },
   pecahan: { type: Object, default: null },
@@ -508,7 +509,12 @@ async function openRiwayat(item) {
       </div>
     </Deferred>
 
-    <BarangEditModal :item="editing" :is-retail="isRetail" @close="editing = null" />
+    <BarangEditModal
+      :item="editing"
+      :is-retail="isRetail"
+      :boleh-edit-identitas="props.boleh_edit_identitas"
+      @close="editing = null"
+    />
 
     <Modal :show="!!riwayat" :title="riwayat ? `Riwayat — ${riwayat.kd_barang} ${riwayat.nama}` : ''" size="md" @close="riwayat = null">
       <div v-if="riwayatLoading" class="flex items-center justify-center gap-3 py-10">

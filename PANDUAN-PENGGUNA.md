@@ -66,9 +66,40 @@ kalau login dengan akun tersebut, sistem akan menolak dan memberi tahu alasannya
   yang tidak bulat, dan tidak ada satu pun satuan yang tersimpan bila salah satunya ditolak.
 - **Harga Massal** — ubah harga banyak barang sekaligus. Barang yang ditolak tidak
   menggagalkan barang lain.
-- **Saran Harga** — usulan sistem berdasarkan harga pokok dan margin. Usulan saja.
+- **Saran Harga** — usulan sistem. Usulan saja, tidak otomatis dipakai. Sumbernya berbeda per
+  jenis server; lihat tabel di bawah.
 - **Pergerakan Harga** — riwayat perubahan harga sebuah barang.
 - **Riwayat Update Barang** — siapa mengubah apa, kapan, dari berapa ke berapa.
+
+### Nama & keterangan barang: hanya dari server gudang
+
+Harga boleh berbeda per server — itu wajar, tiap cabang punya harganya sendiri. **Nama** barang
+tidak: ia muncul di nota, di laporan lama, dan di layar kasir setiap cabang. Kalau tiap server
+boleh menamai ulang sendiri, satu kode barang punya beberapa nama dan laporan lintas-cabang
+berhenti bisa dibaca.
+
+Karena itu kolom **Nama Barang** dan **Keterangan** di *Edit Barang*:
+
+- **terkunci** kalau koneksi aktif bukan server gudang (dengan keterangan alasannya di layar);
+- **bisa diubah** kalau koneksi aktif adalah server gudang.
+
+Saat menyimpan, muncul **ringkasan "sebelum → sesudah"** untuk diperiksa dulu. Setelah tersimpan,
+perubahannya tercatat di **Riwayat Update Barang** dan di tombol Riwayat pada kartu barang —
+lengkap dengan siapa yang mengubahnya.
+
+Cabang lain menerima nama baru itu lewat **Sinkronisasi Master Data**, bukan otomatis.
+
+### Saran harga: sumbernya beda per jenis server
+
+| Jenis server | Saran harga diambil dari |
+|---|---|
+| Toko retail | Nominal yang ditulis di kolom keterangan barang (mis. "ECER 3.450.000") |
+| Grosir / lainnya | Harga jual barang itu di **server gudang** acuannya |
+| Server gudang | Tidak ada — gudang yang jadi acuan, tidak ada harga lain untuk diikuti |
+
+Kalau sebuah server belum punya acuan gudang, tombol Saran Harga tidak muncul dan aplikasi
+memberi tahu bahwa **Sumber Modal** pada koneksi itu perlu diisi (menu Koneksi Server) sampai
+rantainya mencapai server bertipe gudang.
 
 ### ⚠ Sinkronisasi antar-server
 

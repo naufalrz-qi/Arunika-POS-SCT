@@ -639,6 +639,86 @@ def update_status(profile, kd_barang: str, table: str, status, kd_divisi: str | 
     return {"n": n, "lama": lama}
 
 
+# --- Identitas barang: nama & keterangan (WRITE, khusus gudang) ------------
+
+# Panjang kolom m_barang di server legacy — keduanya varchar(50), diverifikasi
+# lewat INFORMATION_SCHEMA. Dipotong DI SINI, bukan diserahkan ke MS SQL: driver
+# akan menolak string yang lebih panjang dengan galat yang tak berarti apa pun
+# bagi staf toko, dan memotongnya diam-diam di SQL akan menyembunyikan bahwa
+# namanya tidak tersimpan utuh.
+MAX_NAMA = 50
+MAX_KETERANGAN = 50
+
+
+class BukanServerGudang(Exception):
+    """Identitas barang hanya boleh diubah dari server bertipe gudang."""
+
+
+def _is_gudang(profile) -> bool:
+    return profile.db_type == "gudang"
+
+
+def update_nama_keterangan(profile, kd_barang: str, nama: str, keterangan: str) -> list[dict]:
+    """Ubah `nama` dan/atau `keterangan` satu barang. HANYA di server gudang.
+
+    Nama dan keterangan adalah identitas barang yang dipakai bersama seluruh
+    cabang: ia muncul di nota, di laporan, dan di layar kasir tiap server. Kalau
+    setiap server boleh menamai ulang barangnya sendiri, satu kode barang punya
+    beberapa nama dan laporan lintas-server berhenti bisa dibaca. Gudang yang
+    memegang katalog, jadi gudang yang boleh mengubahnya — cabang lain menerima
+    lewat Sinkronisasi Master Data.
+
+    Penjagaan ini WAJIB di sini, bukan hanya me-disable input di Vue: field yang
+    disabled tetap bisa dikirim dengan permintaan buatan sendiri, dan yang menahan
+    penulisannya cuma pemeriksaan ini.
+
+    Return daftar perubahan NYATA: [{field, lama, baru}, ...] — kosong berarti
+    tak ada yang berubah. Caller memakainya untuk riwayat dan ringkasan.
+
+    Raise BukanServerGudang / ValueError (barang tak ada) tanpa menulis apa pun.
+    """
+    if not _is_gudang(profile):
+        raise BukanServerGudang(
+            f"Server '{profile.name}' bertipe {profile.db_type}. Nama dan keterangan "
+            "barang hanya bisa diubah dari server gudang."
+        )
+    kd_barang = _st(kd_barang)
+    if not kd_barang:
+        raise ValueError("Kode barang tidak disebutkan.")
+
+    nama_baru = _st(nama)[:MAX_NAMA]
+    # keterangan NOT NULL di m_barang — string kosong, bukan None.
+    ket_baru = _st(keterangan)[:MAX_KETERANGAN]
+    if not nama_baru:
+        raise ValueError("Nama barang tidak boleh kosong.")
+
+    with mssql.cursor(profile) as cur:
+        cur.execute("SELECT nama, keterangan FROM m_barang WHERE kd_barang = ?", [kd_barang])
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError(f"Barang {kd_barang} tidak ada di server ini.")
+        nama_lama, ket_lama = _st(row[0]), _st(row[1])
+
+        ubah = []
+        if nama_lama != nama_baru:
+            ubah.append({"field": "nama", "lama": nama_lama, "baru": nama_baru})
+        if ket_lama != ket_baru:
+            ubah.append({"field": "keterangan", "lama": ket_lama, "baru": ket_baru})
+        if not ubah:
+            return []
+
+        # Satu UPDATE untuk keduanya: dua statement terpisah bisa menyimpan nama
+        # baru lalu gagal di keterangan, meninggalkan barang setengah terubah.
+        cur.execute(
+            "UPDATE m_barang SET nama = ?, keterangan = ? WHERE kd_barang = ?",
+            [nama_baru, ket_baru, kd_barang],
+        )
+        cur.connection.commit()
+
+    _invalidate_inventory_cache(profile)
+    return ubah
+
+
 # --- Sinkronisasi harga antar-server (WRITE) -------------------------------
 
 def _harga_map(profile) -> dict:

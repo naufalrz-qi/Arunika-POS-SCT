@@ -18,6 +18,8 @@ urlpatterns = [
     path("master/update-barang/harga", views.update_barang_harga, name="update_barang_harga"),
     path("master/update-barang/harga-massal", views.update_barang_harga_massal, name="update_barang_harga_massal"),
     path("master/update-barang/status", views.update_barang_status, name="update_barang_status"),
+    path("master/update-barang/identitas", views.update_barang_identitas,
+         name="update_barang_identitas"),
     path("master/update-barang/riwayat", views.update_barang_riwayat, name="update_barang_riwayat"),
     path("master/update-barang/detail", views.update_barang_detail, name="update_barang_detail"),
     path("master/riwayat-update-barang", views.riwayat_update_barang_index, name="riwayat_update_barang"),
