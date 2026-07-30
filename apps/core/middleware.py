@@ -118,18 +118,18 @@ def admin_network_guard(get_response):
             if not (user and user.is_authenticated and user.is_admin_tier):
                 return ditolak(
                     request,
-                    "Halaman ini butuh hak akses Admin.",
-                    "Akun Anda tidak punya tingkat akses untuk membuka panel admin. "
-                    "Hubungi superadmin bila ini keliru.",
+                    "Halaman ini bukan untuk akun Anda",
+                    "Akun Anda dipakai di aplikasi kasir, bukan di halaman pengaturan "
+                    "ini. Kalau seharusnya bisa, minta pengelola aplikasi membukanya.",
                 )
             if settings.ENFORCE_TAILSCALE:
                 ip = request.META.get("REMOTE_ADDR", "")
                 if not _ip_allowed(ip):
                     return ditolak(
                         request,
-                        "Panel admin hanya bisa dibuka lewat Tailscale.",
-                        "Sambungkan perangkat ke jaringan Tailscale kantor, lalu buka "
-                        "halaman ini lagi.",
+                        "Belum tersambung ke jaringan kantor",
+                        "Halaman ini hanya bisa dibuka dari jaringan kantor. Sambungkan "
+                        "dulu perangkat Anda, lalu buka lagi halaman ini.",
                     )
             if not _menu_allowed(user, request.path):
                 # Menu yang tak diberikan: antar ke halaman yang memang miliknya
@@ -139,14 +139,14 @@ def admin_network_guard(get_response):
                 tujuan = landing_for(user)
                 if request.method in ("GET", "HEAD") and tujuan and tujuan != request.path:
                     request.session["flash_error"] = (
-                        "Menu itu tidak diberikan untuk akun Anda — Anda dialihkan "
-                        "ke halaman yang bisa dibuka."
+                        "Halaman itu belum dibuka untuk akun Anda. "
+                        "Anda dibawa ke halaman yang bisa Anda buka."
                     )
                     return redirect(tujuan)
                 return ditolak(
                     request,
-                    "Menu ini tidak diberikan untuk akun Anda.",
-                    "Hubungi superadmin bila Anda memang membutuhkannya.",
+                    "Halaman ini belum dibuka untuk Anda",
+                    "Kalau Anda memang perlu membukanya, minta ke pengelola aplikasi.",
                 )
         return get_response(request)
 

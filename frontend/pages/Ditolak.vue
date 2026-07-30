@@ -16,7 +16,7 @@ import Button from "@/components/ui/Button.vue";
 import Icon from "@/components/nav/Icon.vue";
 
 defineProps({
-  judul: { type: String, default: "Akses ditolak." },
+  judul: { type: String, default: "Halaman ini belum bisa dibuka" },
   saran: { type: String, default: "" },
   // Halaman yang masih boleh dibuka; null bila memang tak ada satu pun.
   tujuan: { type: String, default: null },
@@ -35,10 +35,10 @@ defineProps({
 
       <div class="mt-6 flex flex-col items-center gap-2">
         <Link v-if="tujuan" :href="tujuan" class="w-full">
-          <Button class="w-full">Ke halaman yang bisa dibuka</Button>
+          <Button class="w-full">Buka halaman saya</Button>
         </Link>
         <a href="/logout" class="text-xs text-ink-muted hover:text-ink hover:underline">
-          Keluar dan masuk sebagai akun lain
+          Keluar, lalu masuk dengan akun lain
         </a>
       </div>
     </div>

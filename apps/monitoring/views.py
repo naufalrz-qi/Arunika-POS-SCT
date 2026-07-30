@@ -1256,8 +1256,9 @@ def _deny_non_superadmin(request):
     if request.user.role != Role.SUPERADMIN:
         return ditolak(
             request,
-            "Halaman ini khusus Superadmin.",
-            "Pengaturan menu dan izin hanya bisa diubah oleh superadmin.",
+            "Halaman ini hanya untuk pengelola utama",
+            "Pengaturan siapa boleh membuka apa hanya bisa diubah oleh pengelola "
+            "utama aplikasi.",
         )
     return None
 

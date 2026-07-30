@@ -147,10 +147,10 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
             <div class="mb-2 border-b border-border-default pb-1.5">
               <h3 class="text-xs font-semibold uppercase tracking-wider text-ink-muted">Nilai Uang</h3>
               <p class="mt-1 text-xs text-ink-subtle">
-                Yang tak dicentang tidak dikirim ke peramban sama sekali, termasuk pada Export Excel.
+                Yang tidak dicentang benar-benar disembunyikan, termasuk saat diunduh ke Excel.
                 Berlaku di <strong>Stok Akhir</strong>, <strong>Barang Histori</strong>, dan
-                <strong>Dashboard</strong> — halaman laporan lain masih menampilkan angka uang, jadi
-                cabut menunya juga bila perlu.
+                <strong>Dashboard</strong>. Halaman laporan lain masih menampilkan angka uang —
+                kalau perlu, cabut juga menunya di daftar bawah.
               </p>
             </div>
             <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
