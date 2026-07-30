@@ -411,6 +411,120 @@ def list_saran_harga(profile) -> list[dict]:
     return out
 
 
+def list_saran_harga_gudang(profile, gudang) -> list[dict]:
+    """Saran harga NON-RETAIL: harga_jual barang di server gudang.
+
+    Retail memakai nominal di kolom keterangan ("ECER 3.450.000") — itu harga
+    ecer yang ditulis manual, dan artinya cuma benar untuk toko retail. Untuk
+    grosir, nominal ECER itu harga orang lain. Yang jadi acuan mereka adalah
+    harga di gudang, jadi saran harganya harga gudang itu sendiri.
+
+    Dibandingkan PER SATUAN, bukan cuma satuan dasar seperti jalur retail: tiap
+    satuan punya harga sendiri di kedua server, dan menyamakan hanya satuan dasar
+    akan meninggalkan lusinan/dus menyimpang tanpa terlihat.
+
+    Terukur di pasangan Testing -> testgudang: 54.101 baris, 771 (1,4%) berbeda —
+    jadi daftarnya sebanding dengan daftar saran retail, tak perlu dipenggal.
+
+    Baris yang TIDAK dikembalikan:
+    - barang/satuan yang tak ada di gudang (98 baris di pengukuran itu). Tak ada
+      acuan, dan mengarang 0 sebagai "saran" akan menghapus harga.
+    - harga gudang <= 0. Itu barang tanpa harga jual (kresek/packaging), bukan
+      saran untuk menjual gratis.
+    """
+    def _harga_satuan(p):
+        with mssql.cursor(p) as cur:
+            cur.execute("SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan")
+            out: dict[str, dict] = {}
+            for r in _dictify(cur):
+                out.setdefault(_st(r["kd_barang"]), {})[_st(r["kd_satuan"])] = _f(r["harga_jual"])
+            return out
+
+    # Kunci cache sama dengan yang dipakai list_barang_edit untuk sumber-modal,
+    # dan di-key pada profil GUDANG-nya: beberapa grosir yang berbagi satu gudang
+    # ikut memakai satu hasil baca.
+    harga_gudang = _cached(gudang, "cost_satuan_price", lambda: _harga_satuan(gudang))
+    harga_lokal = _cached(profile, "satuan_harga_lokal", lambda: _harga_satuan(profile))
+
+    with mssql.cursor(profile) as cur:
+        cur.execute("SELECT kd_barang, nama, keterangan FROM m_barang")
+        barang = {_st(r["kd_barang"]): r for r in _dictify(cur)}
+        satuan_names_raw = _cached(
+            profile, "satuan_names",
+            lambda: _key_map(cur, "SELECT kd_satuan, nama FROM m_satuan", "kd_satuan", "nama"),
+        )
+    # Kunci cache itu MENTAH dari SQL (char() berspasi ekor); kunci di sini sudah
+    # lewat _st(). MS SQL mengabaikan spasi ekor saat membandingkan, dict Python
+    # tidak — tanpa normalisasi ini nama satuan diam-diam kosong dan kolom Satuan
+    # jatuh ke kode satuannya. Aturan yang sama dengan _k() di inventory/services.
+    satuan_names = {_st(k): _st(v) for k, v in satuan_names_raw.items()}
+
+    out = []
+    for kd, units in harga_lokal.items():
+        acuan = harga_gudang.get(kd)
+        if not acuan:
+            continue
+        b = barang.get(kd)
+        for ks, harga in units.items():
+            target = acuan.get(ks)
+            if target is None or target <= 0 or target == harga:
+                continue
+            out.append({
+                "kd_barang": kd,
+                "nama": _st(b["nama"]) if b else kd,
+                "keterangan": _st(b.get("keterangan", "")) if b else "",
+                "kd_satuan": ks,
+                "satuan": satuan_names.get(ks, "") or ks,
+                "harga_lama": harga,
+                "harga_baru": target,
+                "selisih": target - harga,
+            })
+    # Selisih terbesar dulu: yang paling jauh menyimpang dari gudang itu yang
+    # paling mendesak diperiksa, dan paling besar dampaknya kalau salah.
+    out.sort(key=lambda r: (-abs(r["selisih"]), r["nama"]))
+    return out
+
+
+def saran_harga(profile) -> dict:
+    """Saran harga untuk `profile` — satu pintu, dua mekanisme.
+
+    {rows, sumber, gudang, pesan}. `sumber` menentukan kalimat yang ditampilkan
+    layar, dan sengaja dibedakan dari "rows kosong": tak ada saran karena semua
+    harga sudah sama, dan tak ada saran karena server acuannya belum diatur,
+    adalah dua keadaan berbeda yang butuh dua tindakan berbeda.
+
+    - retail        -> nominal di kolom keterangan (mekanisme lama, tak berubah)
+    - non-retail    -> harga_jual di server gudang, ditemukan lewat rantai
+                       cost_source (lihat mssql.get_gudang_source)
+    - gudang sendiri-> tak ada saran; ia YANG jadi acuan
+    - rantai buntu  -> tak ada saran + pesan yang menyuruh mengisi Sumber Modal,
+                       bukan daftar kosong tanpa penjelasan
+
+    Dipakai halaman Update Barang DAN Pergerakan Harga. Keduanya lewat fungsi ini
+    supaya tak ada dua definisi "saran harga" yang bisa menyimpang.
+    """
+    if _is_retail(profile):
+        return {"rows": list_saran_harga(profile), "sumber": "keterangan",
+                "gudang": None, "pesan": None}
+
+    gudang = mssql.get_gudang_source(profile)
+    if gudang is None:
+        return {
+            "rows": [], "sumber": "tanpa_acuan", "gudang": None,
+            "pesan": ("Server ini belum punya acuan gudang. Isi Sumber Modal pada "
+                      "koneksi ini di menu Koneksi Server, sampai rantainya "
+                      "mencapai server bertipe gudang."),
+        }
+    if gudang.pk == profile.pk:
+        return {
+            "rows": [], "sumber": "gudang_sendiri", "gudang": profile.name,
+            "pesan": ("Server ini bertipe gudang, jadi ia yang menjadi acuan harga "
+                      "bagi server lain — tidak ada harga lain untuk diikuti."),
+        }
+    return {"rows": list_saran_harga_gudang(profile, gudang), "sumber": "gudang",
+            "gudang": gudang.name, "pesan": None}
+
+
 def list_harga_pecahan(profile) -> list[dict]:
     """Audit: baris m_barang_satuan yang harga_jual-nya mengandung pecahan rupiah.
 

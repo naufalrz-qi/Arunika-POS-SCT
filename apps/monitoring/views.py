@@ -508,13 +508,17 @@ def update_barang_index(request):
 
     # Saran harga: katalog PENUH (bukan hasil search/TOP di atas) — tombol
     # "Saran Harga" harus melihat semua barang, bukan cuma yang sedang tampil.
+    # `master.saran_harga` yang memilih mekanismenya: retail dari kolom
+    # keterangan, non-retail dari harga server gudang. Satu pintu, supaya
+    # halaman ini dan Pergerakan Harga tak punya dua definisi yang bisa berbeda.
     def load_saran():
         if not profile:
-            return {"rows": [], "conn_error": CONN_ERROR}
+            return {"rows": [], "conn_error": CONN_ERROR, "sumber": None, "pesan": None}
         try:
-            return {"rows": master.list_saran_harga(profile), "conn_error": None}
+            return {**master.saran_harga(profile), "conn_error": None}
         except pyodbc.Error as exc:
-            return {"rows": [], "conn_error": mssql.friendly_error(exc, "Gagal membaca saran harga")}
+            return {"rows": [], "sumber": None, "gudang": None, "pesan": None,
+                    "conn_error": mssql.friendly_error(exc, "Gagal membaca saran harga")}
 
     # Audit harga berpecahan — grup sendiri supaya tidak menahan `items`.
     def load_pecahan():
@@ -807,15 +811,22 @@ def pergerakan_harga_index(request):
             for c in qs[:500]
         ]
 
-        saran, saran_error = [], None
+        # Mekanismenya ikut TIPE server yang dipilih di filter, bukan tipe koneksi
+        # aktif: memilih server grosir lalu melihat saran ala retail (nominal
+        # keterangan, yang di grosir adalah harga ecer orang lain) memberi angka
+        # yang salah untuk server itu.
+        saran, saran_info, saran_error = [], {}, None
         if saran_profile:
             try:
-                saran = master.list_saran_harga(saran_profile)
+                hasil = master.saran_harga(saran_profile)
+                saran = hasil["rows"]
+                saran_info = {k: hasil[k] for k in ("sumber", "gudang", "pesan")}
             except pyodbc.Error as exc:
                 saran_error = mssql.friendly_error(exc, "Gagal membaca saran harga")
         else:
             saran_error = CONN_ERROR
-        return {"rows": rows, "saran": saran, "saran_error": saran_error}
+        return {"rows": rows, "saran": saran, "saran_info": saran_info,
+                "saran_error": saran_error}
 
     last = HargaSnapshotRun.objects.order_by("-ran_at").first()
     last_run = (
