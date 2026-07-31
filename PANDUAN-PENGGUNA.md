@@ -66,9 +66,61 @@ kalau login dengan akun tersebut, sistem akan menolak dan memberi tahu alasannya
   yang tidak bulat, dan tidak ada satu pun satuan yang tersimpan bila salah satunya ditolak.
 - **Harga Massal** — ubah harga banyak barang sekaligus. Barang yang ditolak tidak
   menggagalkan barang lain.
-- **Saran Harga** — usulan sistem berdasarkan harga pokok dan margin. Usulan saja.
+- **Saran Harga** — usulan sistem. Usulan saja, tidak otomatis dipakai. Sumbernya berbeda per
+  jenis server; lihat tabel di bawah.
 - **Pergerakan Harga** — riwayat perubahan harga sebuah barang.
 - **Riwayat Update Barang** — siapa mengubah apa, kapan, dari berapa ke berapa.
+
+### Nama & keterangan barang: hanya dari server gudang
+
+Harga boleh berbeda per server — itu wajar, tiap cabang punya harganya sendiri. **Nama** barang
+tidak: ia muncul di nota, di laporan lama, dan di layar kasir setiap cabang. Kalau tiap server
+boleh menamai ulang sendiri, satu kode barang punya beberapa nama dan laporan lintas-cabang
+berhenti bisa dibaca.
+
+Karena itu kolom **Nama Barang** dan **Keterangan** di *Edit Barang*:
+
+- **terkunci** kalau koneksi aktif bukan server gudang (dengan keterangan alasannya di layar);
+- **bisa diubah** kalau koneksi aktif adalah server gudang.
+
+Saat menyimpan, muncul **ringkasan "sebelum → sesudah"** untuk diperiksa dulu. Setelah tersimpan,
+perubahannya tercatat di **Riwayat Update Barang** dan di tombol Riwayat pada kartu barang —
+lengkap dengan siapa yang mengubahnya.
+
+Cabang lain menerima nama baru itu lewat **Sinkronisasi Master Data**, bukan otomatis.
+
+### Saran harga: sumbernya beda per jenis server
+
+| Jenis server | Saran harga diambil dari |
+|---|---|
+| Toko retail | Nominal yang ditulis di kolom keterangan barang (mis. "ECER 3.450.000") |
+| Grosir / lainnya | Harga jual barang itu di **server gudang** acuannya |
+| Server gudang | Tidak ada — gudang yang jadi acuan, tidak ada harga lain untuk diikuti |
+
+**Fitur ini opsional dan tidak pernah menghalangi apa pun.** Mengisi **Sumber Modal** pada
+koneksi tidak wajib, dan kalau server gudangnya sedang mati itu juga bukan masalah.
+
+Yang terjadi kalau server sumber modal (gudang) mati:
+
+| Tetap berjalan | Hilang sementara |
+|---|---|
+| Mencari barang di Update Barang | Kolom **Modal** dan **Margin** pada kartu barang |
+| Mengubah harga jual | Daftar **Saran Harga** (jadi kosong) |
+| Mengubah status ketersediaan | — |
+| Semua menu lain | — |
+
+Aplikasi memberi tahu lewat pemberitahuan biru di atas daftar barang. Khusus toko retail:
+harga tetap tersimpan, tetapi **margin tidak dihitung ulang** — nilai margin lama dibiarkan apa
+adanya, dan itu disebutkan saat menyimpan. Setelah gudang hidup lagi, simpan ulang harga barang
+tersebut kalau marginnya perlu diperbarui.
+
+Buka tombol **Saran Harga** untuk melihat alasannya kalau daftarnya kosong:
+
+| Yang tertulis | Artinya |
+|---|---|
+| Belum punya acuan gudang | Sumber Modal pada koneksi ini belum diisi. Isi kalau ingin memakai fitur ini; kalau tidak, abaikan saja. |
+| Server gudang tidak bisa dihubungi | Gudangnya sedang mati atau tidak terjangkau jaringan. Coba lagi nanti. |
+| Server ini bertipe gudang | Gudang yang menjadi acuan, jadi tidak ada harga lain untuk diikuti. Tombolnya tidak muncul. |
 
 ### ⚠ Sinkronisasi antar-server
 
@@ -93,6 +145,7 @@ kecuali tanggal daftar barang dan poin pelanggan, yang sengaja dikecualikan.
 
 - Semua laporan punya filter tanggal. **Rentang maksimal 92 hari** — kalau lebih, sistem
   memangkasnya dan menampilkan **banner biru**. Itu pemberitahuan, bukan kegagalan.
+  Pengecualiannya **Klasifikasi Pelanggan**, yang memang butuh riwayat panjang (lihat §4b).
 - Tombol **Export** mengunduh berkas Excel berisi data sesuai filter yang sedang aktif.
 - Laporan besar bisa memakai salinan data khusus, sehingga angkanya bisa telat 1–2 menit
   dari transaksi yang baru saja terjadi.
@@ -100,7 +153,43 @@ kecuali tanggal daftar barang dan poin pelanggan, yang sengaja dikecualikan.
 Laporan yang tersedia: Penjualan (Detail, per Nota, per Customer, per User, per Periode),
 Laba per Barang, Retur Penjualan, Piutang Pelanggan, Pembelian (dan per Supplier, per
 Periode), Retur Pembelian, Biaya Operasional, Biaya per Kategori, FMI Penjualan, FMI Stok,
-Promo & Diskon, Voucher.
+Klasifikasi Pelanggan, Promo & Diskon, Voucher.
+
+---
+
+## 4b. Menghubungi kembali pelanggan (Klasifikasi Pelanggan)
+
+Menu **Analitik → Klasifikasi Pelanggan** menyusun daftar siapa yang perlu dihubungi, lengkap
+dengan nomor HP-nya. Tiap pelanggan diberi satu **segmen**:
+
+| Segmen | Artinya | Biasanya untuk |
+|---|---|---|
+| **Baru** | Belanja pertamanya belum lama (bawaan: 90 hari terakhir) | Disambut, ditawari jadi langganan |
+| **Aktif** | Masih datang belakangan ini | Dibiarkan, sudah baik |
+| **Setia** | Masih datang DAN sudah banyak notanya (bawaan: minimal 5) | Diberi perhatian khusus |
+| **Mulai Jarang** | Sudah agak lama tak datang (bawaan: lebih dari 90 hari) | Diingatkan sebelum benar-benar pergi |
+| **Hilang** | Sudah lama sekali tak datang (bawaan: lebih dari 180 hari) | Ditawari promo untuk kembali |
+
+Halaman terbuka **terurut dari yang paling perlu dihubungi** (Hilang di atas), dengan jendela
+riwayat **2 tahun** — bukan 92 hari seperti laporan lain, karena "belum belanja setahun" butuh
+riwayat panjang untuk bisa terlihat.
+
+**Yang bisa dilakukan:**
+
+- **Klik nama pelanggan** → muncul kontak, **barang yang biasa ia beli**, dan nota terakhirnya.
+  Barang favorit ini bahan pembuka percakapan yang paling berguna.
+- **Ubah batasan segmen** di *Filter lanjutan → Aturan Segmen*. Toko grosir dan toko retail
+  punya ritme belanja berbeda, jadi angka bawaan tidak harus dipakai. Angka yang sedang berlaku
+  selalu terlihat di kotaknya.
+- **Saring satu segmen saja** di *Filter lanjutan → Segmen*, misalnya hanya "Hilang".
+- **Export Excel** menghasilkan **dua lembar**: `Klasifikasi` (daftar pelanggan + kontak) dan
+  `Barang Favorit` (barang teratas tiap pelanggan). Jadi daftar telepon bisa dikerjakan tanpa
+  membuka aplikasi lagi per orang.
+
+**Kenapa UMUM, ECERAN, dan OBRAL tidak muncul di sini:** ketiganya bukan nama orang, hanya
+penampung transaksi untuk pembeli yang identitasnya tidak dicatat — tidak ada siapa pun yang bisa
+dihubungi. Akun marketplace (Shopee/Tokopedia/TikTok) juga dikecualikan karena itu kanal jualan.
+Angka penjualan mereka tetap lengkap di laporan **Penjualan per Customer**.
 
 ---
 
@@ -142,7 +231,7 @@ Customer · Penjualan per User · Penjualan per Periode · Retur Penjualan · Pi
 **Stok:** Stok Akhir · Barang Histori · Stok per Divisi · Mutasi Stok · Stok Awal Barang ·
 Transaksi Barang · Opname Stok
 
-**Analitik:** FMI Penjualan · FMI Stok
+**Analitik:** FMI Penjualan · FMI Stok · Klasifikasi Pelanggan
 
 **Promo:** Promo & Diskon · Voucher
 

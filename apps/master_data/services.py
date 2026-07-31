@@ -9,6 +9,8 @@ import math
 import re
 from decimal import Decimal
 
+import pyodbc
+
 from core import mssql
 from core.cache import _cached, invalidate_master_cache
 from apps.core.reporting import dictify as _dictify
@@ -222,11 +224,16 @@ def list_customers(profile, search: str = "") -> list[dict]:
 _STATUS_TABLES = {"m_barang", "m_barang_divisi", "m_barang_satuan"}
 
 
-def list_barang_edit(profile, search: str = "") -> list[dict]:
+def list_barang_edit(profile, search: str = "", status: dict | None = None) -> list[dict]:
     """Barang + satuan (harga_jual/margin/status) + status divisi, untuk edit.
 
     Retail: sisipkan `modal` (harga_jual server sumber-modal) per satuan dan margin
     terhitung terkini. Grosir/gudang: margin apa adanya dari DB.
+
+    `status`: dict opsional yang DIISI fungsi ini bila ada yang perlu diberitahukan
+    ke layar — sejauh ini hanya `modal_error`. Dipakai out-param, bukan nilai
+    kembalian, supaya bentuk kembaliannya (list baris) tak berubah untuk pemanggil
+    lain yang tak peduli.
     """
     where, params = ["1=1"], []
     if search:
@@ -278,17 +285,26 @@ def list_barang_edit(profile, search: str = "") -> list[dict]:
     has_modal = bool(cost)
     modal_all: dict[str, dict] = {}
     if cost:
-        def _build_cost_satuan_price():
-            with mssql.cursor(cost) as cost_cur:
-                cost_cur.execute("SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan")
-                by_barang: dict[str, dict] = {}
-                for r in _dictify(cost_cur):
-                    by_barang.setdefault(_st(r["kd_barang"]), {})[_st(r["kd_satuan"])] = _f(r["harga_jual"])
-                return by_barang
-
         # Keyed by the cost-source profile itself: multiple profiles sharing one
         # grosir/gudang source reuse a single cached read.
-        modal_all = _cached(cost, "cost_satuan_price", _build_cost_satuan_price)
+        try:
+            modal_all = _cached(cost, "cost_satuan_price", lambda: _harga_satuan(cost))
+        except pyodbc.Error:
+            # Sumber modal cuma REFERENSI, bukan sumber katalog. Barang server
+            # AKTIF sudah terbaca di atas; menggagalkan seluruh daftar karena
+            # server lain mati berarti barang tak bisa dicari sama sekali —
+            # padahal yang hilang hanya dua kolom (Modal & Margin).
+            #
+            # Ini jalur yang paling mungkin kejadian di lapangan: gudang pusat
+            # mati atau jaringan antar-cabang putus, sementara kasir di cabang
+            # tetap harus bisa mencari barang dan mengubah harga.
+            has_modal = False
+            if status is not None:
+                status["modal_error"] = (
+                    f"Server sumber modal '{cost.name}' sedang tidak bisa dihubungi, "
+                    "jadi kolom Modal dan Margin disembunyikan sementara. Pencarian "
+                    "barang dan perubahan harga tetap berjalan seperti biasa."
+                )
 
     out = []
     for b in barang:
@@ -411,6 +427,156 @@ def list_saran_harga(profile) -> list[dict]:
     return out
 
 
+def _harga_satuan(p) -> dict:
+    """kd_barang -> {kd_satuan: harga_jual} untuk satu server."""
+    with mssql.cursor(p) as cur:
+        cur.execute("SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan")
+        out: dict[str, dict] = {}
+        for r in _dictify(cur):
+            out.setdefault(_st(r["kd_barang"]), {})[_st(r["kd_satuan"])] = _f(r["harga_jual"])
+        return out
+
+
+def harga_acuan_gudang(gudang) -> dict:
+    """Harga per satuan di server gudang, untuk dipakai sebagai acuan saran.
+
+    Dipisah dari list_saran_harga_gudang supaya kegagalannya bisa DIBEDAKAN:
+    gudang yang tak bisa dihubungi adalah keadaan yang wajar (lihat saran_harga),
+    sementara gagal membaca server AKTIF adalah masalah nyata yang harus muncul.
+    Kalau keduanya di dalam satu fungsi, satu `except` tak bisa membedakannya.
+
+    Kunci cache sama dengan yang dipakai list_barang_edit untuk sumber-modal, dan
+    di-key pada profil GUDANG-nya: beberapa grosir yang berbagi satu gudang ikut
+    memakai satu hasil baca.
+    """
+    return _cached(gudang, "cost_satuan_price", lambda: _harga_satuan(gudang))
+
+
+def list_saran_harga_gudang(profile, gudang, harga_gudang) -> list[dict]:
+    """Saran harga NON-RETAIL: harga_jual barang di server gudang.
+
+    Retail memakai nominal di kolom keterangan ("ECER 3.450.000") — itu harga
+    ecer yang ditulis manual, dan artinya cuma benar untuk toko retail. Untuk
+    grosir, nominal ECER itu harga orang lain. Yang jadi acuan mereka adalah
+    harga di gudang, jadi saran harganya harga gudang itu sendiri.
+
+    Dibandingkan PER SATUAN, bukan cuma satuan dasar seperti jalur retail: tiap
+    satuan punya harga sendiri di kedua server, dan menyamakan hanya satuan dasar
+    akan meninggalkan lusinan/dus menyimpang tanpa terlihat.
+
+    Terukur di pasangan Testing -> testgudang: 54.101 baris, 771 (1,4%) berbeda —
+    jadi daftarnya sebanding dengan daftar saran retail, tak perlu dipenggal.
+
+    Baris yang TIDAK dikembalikan:
+    - barang/satuan yang tak ada di gudang (98 baris di pengukuran itu). Tak ada
+      acuan, dan mengarang 0 sebagai "saran" akan menghapus harga.
+    - harga gudang <= 0. Itu barang tanpa harga jual (kresek/packaging), bukan
+      saran untuk menjual gratis.
+    """
+    harga_lokal = _cached(profile, "satuan_harga_lokal", lambda: _harga_satuan(profile))
+
+    with mssql.cursor(profile) as cur:
+        cur.execute("SELECT kd_barang, nama, keterangan FROM m_barang")
+        barang = {_st(r["kd_barang"]): r for r in _dictify(cur)}
+        satuan_names_raw = _cached(
+            profile, "satuan_names",
+            lambda: _key_map(cur, "SELECT kd_satuan, nama FROM m_satuan", "kd_satuan", "nama"),
+        )
+    # Kunci cache itu MENTAH dari SQL (char() berspasi ekor); kunci di sini sudah
+    # lewat _st(). MS SQL mengabaikan spasi ekor saat membandingkan, dict Python
+    # tidak — tanpa normalisasi ini nama satuan diam-diam kosong dan kolom Satuan
+    # jatuh ke kode satuannya. Aturan yang sama dengan _k() di inventory/services.
+    satuan_names = {_st(k): _st(v) for k, v in satuan_names_raw.items()}
+
+    out = []
+    for kd, units in harga_lokal.items():
+        acuan = harga_gudang.get(kd)
+        if not acuan:
+            continue
+        b = barang.get(kd)
+        for ks, harga in units.items():
+            target = acuan.get(ks)
+            if target is None or target <= 0 or target == harga:
+                continue
+            out.append({
+                "kd_barang": kd,
+                "nama": _st(b["nama"]) if b else kd,
+                "keterangan": _st(b.get("keterangan", "")) if b else "",
+                "kd_satuan": ks,
+                "satuan": satuan_names.get(ks, "") or ks,
+                "harga_lama": harga,
+                "harga_baru": target,
+                "selisih": target - harga,
+            })
+    # Selisih terbesar dulu: yang paling jauh menyimpang dari gudang itu yang
+    # paling mendesak diperiksa, dan paling besar dampaknya kalau salah.
+    out.sort(key=lambda r: (-abs(r["selisih"]), r["nama"]))
+    return out
+
+
+def saran_harga(profile) -> dict:
+    """Saran harga untuk `profile` — satu pintu, dua mekanisme.
+
+    {rows, sumber, gudang, pesan}. `sumber` menentukan kalimat yang ditampilkan
+    layar, dan sengaja dibedakan dari "rows kosong": tak ada saran karena semua
+    harga sudah sama, dan tak ada saran karena server acuannya belum diatur,
+    adalah dua keadaan berbeda yang butuh dua tindakan berbeda.
+
+    - retail        -> nominal di kolom keterangan (mekanisme lama, tak berubah)
+    - non-retail    -> harga_jual di server gudang, ditemukan lewat rantai
+                       cost_source (lihat mssql.get_gudang_source)
+    - gudang sendiri-> tak ada saran; ia YANG jadi acuan
+    - rantai buntu  -> tak ada saran; Sumber Modal memang OPSIONAL
+    - gudang mati   -> tak ada saran; bukan kegagalan
+
+    SELURUH fitur ini opsional dan tak pernah menghalangi apa pun. Sumber Modal
+    tidak wajib diisi, dan gudang yang sedang mati tidak boleh terlihat seperti
+    error: satu-satunya akibatnya adalah tak ada barang yang disarankan. Halaman
+    Update Barang tetap bisa mengubah harga dan status seperti biasa.
+
+    Karena itu pyodbc.Error dari pembacaan GUDANG ditangkap di sini, dan hanya
+    dari pembacaan gudang — kegagalan membaca server AKTIF tetap dilempar, sebab
+    itu masalah nyata yang harus terlihat. (ProfileAuthError turunan pyodbc.Error,
+    jadi kunci enkripsi yang hilang ikut tertangkap di jalur yang sama.)
+
+    Dipakai halaman Update Barang DAN Pergerakan Harga. Keduanya lewat fungsi ini
+    supaya tak ada dua definisi "saran harga" yang bisa menyimpang.
+    """
+    if _is_retail(profile):
+        return {"rows": list_saran_harga(profile), "sumber": "keterangan",
+                "gudang": None, "pesan": None}
+
+    gudang = mssql.get_gudang_source(profile)
+    if gudang is None:
+        return {
+            "rows": [], "sumber": "tanpa_acuan", "gudang": None,
+            "pesan": ("Server ini belum punya acuan gudang, jadi tidak ada saran "
+                      "harga. Itu tidak apa-apa — saran harga sifatnya opsional. "
+                      "Kalau ingin memakainya, isi Sumber Modal pada koneksi ini "
+                      "di menu Koneksi Server sampai rantainya mencapai server "
+                      "bertipe gudang."),
+        }
+    if gudang.pk == profile.pk:
+        return {
+            "rows": [], "sumber": "gudang_sendiri", "gudang": profile.name,
+            "pesan": ("Server ini bertipe gudang, jadi ia yang menjadi acuan harga "
+                      "bagi server lain — tidak ada harga lain untuk diikuti."),
+        }
+
+    try:
+        harga_gudang = harga_acuan_gudang(gudang)
+    except pyodbc.Error:
+        return {
+            "rows": [], "sumber": "gudang_offline", "gudang": gudang.name,
+            "pesan": (f"Server gudang '{gudang.name}' sedang tidak bisa dihubungi, "
+                      "jadi tidak ada saran harga untuk sekarang. Ini tidak "
+                      "mengganggu apa pun di halaman ini — harga dan status tetap "
+                      "bisa diubah seperti biasa. Coba lagi nanti."),
+        }
+    return {"rows": list_saran_harga_gudang(profile, gudang, harga_gudang),
+            "sumber": "gudang", "gudang": gudang.name, "pesan": None}
+
+
 def list_harga_pecahan(profile) -> list[dict]:
     """Audit: baris m_barang_satuan yang harga_jual-nya mengandung pecahan rupiah.
 
@@ -444,7 +610,7 @@ def list_harga_pecahan(profile) -> list[dict]:
     return out
 
 
-def update_harga(profile, kd_barang: str, prices: dict) -> list[dict]:
+def update_harga(profile, kd_barang: str, prices: dict, status: dict | None = None) -> list[dict]:
     """Update harga_jual (dan margin) per satuan. `prices`: {kd_satuan: harga_jual}.
 
     Retail: margin = markup atas modal (harga_jual server sumber-modal). Non-retail:
@@ -459,12 +625,33 @@ def update_harga(profile, kd_barang: str, prices: dict) -> list[dict]:
     prices = _cek_harga_bulat(prices)
     modal: dict = {}
     is_retail = _is_retail(profile)
+    # Retail dgn sumber-modal yang tak terbaca: harga TETAP disimpan, margin TIDAK
+    # disentuh. Ketiga pilihan lain lebih buruk —
+    #   menggagalkan simpan  : server referensi yang mati memblokir pekerjaan utama
+    #                          kasir, padahal harga itu miliknya sendiri;
+    #   menulis margin 0     : menghapus margin tersimpan (persis kerusakan yang
+    #                          dihindari cabang non-retail di bawah);
+    #   diam saja            : margin jadi basi tanpa ada yang tahu.
+    # Karena itu ia disimpan apa adanya DAN dilaporkan lewat `status`, supaya
+    # caller bisa memberi tahu bahwa margin belum dihitung ulang.
+    tulis_margin = is_retail
     if is_retail:
         cost = mssql.get_cost_source(profile)
         if cost:
-            with mssql.cursor(cost) as cur:
-                cur.execute("SELECT kd_satuan, harga_jual FROM m_barang_satuan WHERE kd_barang = ?", [kd_barang])
-                modal = {_st(r["kd_satuan"]): _f(r["harga_jual"]) for r in _dictify(cur)}
+            try:
+                with mssql.cursor(cost) as cur:
+                    cur.execute(
+                        "SELECT kd_satuan, harga_jual FROM m_barang_satuan WHERE kd_barang = ?",
+                        [kd_barang])
+                    modal = {_st(r["kd_satuan"]): _f(r["harga_jual"]) for r in _dictify(cur)}
+            except pyodbc.Error:
+                tulis_margin = False
+                if status is not None:
+                    status["modal_error"] = (
+                        f"Server sumber modal '{cost.name}' tidak bisa dihubungi. "
+                        "Harga tersimpan, tetapi margin tidak dihitung ulang — "
+                        "nilai margin lama dibiarkan apa adanya."
+                    )
 
     changes: list[dict] = []
     with mssql.cursor(profile, autocommit=False) as cur:
@@ -475,7 +662,7 @@ def update_harga(profile, kd_barang: str, prices: dict) -> list[dict]:
             ks = _st(kd_satuan)
             harga = _f(harga)
             lama = harga_lama.get(ks, 0.0)
-            if is_retail:
+            if tulis_margin:
                 cur.execute(
                     "UPDATE m_barang_satuan SET harga_jual = ?, margin = ? WHERE kd_barang = ? AND kd_satuan = ?",
                     [harga, _margin(harga, modal.get(ks, 0.0)), kd_barang, kd_satuan],
@@ -523,6 +710,86 @@ def update_status(profile, kd_barang: str, table: str, status, kd_divisi: str | 
         cur.connection.commit()
     _invalidate_inventory_cache(profile)
     return {"n": n, "lama": lama}
+
+
+# --- Identitas barang: nama & keterangan (WRITE, khusus gudang) ------------
+
+# Panjang kolom m_barang di server legacy — keduanya varchar(50), diverifikasi
+# lewat INFORMATION_SCHEMA. Dipotong DI SINI, bukan diserahkan ke MS SQL: driver
+# akan menolak string yang lebih panjang dengan galat yang tak berarti apa pun
+# bagi staf toko, dan memotongnya diam-diam di SQL akan menyembunyikan bahwa
+# namanya tidak tersimpan utuh.
+MAX_NAMA = 50
+MAX_KETERANGAN = 50
+
+
+class BukanServerGudang(Exception):
+    """Identitas barang hanya boleh diubah dari server bertipe gudang."""
+
+
+def _is_gudang(profile) -> bool:
+    return profile.db_type == "gudang"
+
+
+def update_nama_keterangan(profile, kd_barang: str, nama: str, keterangan: str) -> list[dict]:
+    """Ubah `nama` dan/atau `keterangan` satu barang. HANYA di server gudang.
+
+    Nama dan keterangan adalah identitas barang yang dipakai bersama seluruh
+    cabang: ia muncul di nota, di laporan, dan di layar kasir tiap server. Kalau
+    setiap server boleh menamai ulang barangnya sendiri, satu kode barang punya
+    beberapa nama dan laporan lintas-server berhenti bisa dibaca. Gudang yang
+    memegang katalog, jadi gudang yang boleh mengubahnya — cabang lain menerima
+    lewat Sinkronisasi Master Data.
+
+    Penjagaan ini WAJIB di sini, bukan hanya me-disable input di Vue: field yang
+    disabled tetap bisa dikirim dengan permintaan buatan sendiri, dan yang menahan
+    penulisannya cuma pemeriksaan ini.
+
+    Return daftar perubahan NYATA: [{field, lama, baru}, ...] — kosong berarti
+    tak ada yang berubah. Caller memakainya untuk riwayat dan ringkasan.
+
+    Raise BukanServerGudang / ValueError (barang tak ada) tanpa menulis apa pun.
+    """
+    if not _is_gudang(profile):
+        raise BukanServerGudang(
+            f"Server '{profile.name}' bertipe {profile.db_type}. Nama dan keterangan "
+            "barang hanya bisa diubah dari server gudang."
+        )
+    kd_barang = _st(kd_barang)
+    if not kd_barang:
+        raise ValueError("Kode barang tidak disebutkan.")
+
+    nama_baru = _st(nama)[:MAX_NAMA]
+    # keterangan NOT NULL di m_barang — string kosong, bukan None.
+    ket_baru = _st(keterangan)[:MAX_KETERANGAN]
+    if not nama_baru:
+        raise ValueError("Nama barang tidak boleh kosong.")
+
+    with mssql.cursor(profile) as cur:
+        cur.execute("SELECT nama, keterangan FROM m_barang WHERE kd_barang = ?", [kd_barang])
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError(f"Barang {kd_barang} tidak ada di server ini.")
+        nama_lama, ket_lama = _st(row[0]), _st(row[1])
+
+        ubah = []
+        if nama_lama != nama_baru:
+            ubah.append({"field": "nama", "lama": nama_lama, "baru": nama_baru})
+        if ket_lama != ket_baru:
+            ubah.append({"field": "keterangan", "lama": ket_lama, "baru": ket_baru})
+        if not ubah:
+            return []
+
+        # Satu UPDATE untuk keduanya: dua statement terpisah bisa menyimpan nama
+        # baru lalu gagal di keterangan, meninggalkan barang setengah terubah.
+        cur.execute(
+            "UPDATE m_barang SET nama = ?, keterangan = ? WHERE kd_barang = ?",
+            [nama_baru, ket_baru, kd_barang],
+        )
+        cur.connection.commit()
+
+    _invalidate_inventory_cache(profile)
+    return ubah
 
 
 # --- Sinkronisasi harga antar-server (WRITE) -------------------------------

@@ -8,7 +8,12 @@ barang sekaligus. Karena itu yang diuji di sini isi RESPONS, bukan layarnya.
 from django.test import SimpleTestCase, TestCase
 
 from apps.auth_app.models import DATA_KEY_SET, Role, User
-from apps.monitoring.views import _hidden_fields, _tanpa_kolom
+from apps.monitoring.views import _KLASIFIKASI_UANG, _hidden_fields, _tanpa_kolom
+
+# Kolom uang milik Klasifikasi Pelanggan. Diambil dari sumbernya, bukan ditulis
+# ulang: daftar yang dijiplak akan tetap hijau justru ketika seseorang menambah
+# kolom uang baru dan lupa mendaftarkannya.
+_UANG_KLASIFIKASI = set(_KLASIFIKASI_UANG)
 
 
 def _payload():
@@ -75,7 +80,15 @@ class HiddenFields(TestCase):
         # rupiah per barang di tabel Fast Moving di bawahnya masih tampil —
         # cukup untuk menjumlahkan sendiri apa yang baru saja disembunyikan.
         u = User.objects.create_user("u2", role=Role.ADMIN, hidden_data_keys=["nominal"])
-        self.assertEqual(_hidden_fields(_Req(u)), {"nominal", "revenue", "nilai"})
+        self.assertEqual(_hidden_fields(_Req(u)), {"nominal", "revenue", "nilai"} | _UANG_KLASIFIKASI)
+
+    def test_nominal_menutup_seluruh_kolom_uang_klasifikasi_pelanggan(self):
+        # Diuji terpisah dari daftar di atas supaya jelas apa yang dijaga: halaman
+        # Klasifikasi Pelanggan menyajikan belanja per ORANG di tiga rute berbeda
+        # (laporan, panel detail, dua sheet export). Kolom yang lupa didaftarkan
+        # di sini akan lolos di salah satu rute tanpa gejala apa pun di layar.
+        u = User.objects.create_user("u4", role=Role.ADMIN, hidden_data_keys=["nominal"])
+        self.assertTrue(_UANG_KLASIFIKASI <= _hidden_fields(_Req(u)))
 
     def test_superadmin_tak_pernah_dibatasi(self):
         u = User.objects.create_user("boss", role=Role.SUPERADMIN,

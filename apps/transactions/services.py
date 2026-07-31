@@ -93,3 +93,43 @@ def dashboard_summary(profile, day: dt.date | None = None) -> dict:
         "fast_movers": fast_movers,
     }
 
+
+
+# --- Klasifikasi Pelanggan: payload kolumnar -------------------------------
+
+# Kolom & urutannya dinyatakan eksplisit, tidak diturunkan dari rows[0]: saat
+# hasil query kosong, bentuk turunan itu menghasilkan payload tanpa kolom sama
+# sekali, dan dropdown saringan di klien jadi kosong tanpa gejala lain.
+KLASIFIKASI_COLS = [
+    "kd_customer", "customer", "hp", "telepon", "kota",
+    "segmen", "segmen_urut", "tier_nilai",
+    "jml_nota", "total_belanja", "rata_nota",
+    "nota_pertama", "nota_terakhir", "jeda_hari", "umur_hari",
+]
+
+
+def klasifikasi_kolumnar(profile, f) -> dict:
+    """Seluruh baris klasifikasi pelanggan dalam bentuk kolom-mayor.
+
+    Halaman ini mengirim SATU payload berisi semua pelanggan supaya pencarian
+    dan pengurutan terjadi di peramban tanpa bolak-balik ke server. Aman di sini
+    karena setelah UMUM/ECERAN/OBRAL dikeluarkan, profil terbesar hanya
+    menyisakan ~4.800 pelanggan — dua orde lebih kecil dari katalog Stok Akhir
+    (55rb baris) yang melahirkan bentuk kolumnar ini.
+
+    Ambang segmen TIDAK bisa dihitung ulang di klien: ia bagian dari SQL, dan
+    menduplikasinya ke JavaScript berarti dua definisi yang bisa menyimpang —
+    termasuk menyimpang dari file Excel, yang tetap dibuat server.
+    """
+    from apps.inventory.services import _kolumnar  # kamus + tipe kolom, satu definisi
+    from apps.transactions import reports as rpt
+
+    inner, params = rpt.klasifikasi_pelanggan(f)
+    with mssql.report_cursor(profile) as cur:
+        cur.execute(f"SELECT * FROM ({inner}) AS q ORDER BY q.segmen_urut, q.customer", params)
+        rows = _dictify(cur)
+
+    # Decimal/datetime -> float/str sebelum masuk kamus: keduanya tak bisa
+    # di-JSON-kan, dan _kolumnar menilai bentuk kolom dari tipe Python-nya.
+    from apps.core.reporting import clean_rows
+    return _kolumnar(clean_rows(rows), KLASIFIKASI_COLS)

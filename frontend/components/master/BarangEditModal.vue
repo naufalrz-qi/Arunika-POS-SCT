@@ -15,6 +15,10 @@ import { suggestFor } from "@/utils/priceSuggestion.js";
 const props = defineProps({
   item: { type: Object, default: null },
   isRetail: { type: Boolean, default: false },
+  // Nama & keterangan = identitas katalog yang dipakai bersama seluruh cabang,
+  // jadi hanya server gudang yang boleh mengubahnya. Ini SEMATA tampilan —
+  // penjaga penulisannya di master.update_nama_keterangan (server-side).
+  bolehEditIdentitas: { type: Boolean, default: false },
   // Halaman tujuan redirect setelah simpan (endpoint update-barang menerima
   // `redirect_to` supaya tidak terlempar balik ke Update Barang).
   redirectTo: { type: String, default: "/admin-panel/master/update-barang" },
@@ -37,6 +41,12 @@ const priceForm = useForm({ kd_barang: "", nama: "", prices: {}, redirect_to: pr
 const statusSel = reactive({ m_barang: "1", m_barang_divisi: "1", m_barang_satuan: "1" });
 const confirmOpen = ref(false);
 
+// Identitas (nama & keterangan) — form sendiri, tak dicampur priceForm: keduanya
+// menulis ke endpoint berbeda dan boleh disimpan terpisah.
+const identitasForm = useForm({ kd_barang: "", nama: "", keterangan: "", redirect_to: props.redirectTo });
+const identitasConfirmOpen = ref(false);
+const MAX_IDENTITAS = 50;  // varchar(50) di m_barang, diverifikasi di server
+
 watch(
   () => props.item,
   (item) => {
@@ -46,6 +56,11 @@ watch(
     priceForm.nama = item.nama;
     priceForm.prices = Object.fromEntries(item.satuan.map((u) => [u.kd_satuan, u.harga_jual]));
     priceForm.redirect_to = props.redirectTo;
+    identitasForm.kd_barang = item.kd_barang;
+    identitasForm.nama = item.nama || "";
+    identitasForm.keterangan = item.keterangan || "";
+    identitasForm.redirect_to = props.redirectTo;
+    identitasConfirmOpen.value = false;
     statusSel.m_barang = item.status || "1";
     statusSel.m_barang_divisi = item.divisi[0]?.status || "1";
     statusSel.m_barang_satuan = item.satuan[0]?.status || "1";
@@ -113,6 +128,28 @@ function setHargaFromMargin(unit, marginStr) {
   priceForm.prices[unit.kd_satuan] = Math.round(modal * (1 + margin / 100));
 }
 
+const identitasDiff = computed(() => {
+  if (!props.item) return [];
+  const pasangan = [
+    { label: "Nama", lama: props.item.nama || "", baru: (identitasForm.nama || "").trim() },
+    { label: "Keterangan", lama: props.item.keterangan || "", baru: (identitasForm.keterangan || "").trim() },
+  ];
+  return pasangan.filter((d) => d.lama !== d.baru);
+});
+
+// Nama kosong ditolak: barang tanpa nama tak bisa dikenali di nota maupun laporan.
+const identitasInvalid = computed(() => !(identitasForm.nama || "").trim());
+
+function simpanIdentitas() {
+  identitasConfirmOpen.value = false;
+  identitasForm
+    .transform((d) => ({ ...d, nama: (d.nama || "").trim(), keterangan: (d.keterangan || "").trim() }))
+    .post("/admin-panel/master/update-barang/identitas", {
+      preserveScroll: true,
+      onSuccess: () => emit("close"),
+    });
+}
+
 function confirmSave() {
   confirmOpen.value = false;
   saveHarga();
@@ -146,6 +183,59 @@ function saveStatus(table) {
 <template>
   <Modal :show="!!item" :title="item ? `${item.kd_barang} — ${item.nama}` : ''" size="md" @close="emit('close')">
     <div v-if="item" class="max-h-[70vh] space-y-2 overflow-y-auto scroll-slim">
+      <!-- Identitas barang. Nama & keterangan dipakai bersama seluruh cabang
+           (nota, laporan, layar kasir tiap server) dan menyebar lewat
+           Sinkronisasi Master Data, jadi hanya gudang yang boleh mengubahnya.
+           Di server lain field-nya dikunci DAN alasannya ditulis — field mati
+           tanpa penjelasan cuma terlihat seperti aplikasi yang rusak. -->
+      <div>
+        <h4 class="mb-1 text-xs font-semibold text-ink">Identitas Barang</h4>
+        <Banner
+          v-if="!bolehEditIdentitas"
+          variant="info"
+          message="Nama dan keterangan barang hanya bisa diubah dari server gudang. Gudang yang memegang katalog; cabang lain menerimanya lewat Sinkronisasi Master Data. Ganti koneksi ke server gudang untuk mengubahnya."
+          class="mb-1.5"
+        />
+        <Banner
+          v-else
+          variant="warning"
+          message="Perubahan di sini ikut ke SEMUA cabang saat Sinkronisasi Master Data dijalankan, dan nama barang muncul di nota serta laporan lama."
+          class="mb-1.5"
+        />
+        <div class="grid gap-1.5 sm:grid-cols-2">
+          <Input
+            v-model="identitasForm.nama"
+            label="Nama Barang"
+            size="sm"
+            :disabled="!bolehEditIdentitas"
+            :maxlength="MAX_IDENTITAS"
+            :error="bolehEditIdentitas && identitasInvalid ? 'Nama tidak boleh kosong.' : ''"
+          />
+          <Input
+            v-model="identitasForm.keterangan"
+            label="Keterangan"
+            size="sm"
+            :disabled="!bolehEditIdentitas"
+            :maxlength="MAX_IDENTITAS"
+          />
+        </div>
+        <div v-if="bolehEditIdentitas" class="mt-1.5 flex items-center gap-2">
+          <Button
+            variant="success"
+            size="sm"
+            :loading="identitasForm.processing"
+            :disabled="!identitasDiff.length || identitasInvalid"
+            @click="identitasConfirmOpen = true"
+          >
+            Simpan Identitas
+          </Button>
+          <span v-if="!identitasDiff.length" class="text-[11px] text-ink-subtle">Belum ada perubahan.</span>
+          <span v-else class="text-[11px] text-ink-subtle">
+            {{ identitasDiff.length }} perubahan menunggu konfirmasi.
+          </span>
+        </div>
+      </div>
+
       <!-- Harga per satuan -->
       <div>
         <h4 class="mb-1 text-xs font-semibold text-ink">Harga Jual per Satuan</h4>
@@ -247,6 +337,41 @@ function saveStatus(table) {
     </div>
     <template #footer>
       <Button variant="ghost" @click="emit('close')">Tutup</Button>
+    </template>
+  </Modal>
+
+  <Modal
+    :show="identitasConfirmOpen"
+    title="Konfirmasi Perubahan Identitas Barang"
+    @close="identitasConfirmOpen = false"
+  >
+    <div class="space-y-2">
+      <Banner
+        variant="warning"
+        message="Nama & keterangan ikut ke semua cabang saat Sinkronisasi Master Data dijalankan. Periksa sebelum menyimpan."
+      />
+      <p class="text-xs text-ink-muted">{{ item ? item.kd_barang : "" }}</p>
+      <div
+        v-for="d in identitasDiff"
+        :key="d.label"
+        class="rounded border border-border-default bg-surface-2 px-3 py-2"
+      >
+        <p class="text-[11px] font-semibold text-ink-muted">{{ d.label }}</p>
+        <p class="mt-0.5 break-words text-sm text-ink-muted line-through decoration-danger-500/60">
+          {{ d.lama || "(kosong)" }}
+        </p>
+        <p class="break-words text-sm font-semibold text-ink">{{ d.baru || "(kosong)" }}</p>
+      </div>
+    </div>
+    <template #footer>
+      <Button variant="ghost" @click="identitasConfirmOpen = false">Batal</Button>
+      <Button
+        variant="primary"
+        :disabled="!identitasDiff.length || identitasInvalid"
+        @click="simpanIdentitas"
+      >
+        Simpan
+      </Button>
     </template>
   </Modal>
 

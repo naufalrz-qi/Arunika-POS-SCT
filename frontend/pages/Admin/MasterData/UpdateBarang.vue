@@ -20,6 +20,7 @@ const props = defineProps({
   active: { type: Object, default: null },
   profile_type: { type: String, default: null },
   has_modal: { type: Boolean, default: false },
+  boleh_edit_identitas: { type: Boolean, default: false },
   items: { type: Object, default: null },
   saran: { type: Object, default: null },
   pecahan: { type: Object, default: null },
@@ -33,9 +34,45 @@ const pecahanData = computed(() => props.pecahan || {});
 const pecahanRows = computed(() => pecahanData.value.rows || []);
 
 const isRetail = computed(() => props.profile_type === "retail");
+// Sumber modal yang tak bisa dihubungi BUKAN kegagalan: barang tetap terbaca dari
+// server aktif, hanya kolom Modal & Margin yang tak punya isi. Server mengirimnya
+// lewat kanal sendiri (modal_error), terpisah dari conn_error, supaya daftar
+// barang tetap tampil dan tetap bisa dicari.
+const modalError = computed(() => data.value.modal_error || null);
 // Modal & margin tampil kapan pun server punya sumber-modal (cost_source):
-// retail → grosir/gudang, grosir → gudang. Saran-keterangan tetap retail saja.
-const showModal = computed(() => props.has_modal);
+// retail → grosir/gudang, grosir → gudang — DAN sumber itu benar-benar terbaca.
+const showModal = computed(() => props.has_modal && !modalError.value);
+
+// Sumber saran harga ditentukan SERVER (master.saran_harga), bukan ditebak dari
+// tipe koneksi di sini — kalau tidak, layar dan daftar bisa mengklaim dua hal
+// berbeda tentang dari mana angkanya datang.
+//   keterangan     → retail, nominal di kolom keterangan
+//   gudang         → non-retail, harga di server gudang acuan
+//   gudang_sendiri → server ini SENDIRI gudangnya; tak ada yang diikuti
+//   tanpa_acuan    → rantai Sumber Modal belum sampai ke gudang (dan itu boleh)
+//   gudang_offline → gudang acuannya sedang mati; bukan kegagalan
+const saranSumber = computed(() => saranData.value.sumber || null);
+const saranGudang = computed(() => saranData.value.gudang || null);
+const saranPesan = computed(() => saranData.value.pesan || null);
+
+// Tombol tetap tampil walau daftarnya kosong, KECUALI di server gudang sendiri
+// (di sana jawabannya permanen: ia yang jadi acuan). Alasannya: penjelasan kenapa
+// tak ada saran hidup DI DALAM modal, jadi menyembunyikan tombolnya membuat
+// penjelasan itu tak pernah bisa dibaca — pengguna cuma melihat fitur yang hilang
+// tanpa tahu kenapa. Badge angka tetap hanya muncul kalau ada isinya.
+// Selagi prop `saran` masih dimuat (sumber belum diketahui) tombolnya juga tampil,
+// supaya toolbar tak melompat saat data menyusul.
+const saranAda = computed(() => saranSumber.value !== "gudang_sendiri");
+const saranJudul = computed(() =>
+  saranSumber.value === "gudang"
+    ? `Saran Harga dari Gudang${saranGudang.value ? ` (${saranGudang.value})` : ""}`
+    : "Saran Harga dari Keterangan",
+);
+const saranKeterangan = computed(() =>
+  saranSumber.value === "gudang"
+    ? `Harga saran diambil dari harga jual di server gudang${saranGudang.value ? ` ${saranGudang.value}` : ""}, per satuan, diurutkan selisih terbesar dulu. Centang baris lalu Terapkan, atau ubah satu per satu lewat Edit Barang.`
+    : "Harga saran diambil dari nominal di kolom keterangan tiap barang, diurutkan barang dengan %/margin eksplisit duluan. Centang baris lalu Terapkan, atau ubah satu per satu lewat Edit Barang.",
+);
 
 const typeName = { gudang: "Gudang", grosir: "Grosir", retail: "Toko Retail" };
 
@@ -224,10 +261,37 @@ function applySelected() {
   );
 }
 
-// Badge per kartu: pakai data yang sudah ada di kartu (row), bukan katalog
-// penuh — cukup untuk kartu yang sedang dirender.
+// Badge per kartu. Dua mekanisme, karena sumbernya memang dua hal berbeda:
+//
+//  retail     — dihitung di kartu dari kolom keterangan (suggestFor). Datanya
+//               sudah ada di `row`, jadi badge muncul bersamaan dengan kartunya.
+//  non-retail — acuannya harga di server GUDANG, yang tak ada di `row`; harus
+//               dicocokkan dengan daftar saran dari server. Badge-nya menyusul
+//               saat prop `saran` selesai dimuat.
+//
+// Daftar saran non-retail bisa memuat beberapa satuan per barang, jadi indeksnya
+// menyimpan array — bukan satu baris seperti jalur retail.
+const saranPerBarang = computed(() => {
+  const m = new Map();
+  if (isRetail.value) return m;
+  for (const s of saranRows.value) {
+    const arr = m.get(s.kd_barang);
+    if (arr) arr.push(s);
+    else m.set(s.kd_barang, [s]);
+  }
+  return m;
+});
+
+function cardSuggestions(row) {
+  if (isRetail.value) {
+    const s = suggestFor(row);
+    return s ? [s] : [];
+  }
+  return saranPerBarang.value.get(row.kd_barang) || [];
+}
+
 function cardSuggestion(row) {
-  return suggestFor(row);
+  return cardSuggestions(row)[0] || null;
 }
 
 // --- Riwayat (history) modal ---
@@ -303,7 +367,10 @@ async function openRiwayat(item) {
           class="sm:w-40"
         />
         <Button variant="primary" @click="reload">Cari</Button>
-        <Button v-if="isRetail" variant="accent" @click="showSuggest = true">
+        <!-- Semua tipe server dapat saran harga; yang berbeda SUMBERNYA (retail dari
+             kolom keterangan, lainnya dari harga server gudang). Disembunyikan hanya
+             kalau server ini memang tak punya acuan — lihat saranSumber. -->
+        <Button v-if="saranAda" variant="accent" @click="showSuggest = true">
           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
           </svg>
@@ -323,6 +390,8 @@ async function openRiwayat(item) {
       </template>
 
       <Banner v-if="data.conn_error" variant="warning" :message="data.conn_error" />
+      <!-- Pemberitahuan, bukan error: daftar di bawahnya tetap terisi. -->
+      <Banner v-if="modalError" variant="info" :message="modalError" class="mb-3" />
 
       <div
         v-if="visibleItems.length > 0"
@@ -331,7 +400,7 @@ async function openRiwayat(item) {
         <div v-for="row in visibleItems" :key="row.kd_barang">
           <div class="surface-flat relative flex h-full flex-col gap-2.5 p-3.5">
             <button
-              v-if="isRetail && cardSuggestion(row)"
+              v-if="cardSuggestion(row)"
               type="button"
               class="absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-full bg-warning-bg px-2 py-0.5 text-[10px] font-semibold text-warning-fg"
               :title="`Saran harga: ${rupiah(cardSuggestion(row).harga_baru)} (sekarang ${rupiah(cardSuggestion(row).harga_lama)})`"
@@ -449,7 +518,12 @@ async function openRiwayat(item) {
       </div>
     </Deferred>
 
-    <BarangEditModal :item="editing" :is-retail="isRetail" @close="editing = null" />
+    <BarangEditModal
+      :item="editing"
+      :is-retail="isRetail"
+      :boleh-edit-identitas="props.boleh_edit_identitas"
+      @close="editing = null"
+    />
 
     <Modal :show="!!riwayat" :title="riwayat ? `Riwayat — ${riwayat.kd_barang} ${riwayat.nama}` : ''" size="md" @close="riwayat = null">
       <div v-if="riwayatLoading" class="flex items-center justify-center gap-3 py-10">
@@ -483,20 +557,19 @@ async function openRiwayat(item) {
       </template>
     </Modal>
 
-    <!-- Saran Harga (retail) — katalog penuh. Prioritas: keterangan yang -->
-    <!-- eksplisit sebut %/margin duluan (lihat backend). Seleksi baris lalu -->
+    <!-- Saran Harga — katalog penuh. Sumbernya beda per tipe server: retail dari -->
+    <!-- kolom keterangan (yang eksplisit sebut %/margin duluan), non-retail dari -->
+    <!-- harga jual server gudang (selisih terbesar duluan). Seleksi baris lalu -->
     <!-- Terapkan menulis lewat endpoint massal (tetap divalidasi update_harga). -->
-    <Modal :show="showSuggest" title="Saran Harga dari Keterangan" size="lg" @close="showSuggest = false">
+    <Modal :show="showSuggest" :title="saranJudul" size="lg" @close="showSuggest = false">
       <div v-if="!props.saran" class="flex items-center justify-center gap-3 py-10">
         <Spinner />
         <span class="text-sm text-ink-muted">Memuat saran harga…</span>
       </div>
       <Banner v-else-if="saranData.conn_error" variant="warning" :message="saranData.conn_error" />
+      <Banner v-else-if="saranPesan" variant="info" :message="saranPesan" />
       <div v-else-if="saranRows.length" class="space-y-3">
-        <Banner
-          variant="info"
-          message="Harga saran diambil dari nominal di kolom keterangan tiap barang, diurutkan barang dengan %/margin eksplisit duluan. Centang baris lalu Terapkan, atau ubah satu per satu lewat Edit Barang."
-        />
+        <Banner variant="info" :message="saranKeterangan" />
         <div class="max-h-[55vh] overflow-y-auto scroll-slim">
           <table class="w-full text-sm">
             <thead class="sticky top-0 bg-surface">

@@ -100,6 +100,12 @@ class BarangUpdateLog(models.Model):
         STATUS_BARANG = "status_barang", "Status Barang"
         STATUS_DIVISI = "status_divisi", "Status Divisi"
         STATUS_SATUAN = "status_satuan", "Status Satuan"
+        # Identitas barang — hanya bisa diubah dari server gudang. Dicatat di
+        # riwayat yang sama supaya satu tempat menjawab "apa yang berubah pada
+        # barang ini"; nama yang berubah tanpa jejak adalah perubahan yang paling
+        # menyulitkan, karena ia menyebar ke seluruh cabang lewat sinkronisasi.
+        NAMA = "nama", "Nama Barang"
+        KETERANGAN = "keterangan", "Keterangan"
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

@@ -10,6 +10,11 @@ defineProps({
   // masuk secara otomatis.
   autocomplete: { type: String, default: undefined },
   autofocus: { type: Boolean, default: false },
+  // Harus prop, BUKAN attribute fallthrough: akar komponen ini <label>, jadi
+  // `disabled` yang dioper dari luar mendarat di label dan input-nya tetap bisa
+  // diketik — kunci yang tak mengunci apa pun.
+  disabled: { type: Boolean, default: false },
+  maxlength: { type: [String, Number], default: undefined },
 });
 defineEmits(["update:modelValue"]);
 </script>
@@ -26,11 +31,14 @@ defineEmits(["update:modelValue"]);
       :autocomplete="autocomplete"
       :autofocus="autofocus || undefined"
       :required="required || undefined"
+      :disabled="disabled || undefined"
+      :maxlength="maxlength"
       :aria-invalid="error ? 'true' : undefined"
       @input="$emit('update:modelValue', $event.target.value)"
       :class="[
         'h-9 w-full rounded-control border bg-surface px-2.5 text-sm text-ink transition-colors duration-150 placeholder:text-ink-subtle focus:outline-none focus:ring-2 focus:ring-brand-500',
         error ? 'border-danger-600' : 'border-border-strong focus:border-brand-500',
+        disabled ? 'cursor-not-allowed bg-surface-2 text-ink-muted' : '',
       ]"
     />
     <span v-if="error" class="mt-1 block text-xs text-danger-fg">{{ error }}</span>

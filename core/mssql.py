@@ -246,6 +246,33 @@ def get_cost_source(retail_profile):
     return getattr(retail_profile, "cost_source", None)
 
 
+def get_gudang_source(profile):
+    """Profil bertipe `gudang` acuan bagi `profile`, ditelusuri lewat rantai
+    cost_source. None bila rantainya tak pernah sampai ke gudang.
+
+    Rantai yang ada di lapangan: retail -> grosir -> gudang (RTL PUSAT -> PUSAT
+    -> GUDANG). Karena itu cost_source ditelusuri BERULANG, bukan sekali:
+    cost_source milik profil retail biasanya grosir, jadi satu langkah tak akan
+    pernah menemukan gudang.
+
+    Bisa mengembalikan `profile` itu sendiri kalau ia memang gudang — caller
+    yang memutuskan artinya (untuk saran harga: gudang adalah sumber acuan, jadi
+    ia tak punya apa pun untuk diikuti).
+
+    Penjaga siklus disengaja: cost_source adalah FK ke tabel yang sama, jadi
+    A->B->A bisa terbentuk dari layar Koneksi tanpa ada yang melarangnya, dan
+    tanpa penjaga ini satu profil salah-konfigurasi menggantung request selamanya.
+    """
+    seen = set()
+    p = profile
+    while p is not None and p.pk not in seen:
+        seen.add(p.pk)
+        if p.db_type == "gudang":
+            return p
+        p = getattr(p, "cost_source", None)
+    return None
+
+
 def get_report_source(profile):
     """Replica server (disinkron via CDC) untuk baca laporan, atau None.
 

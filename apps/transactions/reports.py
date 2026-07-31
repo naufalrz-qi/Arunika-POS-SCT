@@ -6,6 +6,7 @@ Each report contributes:
 - `SUMMARY_<NAME>` -> select list for aggregates (jml_baris, total_qty, total_nilai)
 """
 import datetime as dt
+import os
 
 
 def _ghb(price: str, diskon: list[str], pajak: str = "0", ppnbm: str = "0") -> str:
@@ -1102,6 +1103,333 @@ SORTS_STOK = {
     "divisi": "divisi", "kd_barang": "kd_barang", "barang": "barang",
     "kategori": "kategori", "stok_akhir": "stok_akhir", "nominal": "nominal",
 }
+
+
+# --- Klasifikasi Pelanggan (untuk follow-up) --------------------------------
+#
+# Menjawab pertanyaan yang tak bisa dijawab "Penjualan per Customer": siapa yang
+# BARU datang, siapa yang SETIA, dan siapa yang SUDAH LAMA tak belanja. Keluaran
+# dipakai staf menyusun daftar telepon/WA, jadi kontak (hp/telepon) ikut dibawa.
+#
+# Dua beda sengaja dari penjualan_customer():
+# 1. Agregat per kd_customer SAJA, tanpa dipecah divisi. Follow-up ditujukan ke
+#    ORANG; satu orang yang belanja di dua divisi tetap satu orang yang ditelepon
+#    sekali. (penjualan_customer memecah per divisi karena meniru grain view
+#    legacy mon_t_penjualan_per_customer — itu benar untuk laporan penjualan,
+#    salah untuk daftar follow-up.)
+# 2. Jendela tanggal bawaan panjang (lihat default_from_days di spec view),
+#    bukan awal bulan: "belum belanja lebih dari setahun" mustahil terlihat dari
+#    jendela sebulan, dan semua orang akan terklasifikasi 'Baru'.
+
+# Penampung transaksi, bukan orang yang bisa difollow up. Diverifikasi live di
+# kelima profil koneksi (RTL PUSAT, grosir pusat, TANJUNG, Testing, testgudang):
+# ketiga kode ini ada di semuanya, dan CAA025/CAA000 sendiri menelan 99,3% nota
+# di retail serta ~69% di grosir.
+_PSEUDO_CUSTOMER_CODES = ("CAA000", "CAA025", "CAA027")  # UMUM, ECERAN, OBRAL
+# Kanal jualan, bukan orang. Disaring per NAMA (bukan kode) supaya marketplace
+# baru tak perlu didaftarkan kodenya satu per satu — kodenya memang seragam di
+# kelima profil hari ini, tapi itu kebetulan yang tak dijamin bertahan.
+_PSEUDO_CUSTOMER_NAMES = ("SHOPEE", "TOKOPEDIA", "TIKTOK", "LAZADA", "BLIBLI", "BUKALAPAK")
+
+
+def _csv_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Daftar dari .env (CSV, case-insensitive) atau `default` bila tak diset.
+
+    Sengaja bisa ditimpa tanpa deploy: tiap toko/cabang bisa punya penampung
+    transaksi sendiri (mis. 'GROSIR BEBAS'), dan menunggu rilis untuk itu berarti
+    daftar follow-up tercemar sampai rilis berikutnya. String kosong ("") =
+    daftar kosong (tanpa penyaringan), berbeda dari tidak diset sama sekali."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return tuple(v.strip().upper() for v in raw.split(",") if v.strip())
+
+
+def pseudo_customer_codes() -> tuple[str, ...]:
+    return _csv_env("POS_PSEUDO_CUSTOMERS", _PSEUDO_CUSTOMER_CODES)
+
+
+def pseudo_customer_names() -> tuple[str, ...]:
+    return _csv_env("POS_PSEUDO_CUSTOMER_NAMES", _PSEUDO_CUSTOMER_NAMES)
+
+
+# Ambang bawaan. Semuanya bisa diubah dari panel filter (lihat _amb) — ritme
+# belanja grosir dan retail berbeda, dan tiap penyesuaian tak boleh butuh deploy.
+AMBANG_KLASIFIKASI = {
+    "baru_hari": (90, 7, 1095),          # nota PERTAMA masih dalam N hari -> Baru
+    "jarang_hari": (90, 7, 1095),        # jeda > N -> Mulai Jarang
+    "hilang_hari": (180, 7, 1095),       # jeda > N -> Hilang
+    "setia_min_nota": (5, 2, 1000),      # jeda pendek + >= N nota -> Setia
+    "tier_besar": (1_000_000, 0, 10**12),    # rata/nota >= N -> Besar
+    "tier_sedang": (250_000, 0, 10**12),     # rata/nota >= N -> Sedang
+}
+
+# Urutan periksa = urutan urgensi follow-up. Nilai numerik ikut dikeluarkan
+# (segmen_urut) supaya mengurut kolom Segmen memberi urutan urgensi, bukan
+# abjad — 'Aktif' sebelum 'Hilang' secara abjad justru menyembunyikan yang
+# paling perlu dihubungi di halaman terakhir.
+SEGMEN_LABEL = {1: "Hilang", 2: "Mulai Jarang", 3: "Baru", 4: "Setia", 5: "Aktif"}
+
+
+def _amb(f, key: str) -> int:
+    """Ambang `key` dari request (sudah jadi string di f), di-clamp ke rentang wajar.
+
+    Di-clamp, bukan divalidasi-lalu-ditolak: laporan yang membalas 500 karena
+    seseorang mengetik "abc" di kotak angka lebih buruk daripada laporan yang
+    diam-diam memakai nilai bawaan. Karena hasilnya dijamin int, nilainya boleh
+    ditanam langsung ke SQL (bukan lewat placeholder) — itu yang menjaga urutan
+    parameter tetap sederhana di query berlapis di bawah."""
+    default, lo, hi = AMBANG_KLASIFIKASI[key]
+    try:
+        v = int(float(f.get(key) or default))
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, v))
+
+
+SORTS_KLASIFIKASI_PELANGGAN = {
+    "customer": "customer", "kota": "kota", "jml_nota": "jml_nota",
+    "total_belanja": "total_belanja", "rata_nota": "rata_nota",
+    "nota_pertama": "nota_pertama", "nota_terakhir": "nota_terakhir",
+    "jeda_hari": "jeda_hari", "umur_hari": "umur_hari",
+    "segmen": "segmen_urut", "tier_nilai": "rata_nota",
+}
+FILTERS_KLASIFIKASI_PELANGGAN = {
+    "customer": ("customer", "text"),
+    "kota": ("kota", "text"),
+    "segmen": ("segmen", "category"),
+    "tier_nilai": ("tier_nilai", "category"),
+    "jml_nota": ("jml_nota", "number_range"),
+    "total_belanja": ("total_belanja", "number_range"),
+    "rata_nota": ("rata_nota", "number_range"),
+    "jeda_hari": ("jeda_hari", "number_range"),
+}
+# Tak ada SUMMARY_ untuk laporan ini: halaman mengirim seluruh baris sekali
+# (kolumnar) dan menghitung ringkasannya di peramban atas hasil saringan KLIEN.
+# Agregat SQL akan menjawab pertanyaan yang berbeda dari yang sedang tampil —
+# menyaring satu kota lalu masih melihat hitungan seluruh dataset.
+# SORTS_ dan FILTERS_ di atas tetap dipakai: jalur export tetap server-side, dan
+# saringan klien diterjemahkan ke parameter itu supaya file Excel-nya cocok
+# dengan apa yang terlihat di layar.
+
+
+def _pseudo_where(where: list, params: list, cust_col: str, nama_col: str) -> None:
+    """Buang penampung transaksi & kanal marketplace dari daftar follow-up.
+
+    Disaring dua arah — kode DAN pola nama; alasannya di _PSEUDO_CUSTOMER_NAMES.
+    Pelanggan yang kodenya tak ada di m_customer sengaja TIDAK dibuang: namanya
+    memang tampil kosong, tapi menyembunyikannya berarti menyembunyikan penjualan
+    yang master-nya bermasalah."""
+    codes = pseudo_customer_codes()
+    if codes:
+        where.append(f"UPPER(RTRIM({cust_col})) NOT IN ({','.join('?' * len(codes))})")
+        params.extend(codes)
+    for nama in pseudo_customer_names():
+        where.append(f"COALESCE({nama_col}, '') NOT LIKE ?")
+        params.append(f"%{nama}%")
+
+
+def _segmen_case(f) -> tuple[str, str]:
+    """(ekspresi segmen_urut, ekspresi segmen) atas alias keluaran `g`.
+
+    Recency diperiksa SEBELUM 'Baru' dengan sengaja: pelanggan yang sekali datang
+    200 hari lalu bukan pendatang baru yang perlu disambut — ia sudah hilang, dan
+    itu follow-up yang berbeda. Urutan sebaliknya terlihat sama masuk akal dari
+    luar, jadi jangan ditukar tanpa membaca ini.
+
+    `jarang` di-clamp <= `hilang` supaya urutan cabang tetap koheren: tanpa itu
+    ambang 'Mulai Jarang' yang lebih besar dari 'Hilang' membuat cabang kedua
+    memeriksa syarat yang lebih longgar daripada cabang di atasnya — pembacaan
+    kode jadi menyesatkan tanpa mengubah hasil.
+
+    Efeknya: kalau jarang >= hilang, 'Mulai Jarang' memang jadi kosong. Itu
+    jawaban yang BENAR untuk ambang seperti itu — semua yang tadinya "mulai
+    jarang" sudah masuk "hilang" — dan sengaja tidak dibereskan dengan menukar
+    kedua angka. Menukar berarti mengubah "Hilang: jeda lebih dari 180" yang
+    diketik pengguna menjadi 400 di belakang punggungnya; segmen kosong yang
+    angkanya terlihat di panel filter lebih jujur daripada ambang yang diam-diam
+    diganti.
+    """
+    hilang = _amb(f, "hilang_hari")
+    jarang = min(_amb(f, "jarang_hari"), hilang)
+    baru = _amb(f, "baru_hari")
+    setia = _amb(f, "setia_min_nota")
+    # Satu daftar cabang, dua CASE datar atas cabang yang sama. Menyusun label
+    # sebagai `CASE WHEN <urut> = 1 THEN ...` akan menanam seluruh CASE angka
+    # lima kali dalam satu statement — kelas ledakan ekspresi yang sama yang
+    # pernah memicu error 8632 di _ghb (lihat docstringnya).
+    cabang = [
+        (f"g.jeda_hari > {hilang}", 1),
+        (f"g.jeda_hari > {jarang}", 2),
+        (f"g.umur_hari <= {baru}", 3),
+        (f"g.jml_nota >= {setia}", 4),
+    ]
+    urut = "CASE " + " ".join(f"WHEN {c} THEN {n}" for c, n in cabang) + " ELSE 5 END"
+    label = ("CASE " + " ".join(f"WHEN {c} THEN '{SEGMEN_LABEL[n]}'" for c, n in cabang)
+             + f" ELSE '{SEGMEN_LABEL[5]}' END")
+    return urut, label
+
+
+def _klasifikasi_grouped(f) -> tuple[str, list]:
+    """Agregat per pelanggan (belum bersegmen). Dipakai laporan & export.
+
+    Nilai nota diambil dari _nota_net — matematika uang yang sudah diaudit di
+    modul ini (semantik UDF legacy: diskon dual-mode baris & header, pajak,
+    diskon_uang paling akhir). Jangan diganti SUM(qty * harga_jual).
+
+    URUTAN PARAMETER penting dan tidak intuitif: `?` diikat SQL Server menurut
+    urutan kemunculan di teks, dan DATEDIFF di daftar SELECT muncul SEBELUM
+    subquery nota di klausa FROM. Jadi kedua tanggal acuan mendahului parameter
+    _nota_net, bukan sesudahnya."""
+    where, params = _base_where(f)
+    nota_sql = _nota_net(" AND ".join(where))
+
+    where_outer, params_outer = [], []
+    _pseudo_where(where_outer, params_outer, "n.kd_customer", "c.nama")
+    if f["search"]:
+        where_outer.append("(c.nama LIKE ? OR n.kd_customer LIKE ?)")
+        params_outer.extend([f"%{f['search']}%"] * 2)
+
+    anchor = f["date_to"]
+    grouped = (
+        "SELECT RTRIM(n.kd_customer) AS kd_customer, COALESCE(c.nama, '') AS customer, "
+        "COALESCE(c.hp, '') AS hp, COALESCE(c.telepon, '') AS telepon, "
+        "COALESCE(mk.nama, '') AS kota, "
+        "COUNT(n.no_transaksi) AS jml_nota, "
+        "COALESCE(SUM(n.total_bersih), 0) AS total_belanja, "
+        "COALESCE(SUM(n.total_bersih) / NULLIF(COUNT(n.no_transaksi), 0), 0) AS rata_nota, "
+        "MIN(n.tanggal) AS nota_pertama, MAX(n.tanggal) AS nota_terakhir, "
+        "DATEDIFF(day, MAX(n.tanggal), ?) AS jeda_hari, "
+        "DATEDIFF(day, MIN(n.tanggal), ?) AS umur_hari "
+        f"FROM ({nota_sql}) n "
+        "LEFT JOIN m_customer c ON n.kd_customer = c.kd_customer "
+        "LEFT JOIN m_kota mk ON c.kd_kota = mk.kd_kota "
+        + (f"WHERE {' AND '.join(where_outer)} " if where_outer else "")
+        + "GROUP BY n.kd_customer, c.nama, c.hp, c.telepon, mk.nama"
+    )
+    return grouped, [anchor, anchor] + params + params_outer
+
+
+def klasifikasi_pelanggan(f):
+    grouped, params = _klasifikasi_grouped(f)
+    urut, label = _segmen_case(f)
+    besar, sedang = _amb(f, "tier_besar"), _amb(f, "tier_sedang")
+    tier = (
+        f"CASE WHEN g.rata_nota >= {besar} THEN 'Besar'"
+        f" WHEN g.rata_nota >= {sedang} THEN 'Sedang' ELSE 'Kecil' END"
+    )
+    # Dua level: agregat dulu, segmen sesudahnya. SQL Server tak bisa merujuk
+    # alias keluaran (jeda_hari/jml_nota) di SELECT yang sama tempat ia dibuat —
+    # bentuk yang sama dipakai fmi_penjualan.
+    inner = f"SELECT g.*, {urut} AS segmen_urut, {label} AS segmen, {tier} AS tier_nilai FROM ({grouped}) g"
+    return inner, params
+
+
+# Barang favorit: "biasanya beli apa" — bahan pembuka percakapan saat follow-up.
+# Nilai per baris pakai _line_net (diskon level baris), bukan _nota_net: yang
+# ditanya di sini kontribusi tiap BARANG, dan diskon header tak bisa dibagi ke
+# barang tanpa mengarang aturan alokasi. Angkanya karena itu bisa sedikit lebih
+# tinggi dari total_belanja di tabel utama pada nota berdiskon header — beda yang
+# disengaja, bukan selisih yang perlu direkonsiliasi.
+_FAVORIT_SELECT = (
+    "SELECT RTRIM(h.kd_customer) AS kd_customer, COALESCE(c.nama, '') AS customer, "
+    "RTRIM(d.kd_barang) AS kd_barang, COALESCE(b.nama, '') AS barang, "
+    "COALESCE(SUM(d.qty), 0) AS qty, "
+    f"COALESCE(SUM({_line_net('harga_jual')}), 0) AS nilai, "
+    "COUNT(DISTINCT d.no_transaksi) AS jml_nota, MAX(h.tanggal) AS terakhir "
+    "FROM t_penjualan_detail d "
+    "INNER JOIN t_penjualan h ON d.no_transaksi = h.no_transaksi "
+    "LEFT JOIN m_customer c ON h.kd_customer = c.kd_customer "
+    "LEFT JOIN m_barang b ON d.kd_barang = b.kd_barang "
+)
+# HAVING > 0 membuang bonus & pembungkus (BATERAI FREE, KERTAS KADO FREE, kresek).
+# Tanpa ini daftar "sering dibeli" diurut qty didominasi barang gratis — terukur
+# di data live: tiga teratas hampir setiap pelanggan adalah bonus bernilai nol,
+# yang justru bukan pembelian dan tak berguna sebagai pembuka percakapan. Sejalan
+# dgn aturan FMI Penjualan yang juga mengecualikan barang tanpa harga jual.
+_FAVORIT_GROUP = (
+    " GROUP BY h.kd_customer, c.nama, d.kd_barang, b.nama"
+    f" HAVING COALESCE(SUM({_line_net('harga_jual')}), 0) > 0"
+)
+
+FAVORIT_COLUMNS = [
+    {"key": "kd_customer", "label": "Kode Pelanggan"},
+    {"key": "customer", "label": "Pelanggan"},
+    {"key": "kd_barang", "label": "Kode Barang"},
+    {"key": "barang", "label": "Barang"},
+    {"key": "qty", "label": "Total Qty"},
+    {"key": "nilai", "label": "Total Nilai"},
+    {"key": "jml_nota", "label": "Muncul di Nota"},
+    {"key": "terakhir", "label": "Terakhir Dibeli"},
+]
+
+
+def barang_favorit_pelanggan(f, kd_customer: str, top_n: int = 20):
+    """Barang terbanyak dibeli SATU pelanggan (panel detail). Menyentuh satu
+    kd_customer saja, jadi murah walau dipanggil per klik."""
+    where, params = _base_where(f)
+    where.append("h.kd_customer = ?")
+    params.append(kd_customer)
+    sql = (
+        f"SELECT TOP {int(top_n)} * FROM ({_FAVORIT_SELECT}WHERE {' AND '.join(where)}{_FAVORIT_GROUP}) x "
+        "ORDER BY x.qty DESC, x.kd_barang"
+    )
+    return sql, params
+
+
+def barang_favorit_massal(f, top_n: int = 5):
+    """Top-N barang untuk SETIAP pelanggan — sheet kedua file export.
+
+    ROW_NUMBER per pelanggan, bukan TOP global: tanpa PARTITION BY, beberapa
+    pelanggan besar akan memakan seluruh kuota baris dan sisanya tak kebagian
+    satu barang pun.
+
+    Menyaring hanya tanggal/divisi/pencarian — TIDAK saringan kolom (segmen,
+    kota, kelas nilai). Itu disengaja: ketiganya kolom TURUNAN yang baru ada
+    setelah agregasi laporan utama, dan menyaringnya di sini lewat
+    `IN (SELECT ... FROM <laporan utama>)` memaksa SQL Server menjalankan ulang
+    seluruh agregasi _nota_net di dalam pemeriksaan IN — diukur: query timeout,
+    bukan sekadar lambat.
+
+    Penyaringan itu dikerjakan caller di Python atas himpunan kd_customer yang
+    sudah dibaca untuk sheet pertama (lihat klasifikasi_pelanggan_export). Aman
+    karena populasinya terbatas — profil terbesar ~4.800 pelanggan, dan sheet ini
+    paling banyak `top_n` baris per orang.
+    """
+    where, params = _base_where(f)
+    _pseudo_where(where, params, "h.kd_customer", "c.nama")
+    if f["search"]:
+        where.append("(c.nama LIKE ? OR h.kd_customer LIKE ?)")
+        params.extend([f"%{f['search']}%"] * 2)
+    ranked = (
+        "SELECT x.*, ROW_NUMBER() OVER (PARTITION BY x.kd_customer "
+        "ORDER BY x.qty DESC, x.kd_barang) AS rn "
+        f"FROM ({_FAVORIT_SELECT}WHERE {' AND '.join(where)}{_FAVORIT_GROUP}) x"
+    )
+    sql = (
+        f"SELECT {', '.join('y.' + c['key'] for c in FAVORIT_COLUMNS)} "
+        f"FROM ({ranked}) y WHERE y.rn <= {int(top_n)} "
+        "ORDER BY y.customer, y.rn"
+    )
+    return sql, params
+
+
+def nota_pelanggan(f, kd_customer: str, top_n: int = 20):
+    """Nota terakhir satu pelanggan (panel detail). Filter kd_customer ditaruh DI
+    DALAM _nota_net supaya index (kd_customer, tanggal) terpakai untuk menyaring,
+    bukan untuk memindai lalu membuang."""
+    where, params = _base_where(f)
+    where.append("h.kd_customer = ?")
+    params.append(kd_customer)
+    sql = (
+        f"SELECT TOP {int(top_n)} n.no_transaksi, n.tanggal, "
+        f"{STATUS_PENJUALAN_CASE.replace('h.status', 'n.status_raw')} AS status, "
+        "COALESCE(dv.nama, '') AS divisi, n.total_bersih AS nilai "
+        f"FROM ({_nota_net(' AND '.join(where))}) n "
+        "LEFT JOIN m_divisi dv ON n.kd_divisi = dv.kd_divisi "
+        "ORDER BY n.tanggal DESC"
+    )
+    return sql, params
 
 
 # --- Transaksi Barang (transaksi seluruh barang, semua jenis) --------------
