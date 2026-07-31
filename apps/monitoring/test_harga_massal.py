@@ -40,7 +40,7 @@ class TerapkanMassalTest(SimpleTestCase):
     def test_payload_dikelompokkan_per_barang(self):
         calls = []
 
-        def fake_update(profile, kd_barang, prices):
+        def fake_update(profile, kd_barang, prices, status=None):
             calls.append((kd_barang, dict(prices)))
             return [{"kd_satuan": k, "harga_lama": 0.0, "harga_baru": v} for k, v in prices.items()]
 
@@ -59,7 +59,7 @@ class TerapkanMassalTest(SimpleTestCase):
         self.assertIn("3 satuan", request.session["flash_success"])
 
     def test_barang_ditolak_tidak_menggagalkan_sisanya(self):
-        def fake_update(profile, kd_barang, prices):
+        def fake_update(profile, kd_barang, prices, status=None):
             if kd_barang == "BAD":
                 raise HargaTidakBulat("PCS: 3000.001")
             return [{"kd_satuan": "PCS", "harga_lama": 0.0, "harga_baru": 3000}]
@@ -85,7 +85,7 @@ class TerapkanMassalTest(SimpleTestCase):
     def test_baris_cacat_dilewati_bukan_crash(self):
         calls = []
 
-        def fake_update(profile, kd_barang, prices):
+        def fake_update(profile, kd_barang, prices, status=None):
             calls.append(kd_barang)
             return []
 
@@ -111,7 +111,7 @@ class TerapkanMassalTest(SimpleTestCase):
         # None harus sampai ke update_harga supaya _cek_harga_bulat menolaknya.
         captured = {}
 
-        def fake_update(profile, kd_barang, prices):
+        def fake_update(profile, kd_barang, prices, status=None):
             captured.update(prices)
             return []
 

@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import math
 import re
+from decimal import Decimal
 
 import pyodbc
-from decimal import Decimal
 
 from core import mssql
 from core.cache import _cached, invalidate_master_cache
@@ -224,11 +224,16 @@ def list_customers(profile, search: str = "") -> list[dict]:
 _STATUS_TABLES = {"m_barang", "m_barang_divisi", "m_barang_satuan"}
 
 
-def list_barang_edit(profile, search: str = "") -> list[dict]:
+def list_barang_edit(profile, search: str = "", status: dict | None = None) -> list[dict]:
     """Barang + satuan (harga_jual/margin/status) + status divisi, untuk edit.
 
     Retail: sisipkan `modal` (harga_jual server sumber-modal) per satuan dan margin
     terhitung terkini. Grosir/gudang: margin apa adanya dari DB.
+
+    `status`: dict opsional yang DIISI fungsi ini bila ada yang perlu diberitahukan
+    ke layar — sejauh ini hanya `modal_error`. Dipakai out-param, bukan nilai
+    kembalian, supaya bentuk kembaliannya (list baris) tak berubah untuk pemanggil
+    lain yang tak peduli.
     """
     where, params = ["1=1"], []
     if search:
@@ -280,17 +285,26 @@ def list_barang_edit(profile, search: str = "") -> list[dict]:
     has_modal = bool(cost)
     modal_all: dict[str, dict] = {}
     if cost:
-        def _build_cost_satuan_price():
-            with mssql.cursor(cost) as cost_cur:
-                cost_cur.execute("SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan")
-                by_barang: dict[str, dict] = {}
-                for r in _dictify(cost_cur):
-                    by_barang.setdefault(_st(r["kd_barang"]), {})[_st(r["kd_satuan"])] = _f(r["harga_jual"])
-                return by_barang
-
         # Keyed by the cost-source profile itself: multiple profiles sharing one
         # grosir/gudang source reuse a single cached read.
-        modal_all = _cached(cost, "cost_satuan_price", _build_cost_satuan_price)
+        try:
+            modal_all = _cached(cost, "cost_satuan_price", lambda: _harga_satuan(cost))
+        except pyodbc.Error:
+            # Sumber modal cuma REFERENSI, bukan sumber katalog. Barang server
+            # AKTIF sudah terbaca di atas; menggagalkan seluruh daftar karena
+            # server lain mati berarti barang tak bisa dicari sama sekali —
+            # padahal yang hilang hanya dua kolom (Modal & Margin).
+            #
+            # Ini jalur yang paling mungkin kejadian di lapangan: gudang pusat
+            # mati atau jaringan antar-cabang putus, sementara kasir di cabang
+            # tetap harus bisa mencari barang dan mengubah harga.
+            has_modal = False
+            if status is not None:
+                status["modal_error"] = (
+                    f"Server sumber modal '{cost.name}' sedang tidak bisa dihubungi, "
+                    "jadi kolom Modal dan Margin disembunyikan sementara. Pencarian "
+                    "barang dan perubahan harga tetap berjalan seperti biasa."
+                )
 
     out = []
     for b in barang:
@@ -596,7 +610,7 @@ def list_harga_pecahan(profile) -> list[dict]:
     return out
 
 
-def update_harga(profile, kd_barang: str, prices: dict) -> list[dict]:
+def update_harga(profile, kd_barang: str, prices: dict, status: dict | None = None) -> list[dict]:
     """Update harga_jual (dan margin) per satuan. `prices`: {kd_satuan: harga_jual}.
 
     Retail: margin = markup atas modal (harga_jual server sumber-modal). Non-retail:
@@ -611,12 +625,33 @@ def update_harga(profile, kd_barang: str, prices: dict) -> list[dict]:
     prices = _cek_harga_bulat(prices)
     modal: dict = {}
     is_retail = _is_retail(profile)
+    # Retail dgn sumber-modal yang tak terbaca: harga TETAP disimpan, margin TIDAK
+    # disentuh. Ketiga pilihan lain lebih buruk —
+    #   menggagalkan simpan  : server referensi yang mati memblokir pekerjaan utama
+    #                          kasir, padahal harga itu miliknya sendiri;
+    #   menulis margin 0     : menghapus margin tersimpan (persis kerusakan yang
+    #                          dihindari cabang non-retail di bawah);
+    #   diam saja            : margin jadi basi tanpa ada yang tahu.
+    # Karena itu ia disimpan apa adanya DAN dilaporkan lewat `status`, supaya
+    # caller bisa memberi tahu bahwa margin belum dihitung ulang.
+    tulis_margin = is_retail
     if is_retail:
         cost = mssql.get_cost_source(profile)
         if cost:
-            with mssql.cursor(cost) as cur:
-                cur.execute("SELECT kd_satuan, harga_jual FROM m_barang_satuan WHERE kd_barang = ?", [kd_barang])
-                modal = {_st(r["kd_satuan"]): _f(r["harga_jual"]) for r in _dictify(cur)}
+            try:
+                with mssql.cursor(cost) as cur:
+                    cur.execute(
+                        "SELECT kd_satuan, harga_jual FROM m_barang_satuan WHERE kd_barang = ?",
+                        [kd_barang])
+                    modal = {_st(r["kd_satuan"]): _f(r["harga_jual"]) for r in _dictify(cur)}
+            except pyodbc.Error:
+                tulis_margin = False
+                if status is not None:
+                    status["modal_error"] = (
+                        f"Server sumber modal '{cost.name}' tidak bisa dihubungi. "
+                        "Harga tersimpan, tetapi margin tidak dihitung ulang — "
+                        "nilai margin lama dibiarkan apa adanya."
+                    )
 
     changes: list[dict] = []
     with mssql.cursor(profile, autocommit=False) as cur:
@@ -627,7 +662,7 @@ def update_harga(profile, kd_barang: str, prices: dict) -> list[dict]:
             ks = _st(kd_satuan)
             harga = _f(harga)
             lama = harga_lama.get(ks, 0.0)
-            if is_retail:
+            if tulis_margin:
                 cur.execute(
                     "UPDATE m_barang_satuan SET harga_jual = ?, margin = ? WHERE kd_barang = ? AND kd_satuan = ?",
                     [harga, _margin(harga, modal.get(ks, 0.0)), kd_barang, kd_satuan],

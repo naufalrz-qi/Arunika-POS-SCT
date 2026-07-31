@@ -98,9 +98,21 @@ Cabang lain menerima nama baru itu lewat **Sinkronisasi Master Data**, bukan oto
 | Server gudang | Tidak ada — gudang yang jadi acuan, tidak ada harga lain untuk diikuti |
 
 **Fitur ini opsional dan tidak pernah menghalangi apa pun.** Mengisi **Sumber Modal** pada
-koneksi tidak wajib, dan kalau server gudangnya sedang mati itu juga bukan masalah — akibatnya
-hanya satu: tidak ada barang yang disarankan. Mengubah harga dan status tetap berjalan seperti
-biasa.
+koneksi tidak wajib, dan kalau server gudangnya sedang mati itu juga bukan masalah.
+
+Yang terjadi kalau server sumber modal (gudang) mati:
+
+| Tetap berjalan | Hilang sementara |
+|---|---|
+| Mencari barang di Update Barang | Kolom **Modal** dan **Margin** pada kartu barang |
+| Mengubah harga jual | Daftar **Saran Harga** (jadi kosong) |
+| Mengubah status ketersediaan | — |
+| Semua menu lain | — |
+
+Aplikasi memberi tahu lewat pemberitahuan biru di atas daftar barang. Khusus toko retail:
+harga tetap tersimpan, tetapi **margin tidak dihitung ulang** — nilai margin lama dibiarkan apa
+adanya, dan itu disebutkan saat menyimpan. Setelah gudang hidup lagi, simpan ulang harga barang
+tersebut kalau marginnya perlu diperbarui.
 
 Buka tombol **Saran Harga** untuk melihat alasannya kalau daftarnya kosong:
 

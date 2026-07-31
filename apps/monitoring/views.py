@@ -500,14 +500,19 @@ def update_barang_index(request):
     # tanpa cache hangat (core/cache.py) — shell (filter, dsb) tetap tampil instan.
     def load_items():
         items, conn_error = [], None
+        # `status` diisi services bila sumber modal tak bisa dibaca. Itu BUKAN
+        # kegagalan: barang tetap terbaca dari server aktif, hanya kolom Modal &
+        # Margin yang hilang — jadi ia kanal sendiri, bukan conn_error.
+        status: dict = {}
         if profile:
             try:
-                items = master.list_barang_edit(profile, search)
+                items = master.list_barang_edit(profile, search, status=status)
             except pyodbc.Error as exc:
                 conn_error = mssql.friendly_error(exc, "Gagal membaca barang")
         else:
             conn_error = CONN_ERROR
-        return {"rows": items, "conn_error": conn_error}
+        return {"rows": items, "conn_error": conn_error,
+                "modal_error": status.get("modal_error")}
 
     # Saran harga: katalog PENUH (bukan hasil search/TOP di atas) — tombol
     # "Saran Harga" harus melihat semua barang, bukan cuma yang sedang tampil.
@@ -564,8 +569,9 @@ def update_barang_harga(request):
     kd_barang = (data.get("kd_barang") or "").strip()
     nama_barang = (data.get("nama") or "").strip()
     prices = data.get("prices") or {}  # {kd_satuan: harga_jual}
+    status: dict = {}
     try:
-        changes = master.update_harga(profile, kd_barang, prices)
+        changes = master.update_harga(profile, kd_barang, prices, status=status)
         log_barang_updates(
             request, profile, kd_barang, nama_barang,
             [
@@ -574,7 +580,12 @@ def update_barang_harga(request):
             ],
         )
         log_activity(request, "barang", f"Update harga {kd_barang} ({profile.name}): {len(changes)} satuan")
-        request.session["flash_success"] = f"Harga {kd_barang} diperbarui ({len(changes)} satuan)."
+        pesan = f"Harga {kd_barang} diperbarui ({len(changes)} satuan)."
+        # Sumber modal mati = harga tetap tersimpan, margin tak dihitung ulang.
+        # Harus DIKATAKAN: margin yang diam-diam basi tak punya gejala apa pun.
+        if status.get("modal_error"):
+            request.session["flash_error"] = status["modal_error"]
+        request.session["flash_success"] = pesan
     except master.HargaTidakBulat as exc:
         request.session["flash_error"] = f"Harga {kd_barang} ditolak. {exc}"
     except pyodbc.Error as exc:
@@ -616,9 +627,10 @@ def update_barang_harga_massal(request):
     # ponytail: satu transaksi per barang (update_harga sudah atomic per barang).
     # Kalau jumlah baris tumbuh sampai ribuan, baru pertimbangkan batch tunggal.
     total, gagal = 0, []
+    status: dict = {}
     for kb, prices in per_barang.items():
         try:
-            changes = master.update_harga(profile, kb, prices)
+            changes = master.update_harga(profile, kb, prices, status=status)
         except master.HargaTidakBulat as exc:
             gagal.append(f"{kb} ({exc})")
             continue
@@ -644,6 +656,10 @@ def update_barang_harga_massal(request):
             + (" …" if len(gagal) > 5 else "")
         )
     else:
+        # Sumber modal mati tidak menggagalkan apa pun, tapi tetap dikatakan:
+        # margin yang diam-diam tidak terhitung ulang tak punya gejala apa pun.
+        if status.get("modal_error"):
+            request.session["flash_error"] = status["modal_error"]
         request.session["flash_success"] = f"{total} satuan harga diperbarui pada {len(per_barang)} barang."
     return _redirect_back(data, "/admin-panel/master/update-barang")
 

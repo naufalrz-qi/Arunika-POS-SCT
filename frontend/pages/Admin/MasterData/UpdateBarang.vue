@@ -34,9 +34,14 @@ const pecahanData = computed(() => props.pecahan || {});
 const pecahanRows = computed(() => pecahanData.value.rows || []);
 
 const isRetail = computed(() => props.profile_type === "retail");
+// Sumber modal yang tak bisa dihubungi BUKAN kegagalan: barang tetap terbaca dari
+// server aktif, hanya kolom Modal & Margin yang tak punya isi. Server mengirimnya
+// lewat kanal sendiri (modal_error), terpisah dari conn_error, supaya daftar
+// barang tetap tampil dan tetap bisa dicari.
+const modalError = computed(() => data.value.modal_error || null);
 // Modal & margin tampil kapan pun server punya sumber-modal (cost_source):
-// retail → grosir/gudang, grosir → gudang.
-const showModal = computed(() => props.has_modal);
+// retail → grosir/gudang, grosir → gudang — DAN sumber itu benar-benar terbaca.
+const showModal = computed(() => props.has_modal && !modalError.value);
 
 // Sumber saran harga ditentukan SERVER (master.saran_harga), bukan ditebak dari
 // tipe koneksi di sini — kalau tidak, layar dan daftar bisa mengklaim dua hal
@@ -385,6 +390,8 @@ async function openRiwayat(item) {
       </template>
 
       <Banner v-if="data.conn_error" variant="warning" :message="data.conn_error" />
+      <!-- Pemberitahuan, bukan error: daftar di bawahnya tetap terisi. -->
+      <Banner v-if="modalError" variant="info" :message="modalError" class="mb-3" />
 
       <div
         v-if="visibleItems.length > 0"
