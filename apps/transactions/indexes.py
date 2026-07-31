@@ -134,8 +134,9 @@ INDEXES = {
     ),
     # --- movement engine composites (apps/inventory/services.py _movement_sql) --
     "IX_mbarangdivisi_barang_divisi": (
-        # [0] "Stok Awal" block filters bd.kd_barang/bd.kd_divisi; also read in
-        # full by list_barang_edit (apps/master_data/services.py).
+        # [0] "Stok Awal" block filters bd.kd_barang/bd.kd_divisi; juga dipakai
+        # list_barang_edit (apps/master_data/services.py), yang menyaring
+        # kd_barang lewat subquery TOP alih-alih membaca tabelnya utuh.
         "CREATE NONCLUSTERED INDEX IX_mbarangdivisi_barang_divisi ON m_barang_divisi (kd_barang, kd_divisi)"
     ),
     "IX_topname_stok_tanggal_divisi_barang": (

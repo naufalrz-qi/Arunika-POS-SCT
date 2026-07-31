@@ -224,6 +224,60 @@ def list_customers(profile, search: str = "") -> list[dict]:
 _STATUS_TABLES = {"m_barang", "m_barang_divisi", "m_barang_satuan"}
 
 
+# Batas jumlah placeholder per query IN(...). MS SQL menolak >2100 parameter;
+# MAX_ROWS saat ini 500, jadi praktis selalu satu bagian — potongan ini semata
+# menjaga query tetap SAH kalau MAX_ROWS dinaikkan, bukan mempercepatnya:
+# terukur 500/250/100/50 kode sama-sama ~1,9 detik, jadi ongkosnya ada di
+# pengiriman parameter, bukan kompilasi rencana query.
+_IN_CHUNK = 900
+
+
+def _kelompokkan(cur) -> dict[str, list]:
+    by_barang: dict[str, list] = {}
+    for r in _dictify(cur):
+        by_barang.setdefault(_st(r["kd_barang"]), []).append(r)
+    return by_barang
+
+
+def _rows_sekatalog(cur, select_sql: str, where_sql: str, params: list) -> dict[str, list]:
+    """Baca `select_sql` hanya untuk barang yang tampil, di server yang sama.
+
+    SENGAJA TIDAK di-cache. Harga di m_barang_satuan kerap diubah dari luar
+    Arunika (aplikasi POS lama, SSMS) dan penulisan itu tak memanggil
+    invalidate_master_cache(), jadi salinan ter-cache-nya basi sampai TTL habis —
+    di halaman yang justru dipakai mengedit harga.
+
+    Penyaringnya subquery, bukan daftar IN(?,?,…) berisi 500 kode: keduanya
+    memilih baris yang sama persis, tapi terukur di SERVER-TOYS subquery 0,02
+    detik lawan 1,98 detik untuk 500 parameter (scan penuh yang digantikannya
+    0,34 detik). Predikatnya HARUS sama dengan query m_barang di atas — kalau
+    berbeda, satuan yang terbaca bukan milik barang yang tampil.
+    """
+    cur.execute(
+        f"{select_sql} WHERE kd_barang IN ("
+        f"SELECT TOP {MAX_ROWS} kd_barang FROM m_barang WHERE {where_sql} ORDER BY nama)",
+        params,
+    )
+    return _kelompokkan(cur)
+
+
+def _rows_lintas_server(cur, select_sql: str, kode: list[str]) -> dict[str, list]:
+    """Sama, tapi untuk server LAIN (sumber modal): kode dikirim sebagai parameter.
+
+    Subquery tak bisa dipakai di sini — katalog server sumber sedikit berbeda
+    (55.390 vs 55.488 baris), jadi `TOP 500 ORDER BY nama` di sana bisa memilih
+    himpunan barang yang lain dan modal jadi kosong diam-diam untuk sebagian
+    baris. Terukur 0,70 detik di SERVER-GUDANG — dibayar demi ketepatan.
+    """
+    by_barang: dict[str, list] = {}
+    for i in range(0, len(kode), _IN_CHUNK):
+        bagian = kode[i:i + _IN_CHUNK]
+        cur.execute(f"{select_sql} WHERE kd_barang IN ({','.join('?' * len(bagian))})", bagian)
+        for kb, rs in _kelompokkan(cur).items():
+            by_barang.setdefault(kb, []).extend(rs)
+    return by_barang
+
+
 def list_barang_edit(profile, search: str = "", status: dict | None = None) -> list[dict]:
     """Barang + satuan (harga_jual/margin/status) + status divisi, untuk edit.
 
@@ -234,6 +288,9 @@ def list_barang_edit(profile, search: str = "", status: dict | None = None) -> l
     ke layar — sejauh ini hanya `modal_error`. Dipakai out-param, bukan nilai
     kembalian, supaya bentuk kembaliannya (list baris) tak berubah untuk pemanggil
     lain yang tak peduli.
+
+    Harga dan status dibaca segar tiap panggilan (lihat `_rows_sekatalog`); yang
+    di-cache hanya peta nama satuan/kategori/divisi, yang isinya label.
     """
     where, params = ["1=1"], []
     if search:
@@ -258,23 +315,16 @@ def list_barang_edit(profile, search: str = "", status: dict | None = None) -> l
             profile, "divisi_names", lambda: _key_map(cur, "SELECT kd_divisi, nama FROM m_divisi", "kd_divisi", "nama")
         )
 
-        def _build_satuan_edit():
-            cur.execute("SELECT kd_barang, kd_satuan, jumlah, harga_jual, margin, status FROM m_barang_satuan")
-            by_barang: dict[str, list] = {}
-            for r in _dictify(cur):
-                by_barang.setdefault(_st(r["kd_barang"]), []).append(r)
-            return by_barang
-
-        satuan_by = _cached(profile, "satuan_edit", _build_satuan_edit)
-
-        def _build_divisi_status():
-            cur.execute("SELECT kd_barang, kd_divisi, status FROM m_barang_divisi")
-            by_barang: dict[str, list] = {}
-            for r in _dictify(cur):
-                by_barang.setdefault(_st(r["kd_barang"]), []).append(r)
-            return by_barang
-
-        divisi_by = _cached(profile, "divisi_status", _build_divisi_status)
+        kode = [_st(b["kd_barang"]) for b in barang]
+        satuan_by = _rows_sekatalog(
+            cur,
+            "SELECT kd_barang, kd_satuan, jumlah, harga_jual, margin, status FROM m_barang_satuan",
+            where_sql,
+            params,
+        )
+        divisi_by = _rows_sekatalog(
+            cur, "SELECT kd_barang, kd_divisi, status FROM m_barang_divisi", where_sql, params
+        )
 
     is_retail = _is_retail(profile)
     # Modal per satuan = harga_jual server sumber-modal (cost_source): retail →
@@ -285,10 +335,19 @@ def list_barang_edit(profile, search: str = "", status: dict | None = None) -> l
     has_modal = bool(cost)
     modal_all: dict[str, dict] = {}
     if cost:
-        # Keyed by the cost-source profile itself: multiple profiles sharing one
-        # grosir/gudang source reuse a single cached read.
+        # Dibaca segar dan sebatas barang yang tampil, sama alasannya dengan
+        # satuan/divisi di atas: harga di server sumber pun diubah dari luar
+        # Arunika, dan modal yang basi membuat kolom Margin ikut salah.
         try:
-            modal_all = _cached(cost, "cost_satuan_price", lambda: _harga_satuan(cost))
+            with mssql.cursor(cost) as cost_cur:
+                modal_all = {
+                    kb: {_st(r["kd_satuan"]): _f(r["harga_jual"]) for r in rs}
+                    for kb, rs in _rows_lintas_server(
+                        cost_cur,
+                        "SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan",
+                        kode,
+                    ).items()
+                }
         except pyodbc.Error:
             # Sumber modal cuma REFERENSI, bukan sumber katalog. Barang server
             # AKTIF sudah terbaca di atas; menggagalkan seluruh daftar karena
@@ -391,8 +450,12 @@ def list_saran_harga(profile) -> list[dict]:
                 by_barang.setdefault(_st(r["kd_barang"]), []).append(r)
             return by_barang
 
-        # Cache key sama dengan list_barang_edit — saling berbagi hasil baca.
-        satuan_by = _cached(profile, "satuan_edit", _build_satuan_edit)
+        # Halaman ini menimbang SELURUH katalog (tak dibatasi MAX_ROWS), jadi
+        # bacaan penuh + cache memang tempatnya di sini — beda dari
+        # list_barang_edit yang kini membaca segar sebatas barang yang tampil.
+        # Konsekuensinya: kolom harga di daftar saran bisa tertinggal sampai TTL
+        # habis bila harga diubah dari luar Arunika.
+        satuan_by = _cached(profile, "satuan_saran", _build_satuan_edit)
 
     out = []
     for b in barang:

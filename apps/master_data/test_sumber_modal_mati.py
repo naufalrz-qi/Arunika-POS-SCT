@@ -36,22 +36,23 @@ class DaftarBarangTetapTerbaca(TestCase):
         cur.fetchall.return_value = []
         cur.description = [("kd_barang",), ("kd_kategori",), ("nama",),
                            ("keterangan",), ("status",)]
-        ctx = mock.MagicMock()
-        ctx.__enter__.return_value = cur
-        ctx.__exit__.return_value = False
-        # HANYA pembacaan sumber-modal yang gagal. Membuat seluruh _cached gagal
-        # akan ikut menjatuhkan pembacaan server AKTIF, sehingga tes lulus karena
-        # alasan yang salah — persis kebalikan dari yang sedang dijaga.
-        def _cached_selektif(p, name, build, *a, **kw):
+        sehat = mock.MagicMock()
+        sehat.__enter__.return_value = cur
+        sehat.__exit__.return_value = False
+
+        # HANYA koneksi ke sumber-modal yang gagal — dipilih per profil, bukan
+        # per urutan panggilan. Membuat SEMUA koneksi gagal akan ikut
+        # menjatuhkan pembacaan server AKTIF, sehingga tes lulus karena alasan
+        # yang salah — persis kebalikan dari yang sedang dijaga.
+        def _cursor_selektif(p, *a, **kw):
             if p.pk == self.g.pk:
-                raise pyodbc.Error("08001", "gudang mati")
-            return build()
+                mati = mock.MagicMock()
+                mati.__enter__.side_effect = pyodbc.Error("08001", "gudang mati")
+                return mati
+            return sehat
 
         status: dict = {}
-        with (
-            mock.patch.object(master.mssql, "cursor", return_value=ctx),
-            mock.patch.object(master, "_cached", side_effect=_cached_selektif),
-        ):
+        with mock.patch.object(master.mssql, "cursor", side_effect=_cursor_selektif):
             rows = master.list_barang_edit(self.gr, status=status)
         return rows, status
 
