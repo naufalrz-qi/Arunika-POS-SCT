@@ -45,6 +45,9 @@ python manage.py seed_dev        # seed admin user + dev connection profile
 python manage.py ensure_indexes  # create report/stock indexes on MS SQL (idempotent)
 python manage.py check_stock_agg # self-check: SQL aggregation vs Python aggregation
 python manage.py sync_cdc        # sync report_source replica via CDC (--backfill for initial full copy)
+python manage.py sync_feed --source GUDANG --dry-run   # fan-out master data gudang → toko
+python manage.py init_hub --hub AMPHOREUS --ref GUDANG # create/refresh the AMPHOREUS hub schema (idempotent)
+python manage.py sync_hub --hub AMPHOREUS --dry-run    # pull all branches into the hub
 ```
 
 ## Architecture
@@ -60,6 +63,8 @@ python manage.py sync_cdc        # sync report_source replica via CDC (--backfil
 - `apps/transactions/services.py` — dashboard KPIs, report aggregation, index helpers.
 - `apps/master_data/services.py` — products/customers, price update/compare.
 - `apps/transactions/cdc_sync.py` — optional reporting-replica sync via SQL Server CDC (see `context.md` § Reporting replica). `ServerProfile.report_source` + `core/mssql.get_report_source()` route report reads to the replica when configured; write paths always target the primary profile.
+- `apps/transactions/hub_sync.py` + `hub_schema.py` — **AMPHOREUS**, our own central database (`SERVER-RETAIL`/`AMPHOREUS`) holding gudang + 8 grosir (retail is out of scope). Read `context.md` § AMPHOREUS before changing it: the hub schema is *generated* from a reference branch rather than hand-written, `kd_sumber` must lead every primary key (nothing in the legacy data identifies the source server, and `no_transaksi` collides across servers), detail tables deliberately have no PK, and detail rows are pulled by the *header* feed because some branches emit no detail feed at all.
+- `apps/monitoring/services_sync.py` + `apps/transactions/feed_sync.py` — cross-server sync we own, alongside the legacy SQL Agent jobs in `scripts/job/` (which cannot be replaced: the central PHP/MySQL sink is not ours and the DB triggers belong to the legacy POS app). Read `context.md` § Sinkronisasi antar-server before touching either — it records why the change feed is `tbl_log_transaksi` and not `tbl_tmp_post`, why the `key__` prefix in `formatted_data` must not be ignored, and why `m_barang_divisi` is deliberately outside the allowlist.
 
 **MS SQL gotcha — key normalization.** SQL Server collation is case-insensitive and ignores trailing spaces; Python dict keys are not. When joining SQL result sets on `kd_*` keys in Python, normalize both sides with the `_k()` helper (see `apps/inventory/services.py`). Mismatched joins silently drop rows otherwise.
 

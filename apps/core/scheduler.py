@@ -163,6 +163,104 @@ def _warm_master(profile, include_stok=False) -> None:
              " (+stok kolumnar)" if include_stok else "", time.monotonic() - t0)
 
 
+def _run_due_sync_health(profile) -> None:
+    """Rekam satu sampel kesehatan sync untuk `profile`. Tiap tick, bukan harian.
+
+    Sync yang mati perlu ketahuan dalam hitungan menit. Halaman Kesehatan Sync
+    membaca angka langsung saat dibuka; yang ditulis di sini adalah RIWAYATnya —
+    tanpa itu "antre 8.000" tak bisa dibedakan dari "antre 8.000 dan naik terus
+    sejak Mei". Murah: semua kuerinya seek/metadata, bukan scan.
+    """
+    from apps.monitoring import services_sync
+
+    try:
+        hasil = services_sync.sync_health(profile)
+        services_sync.simpan_sample(hasil)
+    except Exception as exc:  # pragma: no cover — pemantauan tak boleh menjatuhkan tick
+        log.warning("sampel kesehatan sync gagal (%s): %s", profile.name, exc)
+
+
+def _run_due_feed_sync() -> None:
+    """Fan-out master data dari server sumber ke semua toko. Tiap tick.
+
+    Default MATI (FEED_SYNC_ENABLED=0): deploy tidak boleh langsung mulai
+    memindahkan data antar-server produksi. Dinyalakan sadar-sadar lewat .env
+    sesudah `manage.py sync_feed --dry-run` diperiksa.
+
+    Env:
+    - FEED_SYNC_ENABLED (default 0)
+    - FEED_SYNC_SOURCE (default "GUDANG") — nama ServerProfile sumber.
+    - FEED_SYNC_TARGETS — CSV nama profil tujuan. Kosong = semua kecuali sumber.
+    - FEED_SYNC_LIMIT (default 2000) — baris feed per tujuan per tick.
+    """
+    from apps.connections.models import ServerProfile
+    from apps.transactions import feed_sync
+
+    nama_sumber = os.environ.get("FEED_SYNC_SOURCE", "GUDANG")
+    source = ServerProfile.objects.filter(name=nama_sumber).first()
+    if not source:
+        log.warning("feed_sync: profil sumber '%s' tidak ada — dilewati.", nama_sumber)
+        return
+
+    csv = os.environ.get("FEED_SYNC_TARGETS", "").strip()
+    qs = ServerProfile.objects.exclude(pk=source.pk)
+    if csv:
+        qs = qs.filter(name__in=[n.strip() for n in csv.split(",") if n.strip()])
+    targets = list(qs.order_by("name"))
+    if not targets:
+        return
+
+    try:
+        limit = max(1, int(os.environ.get("FEED_SYNC_LIMIT", "2000")))
+    except ValueError:
+        limit = 2000
+
+    for hasil in feed_sync.sync_all(source, targets, limit=limit):
+        if hasil["status"] == "failed":
+            log.warning("feed_sync %s -> %s GAGAL: %s", hasil["source"], hasil["target"], hasil["error"])
+        elif hasil["diterapkan"] or hasil["dilewati"]:
+            log.info(
+                "feed_sync %s -> %s: %s diterapkan, %s dead-letter, sampai id %s",
+                hasil["source"], hasil["target"], hasil["diterapkan"], hasil["dilewati"], hasil["sampai_id"],
+            )
+
+
+def _run_due_hub_sync() -> None:
+    """Tarik perubahan tiap cabang ke pusat AMPHOREUS. Tiap tick.
+
+    Default MATI (HUB_SYNC_ENABLED=0). Cabang tanpa `kode_sumber` dilewati, bukan
+    ditebak — tanpa kode, barisnya tak bisa dibedakan dari cabang lain di pusat.
+
+    Env: HUB_SYNC_ENABLED (0), HUB_NAME (AMPHOREUS), HUB_SYNC_LIMIT (2000).
+    """
+    from apps.connections.models import ServerProfile
+    from apps.transactions import hub_sync
+
+    nama_hub = os.environ.get("HUB_NAME", "AMPHOREUS")
+    hub = ServerProfile.objects.filter(name=nama_hub).first()
+    if not hub:
+        log.warning("hub_sync: profil pusat '%s' tidak ada — dilewati.", nama_hub)
+        return
+    sumber = hub_sync.sumber_profiles()
+    if not sumber:
+        log.warning("hub_sync: tidak ada cabang ber-kode_sumber — dilewati.")
+        return
+    try:
+        limit = max(1, int(os.environ.get("HUB_SYNC_LIMIT", "2000")))
+    except ValueError:
+        limit = 2000
+
+    for hasil in hub_sync.sync_all(hub, sumber, limit=limit):
+        if hasil["status"] == "failed":
+            log.warning("hub_sync %s GAGAL: %s", hasil["source"], hasil["error"])
+        elif hasil["diterapkan"] or hasil["dilewati"]:
+            log.info(
+                "hub_sync %s [%s]: %s diterapkan, %s nota, %s dead-letter, sampai id %s",
+                hasil["source"], hasil["kd_sumber"], hasil["diterapkan"],
+                hasil["nota"], hasil["dilewati"], hasil["sampai_id"],
+            )
+
+
 def _run_due_jobs() -> None:
     """Jalankan snapshot untuk SEMUA profil (bukan hanya koneksi aktif) — tiap
     server/database butuh snapshotnya sendiri. Berurutan, per-profil terisolasi:
@@ -175,6 +273,7 @@ def _run_due_jobs() -> None:
     stok_on = _stok_enabled()
     harga_on = _harga_enabled()
     warm_on = _warm_enabled()
+    health_on = _flag("SYNC_HEALTH_ENABLED")
     # Payload kolumnar Stok Akhir (~5 MB) hanya dibangun untuk profil DEFAULT.
     # Koneksi aktif sebenarnya per-pengguna (sesi), jadi thread latar ini tak
     # punya "yang aktif" — get_active_profile() pun jatuh ke is_default saat
@@ -184,6 +283,8 @@ def _run_due_jobs() -> None:
     default_pk = ServerProfile.objects.filter(is_default=True).values_list("pk", flat=True).first()
     for profile in ServerProfile.objects.all():
         try:
+            if health_on:
+                _run_due_sync_health(profile)
             if warm_on:
                 _warm_master(profile, include_stok=profile.pk == default_pk)
             if stok_on:
@@ -192,6 +293,19 @@ def _run_due_jobs() -> None:
                 _run_due_harga(now, profile)
         except Exception:  # pragma: no cover — profil gagal tak hentikan lainnya
             log.exception("scheduler snapshot gagal untuk profil %s", getattr(profile, "name", "?"))
+
+    # Di luar loop per-profil: fan-out punya sumbernya sendiri, bukan sesuatu
+    # yang dikerjakan sekali untuk tiap profil yang lewat.
+    if _flag("FEED_SYNC_ENABLED", "0"):
+        try:
+            _run_due_feed_sync()
+        except Exception:  # pragma: no cover — tick harus tetap hidup
+            log.exception("feed_sync gagal")
+    if _flag("HUB_SYNC_ENABLED", "0"):
+        try:
+            _run_due_hub_sync()
+        except Exception:  # pragma: no cover — tick harus tetap hidup
+            log.exception("hub_sync gagal")
 
 
 def _loop() -> None:
@@ -208,7 +322,11 @@ def _loop() -> None:
 def start_scheduler() -> None:
     """Idempotent: mulai satu daemon thread. Dipanggil dari config/wsgi.py."""
     global _started
-    if not (_harga_enabled() or _stok_enabled() or _warm_enabled()):
+    if not (
+        _harga_enabled() or _stok_enabled() or _warm_enabled()
+        or _flag("SYNC_HEALTH_ENABLED") or _flag("FEED_SYNC_ENABLED", "0")
+        or _flag("HUB_SYNC_ENABLED", "0")
+    ):
         return
     with _lock:
         if _started:

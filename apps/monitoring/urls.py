@@ -14,6 +14,7 @@ urlpatterns = [
     path("master/customers", views.customers_index, name="customers"),
     path("master/suppliers", views.suppliers_index, name="suppliers"),
     path("master/sync-history", views.sync_history_index, name="sync_history"),
+    path("master/sync-health", views.sync_health_index, name="sync_health"),
     path("master/update-barang", views.update_barang_index, name="update_barang"),
     path("master/update-barang/harga", views.update_barang_harga, name="update_barang_harga"),
     path("master/update-barang/harga-massal", views.update_barang_harga_massal, name="update_barang_harga_massal"),
@@ -40,6 +41,9 @@ urlpatterns = [
     path("inventory/transaksi/export", views.transaksi_barang_export, name="transaksi_barang_export"),
     path("inventory/opname", views.opname, name="opname"),
     path("inventory/opname/export", views.opname_export, name="opname_export"),
+    path("inventory/opname-neraca", views.opname_neraca, name="opname_neraca"),
+    path("inventory/opname-neraca/export", views.opname_neraca_export, name="opname_neraca_export"),
+    path("inventory/opname-neraca/detail", views.opname_neraca_detail, name="opname_neraca_detail"),
     # Laporan penjualan / pembelian
     path("laporan/penjualan", views.penjualan_all, name="penjualan_all"),
     path("laporan/penjualan/export", views.penjualan_all_export, name="penjualan_all_export"),

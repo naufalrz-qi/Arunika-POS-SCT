@@ -9,11 +9,15 @@ from django.test import SimpleTestCase, TestCase
 
 from apps.auth_app.models import DATA_KEY_SET, Role, User
 from apps.monitoring.views import _KLASIFIKASI_UANG, _hidden_fields, _tanpa_kolom
+from apps.transactions.reports import UANG_OPNAME_NERACA
 
 # Kolom uang milik Klasifikasi Pelanggan. Diambil dari sumbernya, bukan ditulis
 # ulang: daftar yang dijiplak akan tetap hijau justru ketika seseorang menambah
 # kolom uang baru dan lupa mendaftarkannya.
 _UANG_KLASIFIKASI = set(_KLASIFIKASI_UANG)
+# Idem untuk Neraca Opname: rupiah selisih stok, disajikan di tiga rute
+# (tabel, export, detail JSON).
+_UANG_NERACA = set(UANG_OPNAME_NERACA)
 
 
 def _payload():
@@ -80,7 +84,10 @@ class HiddenFields(TestCase):
         # rupiah per barang di tabel Fast Moving di bawahnya masih tampil —
         # cukup untuk menjumlahkan sendiri apa yang baru saja disembunyikan.
         u = User.objects.create_user("u2", role=Role.ADMIN, hidden_data_keys=["nominal"])
-        self.assertEqual(_hidden_fields(_Req(u)), {"nominal", "revenue", "nilai"} | _UANG_KLASIFIKASI)
+        self.assertEqual(
+            _hidden_fields(_Req(u)),
+            {"nominal", "revenue", "nilai"} | _UANG_KLASIFIKASI | _UANG_NERACA,
+        )
 
     def test_nominal_menutup_seluruh_kolom_uang_klasifikasi_pelanggan(self):
         # Diuji terpisah dari daftar di atas supaya jelas apa yang dijaga: halaman

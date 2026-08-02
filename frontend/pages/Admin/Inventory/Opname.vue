@@ -22,8 +22,10 @@ const columns = [
   { key: "tanggal", label: "Tanggal", format: "date" },
   { key: "divisi", label: "Divisi" },
   { key: "barang", label: "Barang" },
-  { key: "qty_sistem", label: "Qty Sistem", align: "right", format: "number" },
-  { key: "qty_fisik", label: "Qty Fisik", align: "right", format: "number" },
+  // Dulu "Qty Sistem"/"Qty Fisik" — keduanya menyesatkan: t_opname_stok tak
+  // menyimpan saldo stok, hanya besar koreksi dan arahnya.
+  { key: "koreksi_masuk", label: "Koreksi Masuk", align: "right", format: "number" },
+  { key: "koreksi_keluar", label: "Koreksi Keluar", align: "right", format: "number" },
   { key: "diferensi", label: "Diferensi", align: "right", format: "number" },
 ];
 
@@ -31,9 +33,13 @@ const divisiOptions = computed(() => props.report?.options?.divisi || []);
 const summaryItems = computed(() => {
   const s = props.report?.summary || {};
   const nf = new Intl.NumberFormat("id-ID");
+  // Bruto ditampilkan di sebelah neto: "Total Selisih" saja menyembunyikan
+  // sesi yang plus dan minusnya saling meniadakan di angka 0.
   return [
     { label: "Jumlah Opname", value: nf.format(s.jml_baris || 0) },
-    { label: "Total Selisih", value: nf.format(s.total_diferensi || 0) },
+    { label: "Koreksi Masuk", value: nf.format(s.total_masuk || 0) },
+    { label: "Koreksi Keluar", value: nf.format(s.total_keluar || 0) },
+    { label: "Selisih Neto", value: nf.format(s.total_diferensi || 0) },
   ];
 });
 </script>
@@ -60,7 +66,7 @@ const summaryItems = computed(() => {
           <FilterSection title="Periode & Pencarian">
             <DateRangeField class="sm:col-span-2" v-model:from="form.date_from" v-model:to="form.date_to" />
             <SelectSearch v-model="form.kd_divisi" :options="divisiOptions" label="Divisi" />
-            <Input v-model="form.search" label="Cari" placeholder="no opname / barang / divisi" />
+            <Input v-model="form.search" label="Cari" placeholder="no opname / kode / nama barang" />
           </FilterSection>
         </FilterPanel>
       </template>

@@ -47,6 +47,10 @@ ALL_MENUS = [
     {"key": "stok_awal", "label": "Stok Awal Barang", "icon": "box", "href": "/admin-panel/inventory/stok-awal", "section": "stok"},
     {"key": "transaksi_barang", "label": "Transaksi Barang", "icon": "list", "href": "/admin-panel/inventory/transaksi", "section": "stok"},
     {"key": "opname", "label": "Opname Stok", "icon": "clipboard", "href": "/admin-panel/inventory/opname", "section": "stok"},
+    # Section "stok" sudah cukup: "Operasional" bukan section backend, melainkan
+    # tab navbar (useNav.js) yang menggabungkan stok+promo+kas. Rute /export dan
+    # /detail mewarisi menu key ini lewat pencocokan prefix di menu_key_for_path.
+    {"key": "opname_neraca", "label": "Neraca Opname", "icon": "chart", "href": "/admin-panel/inventory/opname-neraca", "section": "stok"},
     # Analitik (FMI)
     {"key": "fmi_penjualan", "label": "FMI Penjualan", "icon": "trending", "href": "/admin-panel/analitik/fmi-penjualan", "section": "analitik"},
     {"key": "fmi_stok", "label": "FMI Stok", "icon": "chart", "href": "/admin-panel/analitik/fmi-stok", "section": "analitik"},
@@ -71,6 +75,10 @@ ALL_MENUS = [
     {"key": "sync_harga", "label": "Sinkronisasi Harga", "icon": "refresh", "href": "/admin-panel/master/sync-harga", "section": "master_sync"},
     {"key": "sync_master", "label": "Sinkronisasi Master Data", "icon": "refresh", "href": "/admin-panel/master/sync-master", "section": "master_sync"},
     {"key": "sync_history", "label": "Riwayat Sinkronisasi", "icon": "list", "href": "/admin-panel/master/sync-history", "section": "master_sync"},
+    # Superadmin-only: memperlihatkan kondisi seluruh armada server sekaligus
+    # (antrean menumpuk, sync yang mati), bukan data satu koneksi yang sedang
+    # dipakai. Itu urusan yang memegang seluruh jaringan toko, bukan per-admin.
+    {"key": "sync_health", "label": "Kesehatan Sync", "icon": "power", "href": "/admin-panel/master/sync-health", "section": "master_sync", "superadmin_only": True},
     # Administrasi
     {"key": "users", "label": "Manajemen User", "icon": "users", "href": "/admin-panel/users", "section": "admin"},
     {"key": "connections", "label": "Koneksi Server", "icon": "server", "href": "/admin-panel/connections", "section": "admin"},

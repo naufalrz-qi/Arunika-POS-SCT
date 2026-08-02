@@ -39,6 +39,17 @@ class ServerProfile(models.Model):
     report_source = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="report_children"
     )
+    # Kode cabang untuk pusat data AMPHOREUS (apps/transactions/hub_sync.py).
+    #
+    # Wajib ditetapkan manual, dan sengaja TIDAK diturunkan dari `name`: tidak ada
+    # satu pun kolom di data legacy yang menandai server asal — `divisi_id` di feed
+    # bernilai DAA000/DAA004 di SEMUA server, dan `m_divisi.kd_divisi` juga DAA000
+    # di semua server. Nilai inilah satu-satunya asal-usul kolom `kd_sumber` di
+    # pusat, dan `no_transaksi` bisa sama antar-server (RUMAK & RTL RUMAK sama-sama
+    # punya TR2608010005), jadi salah isi berarti nota dua cabang saling menimpa.
+    #
+    # Kosong = profil ini bukan sumber pusat. `sync_hub` melewatinya, bukan menebak.
+    kode_sumber = models.CharField(max_length=20, blank=True, default="")
     is_default = models.BooleanField(default=False)
     last_status = models.CharField(max_length=10, choices=ConnStatus.choices, default=ConnStatus.UNKNOWN)
     last_checked = models.DateTimeField(null=True, blank=True)
@@ -46,6 +57,15 @@ class ServerProfile(models.Model):
 
     class Meta:
         ordering = ["db_type", "name"]
+        constraints = [
+            # Unik hanya di antara yang terisi: dua cabang berbagi kode berarti
+            # transaksi keduanya bertumpuk di baris pusat yang sama.
+            models.UniqueConstraint(
+                fields=["kode_sumber"],
+                condition=models.Q(kode_sumber__gt=""),
+                name="unique_kode_sumber_terisi",
+            )
+        ]
 
     def __str__(self) -> str:
         return f"{self.name} [{self.db_type}]"

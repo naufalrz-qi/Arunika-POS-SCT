@@ -338,3 +338,127 @@ class StokSnapshotBaseRun(models.Model):
 
     def __str__(self) -> str:
         return f"{self.base_month} {self.profile_name}: {self.rows} baris"
+
+
+class SyncHealthSample(models.Model):
+    """Satu pengukuran kesehatan sync legacy untuk satu server, satu waktu.
+
+    Halaman Kesehatan Sync membaca angka LANGSUNG dari server tiap kali dibuka;
+    tabel ini yang membuatnya jadi riwayat. Tanpa riwayat, "antre 8.000" tak bisa
+    dibedakan dari "antre 8.000 dan naik terus sejak Mei" — dan justru pembedaan
+    itulah yang tak ada selama empat tahun sementara RTL PUSAT menumpuk sejuta
+    baris tanpa seorang pun tahu.
+
+    Ditulis tiap tick scheduler (bukan harian): sync yang mati perlu ketahuan
+    dalam hitungan menit, bukan besok.
+    """
+
+    class Status(models.TextChoices):
+        OK = "ok", "Sehat"
+        LAMBAT = "lambat", "Lambat"
+        MATI = "mati", "Mati"
+        OFFLINE = "offline", "Tak terhubung"
+
+    profile = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="sync_health_samples",
+    )
+    profile_name = models.CharField(max_length=100, blank=True)
+    # Kedalaman antrean keluar (tbl_tmp_post) + umur baris tertuanya.
+    antre = models.BigIntegerField(default=0)
+    antre_tertua = models.DateTimeField(null=True, blank=True)
+    antre_terbaru = models.DateTimeField(null=True, blank=True)
+    # Watermark arah masuk (tbl_waktu_get) — kapan server ini terakhir menarik data.
+    watermark_get = models.DateTimeField(null=True, blank=True)
+    # Ujung feed (tbl_log_transaksi) — dipakai feed_sync/hub_sync sbg cursor.
+    # Tidak dihapus job legacy, tapi BISA dipangkas pemeliharaan DB; nilai yang
+    # turun antar-sampel dibaca `services_sync._stuck()` sebagai feed di-reset.
+    feed_id = models.BigIntegerField(null=True, blank=True)
+    feed_waktu = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.OK)
+    error_message = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["profile", "-created_at"])]
+
+    def __str__(self) -> str:
+        return f"{self.profile_name}: {self.status} (antre {self.antre})"
+
+
+class FeedSyncCursor(models.Model):
+    """Titik lanjut satu pasangan (sumber → tujuan) untuk apps/transactions/feed_sync.py.
+
+    `last_id` adalah tbl_log_transaksi.id terakhir yang SUDAH diterapkan ke
+    server tujuan. Kolom itu IDENTITY + clustered PK di sumber, jadi `WHERE id > ?`
+    adalah seek, bukan scan — itulah sebabnya feed ini dipakai sebagai sumber
+    perubahan alih-alih tbl_tmp_post (yang dihapus job legacy).
+
+    Satu baris per (source_profile, target_profile): tiap toko punya posisi
+    sendiri, jadi satu toko yang mati tidak menahan yang lain.
+    """
+
+    source_profile = models.ForeignKey(
+        "connections.ServerProfile", on_delete=models.CASCADE, related_name="feed_cursors_out"
+    )
+    target_profile = models.ForeignKey(
+        "connections.ServerProfile", on_delete=models.CASCADE, related_name="feed_cursors_in"
+    )
+    last_id = models.BigIntegerField(default=0)
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    last_rows_applied = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=10, default="ok")  # "ok" | "failed"
+    error_message = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["source_profile", "target_profile"], name="unique_feed_cursor_per_pair"
+            )
+        ]
+
+    def __str__(self) -> str:
+        # ASCII, bukan panah: __str__ ini muncul di log dan konsol Windows
+        # (cp1252) yang tak bisa mengencode U+2192 dan melempar UnicodeEncodeError
+        # justru saat seseorang sedang menelusuri kegagalan.
+        return f"{self.source_profile_id}->{self.target_profile_id} @ id {self.last_id}"
+
+
+class SyncDeadLetter(models.Model):
+    """Satu baris feed yang TIDAK diterapkan, beserta alasannya.
+
+    Ada supaya kegagalan tidak punya dua jalan keluar yang sama-sama buruk:
+    menghentikan seluruh run (pola `goto hell` di job legacy, yang membuat sisa
+    antrean terlewat sesiklus) atau ditelan diam-diam. Baris masuk sini, cursor
+    tetap maju, dan kegagalannya bisa dibaca manusia.
+
+    Yang TIDAK masuk sini: baris yang tabelnya di luar daftar-izin. Itu
+    penyaringan yang disengaja, bukan kerusakan, dan jumlahnya mayoritas isi feed
+    (2.566 dari 3.000 pada uji nyata) — mencatatnya akan menimbun ribuan baris
+    tiap tick dan menenggelamkan kegagalan yang sungguhan. Jumlahnya dilaporkan
+    per run sebagai `disaring`, tidak disimpan.
+
+    Jadi tabel ini idealnya KOSONG. Isinya berarti ada yang perlu dilihat.
+    """
+
+    source_profile = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="dead_letters_out",
+    )
+    target_profile = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="dead_letters_in",
+    )
+    feed_id = models.BigIntegerField(default=0)
+    table_aksi = models.CharField(max_length=255, blank=True)
+    formatted_data = models.TextField(blank=True)
+    reason = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["source_profile", "-created_at"])]
+
+    def __str__(self) -> str:
+        return f"id {self.feed_id} {self.table_aksi}: {self.reason}"
