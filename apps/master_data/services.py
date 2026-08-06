@@ -35,6 +35,16 @@ def _st(value) -> str:
     return str(value).strip() if value is not None else ""
 
 
+def _k(value) -> str:
+    """Normalisasi kunci `kd_*` untuk dijodohkan di Python.
+
+    Collation MS SQL tak peduli besar-kecil huruf dan mengabaikan spasi ekor;
+    dict Python peduli keduanya. Tanpa ini 'MAA003 ' dan 'maa003' jadi dua kunci
+    berbeda dan barangnya tampil tanpa nama — diam-diam, tanpa satu pun galat.
+    Sejalan dengan _k() di apps/inventory/services.py."""
+    return str(value).strip().upper() if value is not None else ""
+
+
 def _is_retail(profile) -> bool:
     return profile.db_type == "retail"
 
@@ -120,6 +130,21 @@ def list_products(profile, search: str = "", kd_kategori: str = "") -> list[dict
         categories = _cached(
             profile, "categories", lambda: _key_map(cur, "SELECT kd_kategori, nama FROM m_kategori", "kd_kategori", "nama")
         )
+        # Empat lookup sisanya. Dulu hanya kategori yang di-join, jadi layar Master
+        # Produk memberi label manusiawi ("Merk", "Model") tapi mengikat ke kolom
+        # kode — operator melihat MAA003, bukan nama. Bentuknya mengikuti
+        # _barang_meta() di apps/inventory/services.py, yang sudah meresolusi
+        # kelimanya untuk layar Stok Akhir.
+        lookups = {
+            "jenis_bahan": _cached(profile, "jenis_bahan_names_k", lambda: _key_map_k(
+                cur, "SELECT kd_jenis_bahan, nama FROM m_jenis_bahan", "kd_jenis_bahan", "nama")),
+            "departemen": _cached(profile, "model_names_k", lambda: _key_map_k(
+                cur, "SELECT kd_model, nama FROM m_model", "kd_model", "nama")),
+            "divisi_barang": _cached(profile, "merk_names_k", lambda: _key_map_k(
+                cur, "SELECT kd_merk, nama FROM m_merk", "kd_merk", "nama")),
+            "sub_kategori": _cached(profile, "warna_names_k", lambda: _key_map_k(
+                cur, "SELECT kd_warna, nama FROM m_warna", "kd_warna", "nama")),
+        }
         satuan_names = _cached(
             profile, "satuan_names", lambda: _key_map(cur, "SELECT kd_satuan, nama FROM m_satuan", "kd_satuan", "nama")
         )
@@ -155,6 +180,12 @@ def list_products(profile, search: str = "", kd_kategori: str = "") -> list[dict
                 "kd_model": _st(b.get("kd_model")),
                 "kd_merk": _st(b.get("kd_merk")),
                 "kd_warna": _st(b.get("kd_warna")),
+                # Nama, bukan kode. Istilah layar mengikuti sebutan di toko:
+                # m_model = Departemen, m_merk = Divisi Barang, m_warna = Sub Kategori.
+                "jenis_bahan": _st(lookups["jenis_bahan"].get(_k(b.get("kd_jenis_bahan")))),
+                "departemen": _st(lookups["departemen"].get(_k(b.get("kd_model")))),
+                "divisi_barang": _st(lookups["divisi_barang"].get(_k(b.get("kd_merk")))),
+                "sub_kategori": _st(lookups["sub_kategori"].get(_k(b.get("kd_warna")))),
                 "ukuran": _st(b.get("ukuran")),
                 "keterangan": _st(b.get("keterangan")),
                 "pabrik": _st(b.get("pabrik")),
@@ -1015,8 +1046,14 @@ _SYNC_ENTITIES = {
 # (kolomnya banyak yang dipakai bersama antar entitas), hidup di sebelah
 # _SYNC_ENTITIES supaya kolom baru dan labelnya ditambah di tempat yang sama.
 COL_LABELS = {
-    "kd_kategori": "Kategori", "kd_jenis_bahan": "Jenis Bahan", "kd_model": "Model",
-    "kd_merk": "Merk", "kd_warna": "Warna", "ukuran": "Ukuran", "nama": "Nama",
+    # Nama kolom legacy tidak sama dengan sebutan di toko: m_model itu Departemen,
+    # m_merk itu Divisi Barang, m_warna itu Sub Kategori. Yang dilihat operator
+    # adalah sebutan tokonya.
+    "kd_kategori": "Kategori", "kd_jenis_bahan": "Jenis Bahan", "kd_model": "Departemen",
+    "kd_merk": "Divisi Barang", "kd_warna": "Sub Kategori",
+    "kategori": "Kategori", "jenis_bahan": "Jenis Bahan", "departemen": "Departemen",
+    "divisi_barang": "Divisi Barang", "sub_kategori": "Sub Kategori",
+    "ukuran": "Ukuran", "nama": "Nama",
     "keterangan": "Keterangan", "status": "Status", "status_pinjam": "Status Pinjam",
     "pabrik": "Pabrik", "kd_kota": "Kota", "alamat": "Alamat", "telepon": "Telepon",
     "fax": "Faks", "kontak": "Kontak", "hp": "HP", "email": "Email",
@@ -1121,3 +1158,14 @@ def _invalidate_inventory_cache(profile):
 def _key_map(cursor, sql, key, val) -> dict:
     cursor.execute(sql)
     return {r[key]: r[val] for r in _dictify(cursor)}
+
+
+def _key_map_k(cursor, sql, key, val) -> dict:
+    """_key_map dengan kunci ternormalisasi lewat _k(). Cari dengan _k() juga.
+
+    Dipakai lookup barang (model/merk/warna/jenis bahan). Kunci cache-nya sengaja
+    berbeda dari `_key_map`: entri "categories" dipakai dua pemanggil yang masih
+    mencocokkan kunci mentah, dan menormalisasi salah satunya saja membuat yang
+    lain menerima peta yang tak bisa ia cari."""
+    cursor.execute(sql)
+    return {_k(r[key]): r[val] for r in _dictify(cursor)}
