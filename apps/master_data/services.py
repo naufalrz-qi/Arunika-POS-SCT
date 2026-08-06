@@ -199,6 +199,29 @@ def list_products(profile, search: str = "", kd_kategori: str = "") -> list[dict
     return products
 
 
+def list_userx(profile) -> list[dict]:
+    """User legacy (m_userx) untuk dropdown penautan di Manajemen User.
+
+    Transaksi menyimpan `kd_user`, bukan id user Arunika. Tanpa tautan ini nota
+    yang ditulis Arunika tak bisa dikenali laporan "Penjualan per User" — baik di
+    Arunika maupun di aplikasi POS lama.
+
+    Kolom sandi (`passwd`, `passweb`) SENGAJA tidak diambil. `passwd` menyimpan
+    sandi apa adanya, dan membacanya ke dalam proses ini saja sudah membuatnya
+    bisa bocor lewat log atau pesan galat. Yang dibutuhkan cuma kode dan nama.
+    """
+    with mssql.cursor(profile) as cur:
+        cur.execute("SELECT kd_user, nama, status FROM m_userx ORDER BY nama")
+        return [
+            {
+                "kd_user": _st(r["kd_user"]),
+                "nama": _st(r["nama"]),
+                "aktif": _active(r["status"]),
+            }
+            for r in _dictify(cur)
+        ]
+
+
 def list_categories(profile) -> list[dict]:
     with mssql.cursor(profile) as cur:
         cur.execute("SELECT kd_kategori, nama FROM m_kategori ORDER BY nama")

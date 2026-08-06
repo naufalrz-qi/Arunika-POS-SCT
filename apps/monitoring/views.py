@@ -232,6 +232,8 @@ def _user_dict(u):
         "role": u.role,
         "is_active": u.is_active,
         "created_at": _local(u.date_joined, "%Y-%m-%d"),
+        "kd_user": u.kd_user,
+        "kd_divisi": u.kd_divisi,
     }
 
 
@@ -261,10 +263,28 @@ def _last_superadmin_guard(target, new_role=None, deactivate=False):
 def users_index(request):
     roles = _managed_roles(request.user)
     users = User.objects.filter(role__in=roles).order_by("role", "username")
+
+    def load_legacy():
+        """Pilihan tautan ke user & divisi legacy. Ditunda: dua query MS SQL ini
+        tak boleh menahan tampilnya daftar user, yang datanya ada di SQLite."""
+        profile = _active()
+        if not profile:
+            return {"userx": [], "divisi": [], "conn_error": CONN_ERROR}
+        try:
+            return {
+                "userx": master.list_userx(profile),
+                "divisi": inv.list_divisi(profile),
+                "conn_error": None,
+            }
+        except pyodbc.Error as exc:
+            return {"userx": [], "divisi": [],
+                    "conn_error": mssql.friendly_error(exc, "Gagal membaca user legacy")}
+
     return render(request, "Admin/Users/Index", props={
         "users": [_user_dict(u) for u in users],
         "assignable_roles": roles,
         "me": request.user.id,
+        "legacy": defer(load_legacy),
     })
 
 
@@ -313,6 +333,12 @@ def users_save(request):
             request.session["flash_error"] = " ".join(exc.messages)
             return redirect("/admin-panel/users")
         user.set_password(password)
+
+    # Tautan ke akun legacy. Dipangkas ke panjang kolomnya supaya kode yang
+    # kepanjangan ditolak di sini, bukan jadi galat SQLite yang tak berarti apa
+    # pun bagi yang mengisinya.
+    user.kd_user = (data.get("kd_user") or "").strip()[:6]
+    user.kd_divisi = (data.get("kd_divisi") or "").strip()[:6]
     user.save()
 
     log_activity(request, "user", f"Simpan user {user.username}")

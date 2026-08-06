@@ -38,6 +38,26 @@ class User(AbstractUser):
     # dan mematikan semua centang mengisi ketiga kunci.
     hidden_data_keys = models.JSONField(default=list, blank=True)
 
+    # Tautan ke user legacy di MS SQL (m_userx.kd_user) dan divisi tempat ia
+    # bekerja (m_divisi.kd_divisi). Transaksi menyimpan kd_user, bukan id user
+    # Arunika, jadi tanpa tautan ini nota yang kita tulis tak bisa dikenali
+    # laporan "Penjualan per User" — di Arunika MAUPUN di aplikasi POS lama.
+    #
+    # Hanya TAUTAN, bukan salinan akun — skema m_userx memang jauh berbeda dari
+    # AbstractUser, jadi memetakan kolomnya satu per satu tak akan pernah rapi.
+    # Yang dipinjam cuma kd_user-nya.
+    #
+    # Kata sandi tetap milik Arunika. Arunika TIDAK PERNAH membaca maupun
+    # menulis dua kolom sandi di m_userx:
+    #   passwd  — menyimpan sandi apa adanya (terukur 4-9 karakter, bukan hash);
+    #             menyalinnya ke sini berarti menyebarkan sandi terbuka ke
+    #             sistem kedua.
+    #   passweb — peninggalan pengembang sebelumnya dan sudah diketahui
+    #             mengganggu aplikasi legacy. Menulisinya berarti mengulang
+    #             kerusakan yang sudah ada, bukan memperbaikinya.
+    kd_user = models.CharField(max_length=6, blank=True, default="")
+    kd_divisi = models.CharField(max_length=6, blank=True, default="")
+
     @property
     def is_admin_tier(self) -> bool:
         return self.role in (Role.ADMIN, Role.SUPERADMIN)
