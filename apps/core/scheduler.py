@@ -261,6 +261,102 @@ def _run_due_hub_sync() -> None:
             )
 
 
+def _run_due_hub_pull(now) -> None:
+    """Tarik transaksi cabang ke pusat langsung dari tabel aslinya.
+
+    Dua tingkat dijadwalkan di sini, satu tidak:
+
+    - **segar** tiap tick — N hari terakhir disalin ulang tanpa dibandingkan.
+    - **cocok** sekali sehari — agregat per hari dibandingkan antara tutup buku
+      dan jendela segar; hanya hari yang beda yang disalin ulang. Penjaganya
+      `HubPullState.cocok_terakhir_at`, bukan tabel penanda baru: barisnya sudah
+      ada dan sudah menyimpan tanggal itu.
+    - **arsip** TIDAK PERNAH otomatis. Ia menyapu seluruh riwayat di bawah tutup
+      buku (445.167 nota di PUSAT) dan itu keputusan manusia, bukan sesuatu yang
+      boleh terjadi karena seseorang menyalakan scheduler.
+
+    Master ikut di slot harian yang sama dan hanya dari GUDANG — katalognya satu
+    untuk seluruh pusat, jadi tak ada gunanya diulang per cabang.
+
+    Env: HUB_PULL_ENABLED (0), HUB_PULL_DAYS (7), HUB_MATCH_ENABLED (0),
+    HUB_MATCH_HOUR (2), HUB_MASTER_ENABLED (0).
+    """
+    from django.utils import timezone
+
+    from apps.connections.models import ServerProfile
+    from apps.core.models import HubPullState
+    from apps.transactions import hub_master, hub_pull
+
+    nama_hub = os.environ.get("HUB_NAME", "AMPHOREUS")
+    hub = ServerProfile.objects.filter(name=nama_hub).first()
+    if not hub:
+        log.warning("hub_pull: profil pusat '%s' tidak ada — dilewati.", nama_hub)
+        return
+    sumber = hub_pull.sumber_profiles()
+    if not sumber:
+        log.warning("hub_pull: tidak ada cabang ber-kode_sumber — dilewati.")
+        return
+
+    try:
+        hari = max(1, int(os.environ.get("HUB_PULL_DAYS", "7")))
+    except ValueError:
+        hari = hub_pull.JENDELA_SEGAR_HARI
+
+    # Satu slot harian, dua penghuni yang saling bebas. `cocok_terakhir_at`
+    # menandai SLOT-nya, bukan pekerjaan cocok — kalau ia hanya ditulis oleh
+    # `mode="cocok"`, mematikan HUB_MATCH_ENABLED membuat penandanya tak pernah
+    # maju dan master ikut tak pernah jalan (atau jalan tiap tick).
+    boleh_harian = now.hour >= _hour("HUB_MATCH_HOUR", 2)
+    sudah = {
+        s.source_profile_id: s.cocok_terakhir_at
+        for s in HubPullState.objects.filter(target_profile=hub)
+    }
+    nama_master = os.environ.get("FEED_SYNC_SOURCE", "GUDANG")
+
+    for s in sumber:
+        try:
+            hasil = hub_pull.pull_source(s, hub, mode="segar", hari=hari)
+            if hasil["status"] == "failed":
+                log.warning("hub_pull segar %s GAGAL: %s", hasil["source"], hasil["error"])
+            elif hasil["header"] or hasil["dihapus"]:
+                log.info(
+                    "hub_pull segar %s: %s header, %s detail, %s hapus",
+                    hasil["source"], hasil["header"], hasil["detail"], hasil["dihapus"],
+                )
+            if hasil["anomali_tanggal"]:
+                log.warning(
+                    "hub_pull %s: %s baris bertanggal di luar akal DILEWATI — perbaiki di cabang",
+                    hasil["source"], hasil["anomali_tanggal"],
+                )
+
+            terakhir = sudah.get(s.pk)
+            jatuh_tempo = boleh_harian and (
+                terakhir is None or timezone.localtime(terakhir).date() < now.date()
+            )
+            if not jatuh_tempo:
+                continue
+
+            if _flag("HUB_MATCH_ENABLED", "0"):
+                cocok = hub_pull.pull_source(s, hub, mode="cocok")
+                if cocok["hari_beda"]:
+                    # Hari yang tidak cocok adalah TEMUAN, bukan derau: catat
+                    # jumlahnya supaya tren "selalu ada 3 hari beda" terlihat.
+                    log.warning(
+                        "hub_pull cocok %s: %s hari berbeda, disalin ulang",
+                        cocok["source"], cocok["hari_beda"],
+                    )
+            if s.name == nama_master and _flag("HUB_MASTER_ENABLED", "0"):
+                m = hub_master.sync_master(s, hub)
+                if m["status"] == "failed":
+                    log.warning("hub_master GAGAL: %s", m["error"])
+            # Slot harian ditandai selesai apa pun yang jalan di dalamnya.
+            HubPullState.objects.filter(source_profile=s, target_profile=hub).update(
+                cocok_terakhir_at=timezone.now()
+            )
+        except Exception:  # pragma: no cover — satu cabang tak menjatuhkan sisanya
+            log.exception("hub_pull gagal untuk cabang %s", getattr(s, "name", "?"))
+
+
 def _run_due_jobs() -> None:
     """Jalankan snapshot untuk SEMUA profil (bukan hanya koneksi aktif) — tiap
     server/database butuh snapshotnya sendiri. Berurutan, per-profil terisolasi:
@@ -301,11 +397,21 @@ def _run_due_jobs() -> None:
             _run_due_feed_sync()
         except Exception:  # pragma: no cover — tick harus tetap hidup
             log.exception("feed_sync gagal")
+    # `hub_sync` (feed `tbl_log_transaksi`) DIGANTI `hub_pull` (tarik langsung
+    # dari tabel asli). Pemanggilannya sengaja ditinggal di sini di belakang flag
+    # yang defaultnya 0: kodenya belum dihapus supaya angka jalur lama masih bisa
+    # dibandingkan kalau `hub_pull` ternyata meleset. Jangan menyalakan keduanya
+    # sekaligus — keduanya menulis tabel yang sama, dan yang belakangan menang.
     if _flag("HUB_SYNC_ENABLED", "0"):
         try:
             _run_due_hub_sync()
         except Exception:  # pragma: no cover — tick harus tetap hidup
             log.exception("hub_sync gagal")
+    if _flag("HUB_PULL_ENABLED", "0"):
+        try:
+            _run_due_hub_pull(now)
+        except Exception:  # pragma: no cover — tick harus tetap hidup
+            log.exception("hub_pull gagal")
 
 
 def _loop() -> None:
@@ -319,13 +425,79 @@ def _loop() -> None:
         time.sleep(interval)
 
 
+def _harga_sync_interval() -> int:
+    try:
+        return max(15, int(os.environ.get("HARGA_SYNC_INTERVAL_SECONDS", "60")))
+    except ValueError:
+        return 60
+
+
+def _loop_harga() -> None:
+    """Sebar harga GUDANG -> toko. THREAD SENDIRI, bukan menumpang tick utama.
+
+    Tick utama 30 menit karena isinya snapshot berat yang memang harian; harga
+    butuh hitungan menit. Menurunkan interval bersama akan membuat pemanas cache
+    master dan sapuan kesehatan sync ikut jalan tiap menit — semuanya menyentuh
+    sebelas server.
+
+    Sapuan penuh (membaca keadaan nyata tiap toko) dijalankan berkala, dan yang
+    PERTAMA selalu penuh karena salinan harga di memori masih kosong. Lihat
+    `harga_sync.sapu` untuk kenapa mode cepat sendirian tidak cukup.
+    """
+    from apps.transactions import harga_sync
+
+    time.sleep(90)  # sesudah loop utama; jangan dua sapuan besar barengan saat boot
+    interval = _harga_sync_interval()
+    try:
+        tiap_penuh = max(1, int(os.environ.get("HARGA_SYNC_FULL_MINUTES", "60")))
+    except ValueError:
+        tiap_penuh = 60
+    detik_sejak_penuh = 10**9  # paksa sapuan pertama jadi penuh
+    # Kegagalan dilaporkan saat BERUBAH, bukan tiap tick. Toko dimatikan tiap
+    # malam saat tutup; tanpa ini, delapan toko mati x 60 detik = ribuan baris
+    # peringatan identik sampai pagi, dan kegagalan yang sungguhan tenggelam di
+    # dalamnya. Yang perlu terlihat adalah PERUBAHAN keadaan.
+    gagal_terakhir: set = set()
+    while True:
+        try:
+            source, targets = harga_sync.profil_fanout()
+            if source and targets:
+                penuh = detik_sejak_penuh >= tiap_penuh * 60
+                hasil = harga_sync.sapu(source, targets, penuh=penuh)
+                if penuh:
+                    detik_sejak_penuh = 0
+                if hasil["sku"]:
+                    log.info(
+                        "harga_sync %s: %s SKU disebar (%s) %s",
+                        hasil["mode"], hasil["sku"], source.name, hasil["per_toko"],
+                    )
+                # Toko yang gagal BUKAN sekadar catatan: sampai sapuan penuh
+                # berikutnya, harga di sana basi tanpa gejala apa pun. Tapi yang
+                # dilaporkan PERUBAHANNYA, bukan keadaannya tiap menit.
+                gagal = set(hasil["gagal"]) | ({"(sumber)"} if hasil["error"] else set())
+                if gagal != gagal_terakhir:
+                    if gagal - gagal_terakhir:
+                        log.warning(
+                            "harga_sync mulai gagal ke: %s", sorted(gagal - gagal_terakhir)
+                        )
+                    if gagal_terakhir - gagal:
+                        log.info("harga_sync pulih ke: %s", sorted(gagal_terakhir - gagal))
+                    gagal_terakhir = gagal
+        except Exception:  # pragma: no cover — loop harus tetap hidup
+            log.exception("harga_sync error")
+        time.sleep(interval)
+        detik_sejak_penuh += interval
+
+
 def start_scheduler() -> None:
-    """Idempotent: mulai satu daemon thread. Dipanggil dari config/wsgi.py."""
+    """Idempotent: mulai daemon thread. Dipanggil dari config/wsgi.py."""
     global _started
+    harga_sync_on = _flag("HARGA_SYNC_ENABLED", "0")
     if not (
         _harga_enabled() or _stok_enabled() or _warm_enabled()
         or _flag("SYNC_HEALTH_ENABLED") or _flag("FEED_SYNC_ENABLED", "0")
-        or _flag("HUB_SYNC_ENABLED", "0")
+        or _flag("HUB_SYNC_ENABLED", "0") or _flag("HUB_PULL_ENABLED", "0")
+        or harga_sync_on
     ):
         return
     with _lock:
@@ -333,6 +505,9 @@ def start_scheduler() -> None:
             return
         _started = True
     threading.Thread(target=_loop, name="snapshot-scheduler", daemon=True).start()
+    if harga_sync_on:
+        threading.Thread(target=_loop_harga, name="harga-sync", daemon=True).start()
+        log.info("Sebar harga GUDANG -> toko aktif (tiap %ss).", _harga_sync_interval())
     log.info(
         "Scheduler snapshot aktif (interval %ss, semua profil; harga=%s jam≥%s, stok=%s jam≥%s, "
         "pemanas cache=%s ttl=%ss).",

@@ -197,8 +197,22 @@ def cursor(profile, autocommit=True, query_timeout=None):
         autocommit=autocommit,
         query_timeout=query_timeout,
     )
+    cur = conn.cursor()
+    # `executemany` polos mengirim SATU round-trip PER BARIS. Dengan
+    # `fast_executemany` pyodbc mengemas seluruh array parameter jadi satu
+    # perintah TDS. Terukur di jalur arsip: menyalin riwayat lewat Tailscale
+    # yang me-relay ke Singapura, ribuan baris detail per nota-batch berarti
+    # ribuan perjalanan bolak-balik yang masing-masing berbiaya milidetik.
+    #
+    # Hanya berpengaruh pada `executemany`; `execute` biasa tidak tersentuh.
+    # Aman untuk seluruh aplikasi: semua pemanggil sudah mengirim parameter
+    # bertipe seragam per kolom (dibaca dari kolom sumber yang sama).
     try:
-        yield conn.cursor()
+        cur.fast_executemany = True
+    except AttributeError:  # pragma: no cover — driver lawas
+        pass
+    try:
+        yield cur
     finally:
         conn.close()
 

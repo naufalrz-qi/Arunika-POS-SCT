@@ -33,7 +33,13 @@ class TerapkanMassalTest(SimpleTestCase):
         patcher_active = patch.object(views, "_active", return_value=FakeProfile())
         patcher_log_rows = patch.object(views, "log_barang_updates")
         patcher_log_act = patch.object(views, "log_activity")
-        for p in (patcher_active, patcher_log_rows, patcher_log_act):
+        # Penyebaran harga ke toko di luar lingkup tes ini — ia menyentuh ORM
+        # (dilarang di SimpleTestCase) dan delapan server. Tanpa dipatch, guard
+        # `except Exception` di `_sebar_harga` menelannya dengan benar TAPI
+        # mencetak traceback penuh di tiap tes, yang menenggelamkan kegagalan
+        # sungguhan di output.
+        patcher_sebar = patch.object(views, "_sebar_harga")
+        for p in (patcher_active, patcher_log_rows, patcher_log_act, patcher_sebar):
             p.start()
             self.addCleanup(p.stop)
 

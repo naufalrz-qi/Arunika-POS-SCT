@@ -462,3 +462,66 @@ class SyncDeadLetter(models.Model):
 
     def __str__(self) -> str:
         return f"id {self.feed_id} {self.table_aksi}: {self.reason}"
+
+
+class HubPullState(models.Model):
+    """Posisi tarik-langsung satu cabang ke pusat (apps/transactions/hub_pull.py).
+
+    BUKAN `FeedSyncCursor`. Cursor itu menyimpan `last_id` feed dan seluruh
+    halaman Kesehatan Sync menafsirkannya sebagai "ketinggalan" — jarak ke ujung
+    feed. `hub_pull` tidak punya konsep itu sama sekali: ia menyapu rentang
+    tanggal, jadi tidak ada yang bisa tertinggal, dan angka yang bisa basi
+    hanyalah KAPAN sapuan terakhir terjadi. Menumpangkan dua arti pada satu
+    kolom adalah cara paling rapi untuk membuat halaman monitoring berbohong.
+
+    Tiga tingkat, tiga stempel waktu:
+
+    - `arsip_selesai_at` — sekali seumur hidup, untuk `tanggal <= tutup_buku`.
+      Tutup buku adalah lantai keras; di bawahnya data tidak berubah lagi.
+    - `cocok_terakhir_at` — sekali sehari, membandingkan agregat per hari antara
+      tutup buku dan jendela segar. `hari_beda` = berapa hari yang tidak cocok
+      dan karena itu disalin ulang; idealnya 0, dan angka yang bukan 0 adalah
+      temuan, bukan derau.
+    - `segar_terakhir_at` — tiap tick, N hari terakhir disalin ulang tanpa
+      dibandingkan.
+
+    `tutup_buku` disimpan hanya untuk ditampilkan. Yang dipakai saat menyapu
+    selalu dibaca ulang dari cabang: kalau klien menjalankan tutup buku lagi,
+    batasnya maju, dan batas yang di-cache akan diam-diam menyapu ulang rentang
+    yang sudah jadi arsip.
+    """
+
+    source_profile = models.ForeignKey(
+        "connections.ServerProfile", on_delete=models.CASCADE, related_name="hub_pull_out"
+    )
+    target_profile = models.ForeignKey(
+        "connections.ServerProfile", on_delete=models.CASCADE, related_name="hub_pull_in"
+    )
+    tutup_buku = models.DateTimeField(null=True, blank=True)
+    arsip_selesai_at = models.DateTimeField(null=True, blank=True)
+    # Ujung atas potongan arsip terakhir yang BERHASIL di-commit. Titik lanjut,
+    # bukan hiasan: run pertama kehilangan 285.809 header PUSAT karena jaringan
+    # putus di potongan ke-32 dari 48 dan tidak ada yang menandai 31 potongan
+    # sebelumnya sudah selesai. Menjalankan ulang dari nol tetap BENAR (semuanya
+    # idempoten) — yang hilang cuma jam kerjanya, dan justru itu yang mahal.
+    arsip_sampai = models.DateTimeField(null=True, blank=True)
+    cocok_terakhir_at = models.DateTimeField(null=True, blank=True)
+    segar_terakhir_at = models.DateTimeField(null=True, blank=True)
+    hari_beda = models.IntegerField(default=0)
+    rows_header = models.BigIntegerField(default=0)
+    rows_detail = models.BigIntegerField(default=0)
+    rows_deleted = models.BigIntegerField(default=0)
+    status = models.CharField(max_length=10, default="ok")  # "ok" | "failed"
+    error_message = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["source_profile", "target_profile"], name="unique_hub_pull_per_pair"
+            )
+        ]
+
+    def __str__(self) -> str:
+        # ASCII, bukan panah: ini muncul di konsol Windows (cp1252), yang tak bisa
+        # mengencode U+2192 dan melempar justru saat seseorang menelusuri kegagalan.
+        return f"{self.source_profile_id}->{self.target_profile_id} arsip={bool(self.arsip_selesai_at)}"

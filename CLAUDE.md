@@ -47,7 +47,11 @@ python manage.py check_stock_agg # self-check: SQL aggregation vs Python aggrega
 python manage.py sync_cdc        # sync report_source replica via CDC (--backfill for initial full copy)
 python manage.py sync_feed --source GUDANG --dry-run   # fan-out master data gudang → toko
 python manage.py init_hub --hub AMPHOREUS --ref GUDANG # create/refresh the AMPHOREUS hub schema (idempotent)
-python manage.py sync_hub --hub AMPHOREUS --dry-run    # pull all branches into the hub
+python manage.py sync_hub --hub AMPHOREUS --dry-run    # DEPRECATED feed-based hub pull (no longer scheduled)
+python manage.py pull_hub --mode segar --hari 7 --dry-run   # fill AMPHOREUS straight from the source tables
+python manage.py pull_hub --mode cocok --dry-run            # report which days differ, branch vs hub
+python manage.py pull_master --dry-run                      # master data into AMPHOREUS, from GUDANG only
+python manage.py sync_harga --dry-run                       # GUDANG prices vs every toko; report what differs
 ```
 
 ## Architecture
@@ -63,6 +67,8 @@ python manage.py sync_hub --hub AMPHOREUS --dry-run    # pull all branches into 
 - `apps/transactions/services.py` — dashboard KPIs, report aggregation, index helpers.
 - `apps/master_data/services.py` — products/customers, price update/compare.
 - `apps/transactions/cdc_sync.py` — optional reporting-replica sync via SQL Server CDC (see `context.md` § Reporting replica). `ServerProfile.report_source` + `core/mssql.get_report_source()` route report reads to the replica when configured; write paths always target the primary profile.
+- `apps/transactions/harga_sync.py` — **near-realtime GUDANG → toko price propagation**, deliberately not feed-based: it compares `m_barang_satuan` directly (55,365 rows in 1.9 s), on its own 60-second thread, plus an instant push from the Arunika write path (`_sebar_harga` in `apps/monitoring/views.py`). Read `context.md` § "Harga GUDANG → toko" first — especially why the first sweep after restart must be a full one, and why `master._harga_map()` must not be used here.
+- `apps/transactions/hub_pull.py` + `hub_master.py` — **how AMPHOREUS is filled now**: read the source tables directly, by date range, split into three tiers by `g_tutup_buku` (archive once / match daily / re-copy the last 7 days every tick). Replaces the feed-based `hub_sync`, which is no longer scheduled. Read `context.md` § "AMPHOREUS diisi tarik-langsung" before changing it — especially `bind_varchar()`: pyodbc binds `str` as NVARCHAR against `varchar` key columns, which silently turns a long `IN` list into one table scan per value (measured 6.23 s → 0.01 s for 50 values).
 - `apps/transactions/hub_sync.py` + `hub_schema.py` — **AMPHOREUS**, our own central database (`SERVER-RETAIL`/`AMPHOREUS`) holding gudang + 8 grosir (retail is out of scope). Read `context.md` § AMPHOREUS before changing it: the hub schema is *generated* from a reference branch rather than hand-written, `kd_sumber` must lead every primary key (nothing in the legacy data identifies the source server, and `no_transaksi` collides across servers), detail tables deliberately have no PK, and detail rows are pulled by the *header* feed because some branches emit no detail feed at all.
 - `apps/monitoring/services_sync.py` + `apps/transactions/feed_sync.py` — cross-server sync we own, alongside the legacy SQL Agent jobs in `scripts/job/` (which cannot be replaced: the central PHP/MySQL sink is not ours and the DB triggers belong to the legacy POS app). Read `context.md` § Sinkronisasi antar-server before touching either — it records why the change feed is `tbl_log_transaksi` and not `tbl_tmp_post`, why the `key__` prefix in `formatted_data` must not be ignored, and why `m_barang_divisi` is deliberately outside the allowlist.
 

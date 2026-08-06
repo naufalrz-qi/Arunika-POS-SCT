@@ -92,7 +92,59 @@ Satu database pusat di `SERVER-RETAIL`/`AMPHOREUS` berisi data **gudang + 8 gros
 - **Aksi KOSONG bukan aksi tak dikenal.** Untuk tabel detail aksinya memang tak dipakai sama sekali (selalu ambil-ulang seluruh nota), dan feed nyata penuh baris detail tanpa sufiks aksi (133 dari 2.000 di PRAYA). Untuk tabel **berkunci** aksi kosong juga aman: `_terapkan_header` tidak pernah peduli insert atau update — ia SELECT dulu, lalu UPDATE atau INSERT. Kelonggaran ini dulu hanya diberikan ke tabel detail, dan akibatnya **42 baris `t_pembelian` ANDARIA tanpa sufiks aksi masuk dead-letter** padahal tak ada yang salah dengannya. Yang tetap ditolak: aksi non-kosong yang tak dikenal.
 - **Riwayat mulai kosong**: cursor baru ditetapkan di `MAX(id)` feed saat itu, bukan 0. `--from-id` untuk sengaja mengambil ke belakang. `init_hub --seed-master` menyalin katalog sekali (~500rb baris) — tanpa itu tiap transaksi menunjuk `kd_barang` yang tak ada padanannya di pusat.
 - **Celah yang diketahui — tiga, semuanya butuh rekonsiliasi berkala (pekerjaan terpisah):** (1) feed hanya memuat `__insert`/`__update`, jadi nota yang DIHAPUS di cabang tertinggal sebagai hantu di pusat (detailnya aman — ambil-ulang mengembalikan nol baris); (2) feed yang dipangkas melewati cursor tak bisa dipulihkan dari feed — Kesehatan Sync sekarang memberitahu, tapi memberitahu bukan menambal; (3) **header ditulis dari payload, bukan dibaca ulang dari cabang.** `_terapkan_header` memakai nilai `formatted_data` apa adanya sementara `feed_sync._baca_dari_sumber` sudah membaca ulang dari tabel asli justru karena trigger MEMOTONG kolom. Terukur di pusat: baris `m_barang` ber-`kd_sumber=PRAYA` mentok **30 karakter untuk `nama` DAN `keterangan`** padahal kedua kolomnya `varchar(50)` dan baris GUDANG mencapai 47 — nama barang tersimpan terpotong. Header transaksi tidak bergejala (PUSAT: `t_penjualan` 20 kolom × 25 nota, `t_pembelian` 18 kolom × 9 nota, nol beda), jadi cakupannya tabel master.
-- Kesehatan Sync menampilkan bagian kedua untuk pusat: ketinggalan (`MAX(id)` feed − cursor), posisi cursor, dead-letter 24 jam. `HUB_SYNC_ENABLED` default **0**.
+- ~~Kesehatan Sync menampilkan bagian kedua untuk pusat: ketinggalan (`MAX(id)` feed − cursor), posisi cursor, dead-letter 24 jam.~~ **Diganti** — lihat bagian berikutnya. `HUB_SYNC_ENABLED` default **0** dan penjadwalannya sudah dilepas.
+
+## Harga GUDANG → toko mendekati realtime (`apps/transactions/harga_sync.py`)
+
+`feed_sync` sudah menyebarkan `m_barang_satuan`, tapi dua hal membuatnya tak cukup untuk harga grosir: jadwalnya **30 menit** (menumpang `HARGA_SNAPSHOT_INTERVAL_SECONDS`) dan ia **hanya melihat apa yang ditulis trigger** — perubahan lewat SQL langsung tak pernah menyeberang. Modul ini tidak membaca feed sama sekali; ia membandingkan harga apa adanya.
+
+Terukur, dan inilah yang membuatnya layak: `SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan` = **55.365 baris / 1,90 dtk** di GUDANG (ANDARIA lewat Tailscale 1,78 dtk). Sapuan penuh 9 server = **36,5 dtk**. Perubahan nyata cuma **1–125 harga/hari** (dari `BarangHargaChange`), dan sapuan penuh pertama menemukan **hanya 17 SKU** yang benar-benar beda di seluruh 8 toko.
+
+Dua lapis, dan keduanya perlu:
+
+- **Thread sendiri, 60 detik** (`_loop_harga`, BUKAN tick 30 menit — menurunkan tick bersama akan membuat pemanas cache master dan sapuan kesehatan ikut jalan tiap menit di sebelas server).
+- **Dorongan seketika** dari jalur tulis Arunika (`_sebar_harga` di `apps/monitoring/views.py`, dipanggil sesudah `master.update_harga` pada jalur satu-barang dan Terapkan Massal). Menutup jendela 60 detik untuk perubahan yang lewat aplikasi ini.
+
+Aturan yang masing-masing dibayar pengukuran atau bug:
+
+- **Mode cepat vs penuh.** Cepat = bandingkan GUDANG dengan salinan sapuan sebelumnya di memori proses (1 pembacaan). Penuh = bandingkan dengan keadaan NYATA tiap toko. **Sapuan pertama sesudah restart selalu penuh**: salinan kosong akan terbaca "55.365 harga baru saja berubah" dan membanjiri delapan toko. Mode cepat juga menganggap "sudah didorong" = "sudah sampai", jadi toko yang mati saat perubahan lewat akan melewatkan harga itu selamanya — `HARGA_SYNC_FULL_MINUTES` yang menambalnya, jangan dibuat terlalu jarang.
+- **Jangan pakai `master._harga_map()`** — di-cache ~10 menit; poller 60 detik yang membaca cache 10 menit adalah poller 10 menit yang berpura-pura cepat.
+- **`bind_varchar` wajib** sebelum daftar `IN` SKU (alasan yang sama dengan `hub_pull`).
+- **`_norm()` (strip + upper) wajib** saat membandingkan kunci. Tanpa itu `'lyg005 '` vs `'LYG005'` terbaca berubah tiap sapuan dan didorong ulang ke delapan toko tiap 60 detik selamanya.
+- **`_sebar_harga` tidak pernah menggagalkan permintaan.** Harga SUDAH tersimpan di sumber saat ia dipanggil; menggagalkan respons karena satu toko mati membuat pengguna mengira simpanannya batal lalu mengulanginya.
+- **Terapkan Massal mengumpulkan dulu, menyebar sekali di akhir** — per barang di dalam loop berarti 8 koneksi × jumlah barang.
+- **Ini satu-satunya jalur baru yang menulis ke SERVER TOKO**, dan tiap tulisan menyalakan trigger legacy di sana → `tbl_tmp_post` toko → job legacy → sink PHP/MySQL. Karena itu yang didorong hanya SKU yang berubah, tidak pernah seluruh tabel. `HARGA_SYNC_ENABLED` default **0**.
+
+## AMPHOREUS diisi tarik-langsung, bukan feed (`apps/transactions/hub_pull.py`)
+
+`hub_sync` (feed `tbl_log_transaksi`) **tidak lagi dijadwalkan**. Filenya masih ada — `HUB_TABLE_SPECS` dipakai bersama dan angkanya masih perlu jadi pembanding — tapi pengisi pusat sekarang `hub_pull`, yang membaca tabel transaksi ASLI tiap cabang. `tbl_log`, `tbl_log_transaksi`, dan `tbl_tmp_post` tetap dipantau Kesehatan Sync dan itu urusan terpisah.
+
+Tiga cacat feed yang memaksa penggantian, semuanya terukur: cursor ANDARIA tertinggal **1,7 juta baris** (18–100 hari untuk mengejar); feed BISA dipangkas dan yang lenyap di depan cursor tak bisa dipulihkan (PUSAT −1.471.184 id, PRAYA dipotong dari depan sampai id 2.658.002); dan nilai dari feed TERPOTONG trigger (`m_barang` PRAYA mentok 30 karakter padahal kolomnya `varchar(50)`).
+
+**Tidak ada penanda perubahan di legacy** — nol kolom `rowversion` di seluruh database. `hub_pull` tidak membutuhkannya: ia tidak mendeteksi perubahan, ia menyalin ulang rentang tanggal apa adanya. Yang membuatnya murah adalah sekat `g_tutup_buku`:
+
+| tingkat | rentang | jadwal | perintah / env |
+|---|---|---|---|
+| arsip | `tanggal <= tutup_buku` | sekali, manual | `pull_hub --mode arsip` |
+| cocok | tutup buku .. H-N | sekali sehari | `HUB_MATCH_ENABLED` |
+| segar | N hari terakhir | tiap tick | `HUB_PULL_ENABLED` |
+
+Terukur di lapangan: sapuan segar 7 hari untuk **9 cabang = 169 detik**; pencocokan harian seluruh armada = **16 detik** (satu `GROUP BY` per tabel per cabang mengembalikan satu baris per hari — 0,13–0,15 dtk untuk 900–2.000 hari, bahkan lewat Tailscale). Tutup buku sangat berbeda antar cabang: GUDANG 2017 (nol baris arsip) sampai PUSAT 2025-12-31 (445.167 nota).
+
+Aturan yang masing-masing dibayar pengukuran:
+
+- **`g_tutup_buku` dibaca `MAX(tanggal)`, bukan `TOP 1 ORDER BY periode DESC`.** Bentuknya `(periode, tanggal)` dengan mayoritas baris sentinel `2001-01-01`, dan periode terbesar belum tentu yang berisi tanggal asli (TANJUNG: periode 7325 = 2001-01-01, periode 7324 = 2024-02-16). Dibaca ulang tiap run, tidak pernah di-cache.
+- **Rentang memakai `tanggal` OR `tanggal_server`.** 13 dari 927 baris GUDANG dan 13 dari 8.742 baris PUSAT punya `tanggal_server` beda HARI dari `tanggal` — nota bertanggal mundur yang diinput belakangan. Menyaring `tanggal` saja melewatkannya tanpa suara.
+- **Batas jendela dari `GETDATE()` server, tidak pernah dari `MAX(tanggal)`.** ANDARIA punya nota bertanggal **7252-01-09**. Baris semacam itu dipagari `TANGGAL_MAKS` dan **dilaporkan** sebagai `anomali_tanggal` (ANDARIA 1, PAGESANGAN 3), tidak ditelan diam-diam.
+- **Nota yang lenyap di cabang ikut dihapus di pusat** — yang tidak pernah bisa dilakukan feed (`__insert`/`__update` saja). Sapuan pertama menemukan **7 nota hantu di PRAYA dan 1 di PUSAT**.
+- **`bind_varchar()` wajib sebelum daftar `IN` panjang** (`hub_sync.bind_varchar`, dipakai `_ambil_ulang_detail` dan jalur hapus). pyodbc mengikat `str` sebagai NVARCHAR, kolom kunci legacy `varchar`; konversi implisit membatalkan index seek dan SQL Server memindai tabel sekali untuk TIAP nilai. Terukur ANDARIA (`t_penjualan_detail`, 1,46 juta baris, indeks ADA): IN(50) **6,23 dtk → 0,01 dtk**, IN(500) **timeout 60 dtk → 0,18 dtk**. Ongkos yang linear terhadap jumlah parameter adalah tandanya. Wajib direset `setinputsizes(None)` sesudahnya.
+- **Master ikut GUDANG saja** (`hub_master.py`). Kolom `kd_sumber` tetap ada di PK master, yang berubah hanya siapa yang mengisinya. Master tidak punya penanda perubahan apa pun, jadi dibandingkan penuh. `pull_master --purge-lain` membersihkan baris cabang lain, default dry-run dan menuntut `--hapus-beneran` terpisah.
+- **Arsip dipotong per BULAN dan punya titik lanjut** (`HubPullState.arsip_sampai`, ditulis sesudah tiap potongan di-commit). Keduanya dibayar oleh run pertama: satu tahun PUSAT = ~90rb header + ~600rb detail dalam satu transaksi lewat WAN, dan jaringan putus di potongan **32 dari 48** sehingga **285.809 header** harus disalin ulang dari nol. Hasilnya tetap benar tanpa titik lanjut (semuanya idempoten) — yang hilang jam kerjanya, dan itu yang mahal. Titik lanjut dibaca lewat `timezone.localtime()` dulu: nilainya tersimpan UTC sementara batas potongan naif jam lokal, dan selisih 8 jam bisa membuat potongan yang belum selesai terbaca sudah lalu dilewati diam-diam.
+- **`pull_all` menjalankan semua cabang SEBELUM satu pun ringkasan tercetak** (ia list comprehension). Karena itu tiap baris kemajuan wajib menyebut nama cabangnya — tanpa itu, baris `[32/48] GAGAL` tak bisa ditelusuri ke cabang mana pun, dan pembacanya (termasuk penulis kodenya sendiri) akan salah menuduh cabang yang tercetak di bawahnya.
+- **Round-trip, bukan volume, yang menentukan kecepatan.** Semua server lewat Tailscale yang me-relay ke Singapura. Bentuk awal mengirim ~5.000 perjalanan bolak-balik per 500 nota (cek-lalu-UPDATE per baris = 1.000, DELETE satu per nota = 500, `executemany` tanpa `fast_executemany` = ~3.500); sekarang ~10. Terukur **29 → 671 header/detik**; bagian PUSAT yang semula >1 jam lalu putus jadi **4 menit 29 detik**. `fast_executemany` dipasang di `core/mssql.py` sehingga seluruh aplikasi ikut. Pola yang harus dicurigai kalau ada yang lambat lagi: loop Python yang memanggil `cur.execute` per baris.
+- **Satu blip koneksi tidak lagi menjatuhkan satu cabang** (`COBA_ULANG`). PRAYA gagal `[08001] wait operation timed out` lalu konek 0,7 detik kemudian tanpa ada yang berubah. Aman diulang karena tiap mode idempoten dan hanya mengerjakan sisanya.
+- **Hasil sapuan pertama (2026-08-06)**: arsip ~947.000 header + pencocokan 708.896 header untuk 9 cabang, **30.205 nota hantu dibersihkan**, master 196.221 baris dari GUDANG dalam 23,6 detik, dan 1.858 baris master cabang lain dibuang. `hari_beda` turun dari 218–2.113 menjadi **0** (PRAYA 1: perubahan nyata). Itu pembuktiannya — cocok hari-per-hari, bukan "jalan tanpa error".
+- **Yang belum tertutup**: agregat pencocokan hanya melihat header (tidak ada kolom nilai di header — uangnya di detail), jadi nota lama yang qty/harga detailnya diubah tanpa header tersentuh tidak terdeteksi tingkat 2. Jendela segar tidak terpengaruh.
 
 ## Perubahan harga harian (snapshot diff-only)
 

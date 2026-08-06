@@ -563,6 +563,43 @@ def update_barang_index(request):
     )
 
 
+def _sebar_harga(profile, changes) -> None:
+    """Dorong perubahan harga ke toko grosir SEKETIKA, best-effort.
+
+    Harga grosir harus berubah hampir seketika di semua toko, dan sapuan berkala
+    (`harga_sync`, 60 detik) sendirian berarti kasir di toko lain bisa menjual
+    dengan harga lama selama semenit sesudah harga diubah di sini. Ini menutup
+    jendela itu untuk perubahan yang lewat aplikasi ini; sapuan tetap dibutuhkan
+    untuk perubahan yang dibuat langsung di POS lama.
+
+    **Tidak pernah menggagalkan permintaan.** Harganya SUDAH tersimpan di server
+    sumber saat fungsi ini dipanggil. Menggagalkan respons karena satu toko mati
+    berarti pengguna mengira simpanannya batal lalu mengulanginya — padahal yang
+    gagal cuma penyebarannya, dan sapuan berkala menambalnya dalam hitungan menit.
+
+    Hanya jalan kalau `profile` memang sumber fan-out (GUDANG). Mengubah harga di
+    server toko tidak menyebar ke mana pun: arahnya gudang -> toko, dan menyebar
+    balik akan membuat dua server saling menimpa.
+    """
+    if not changes or not _flag_env("HARGA_SYNC_ENABLED"):
+        return
+    try:
+        from apps.transactions import harga_sync
+
+        source, targets = harga_sync.profil_fanout()
+        if not source or not targets or source.pk != profile.pk:
+            return
+        hasil = harga_sync.dorong_perubahan(source, targets, changes)
+        if hasil["gagal"]:
+            log.warning("sebar harga seketika gagal ke: %s", hasil["gagal"])
+    except Exception:  # pragma: no cover — penyebaran tak boleh menjatuhkan simpan
+        log.exception("sebar harga seketika gagal")
+
+
+def _flag_env(name: str, default: str = "0") -> bool:
+    return os.environ.get(name, default).lower() in ("1", "true", "yes", "on")
+
+
 def update_barang_harga(request):
     # Selalu tulis ke koneksi aktif SAAT INI (server-side), bukan id yang dikirim
     # client — kalau tidak, halaman ini di tab lain yang masih terbuka setelah user
@@ -579,6 +616,10 @@ def update_barang_harga(request):
     status: dict = {}
     try:
         changes = master.update_harga(profile, kd_barang, prices, status=status)
+        # `update_harga` mengembalikan per-satuan tanpa kd_barang — pemanggilnya
+        # yang tahu barang mana. Ditambahkan di sini, bukan di service, supaya
+        # bentuk kembaliannya tidak berubah untuk pemanggil lain.
+        _sebar_harga(profile, [{**c, "kd_barang": kd_barang} for c in changes])
         log_barang_updates(
             request, profile, kd_barang, nama_barang,
             [
@@ -635,9 +676,14 @@ def update_barang_harga_massal(request):
     # Kalau jumlah baris tumbuh sampai ribuan, baru pertimbangkan batch tunggal.
     total, gagal = 0, []
     status: dict = {}
+    # Dikumpulkan dulu, disebar SEKALI di akhir. Menyebar per barang di dalam
+    # loop berarti membuka koneksi ke delapan toko sekali per barang — untuk 300
+    # barang itu 2.400 koneksi, dan pengguna menunggu semuanya.
+    semua_perubahan: list[dict] = []
     for kb, prices in per_barang.items():
         try:
             changes = master.update_harga(profile, kb, prices, status=status)
+            semua_perubahan += [{**c, "kd_barang": kb} for c in changes]
         except master.HargaTidakBulat as exc:
             gagal.append(f"{kb} ({exc})")
             continue
@@ -653,6 +699,7 @@ def update_barang_harga_massal(request):
             ],
         )
 
+    _sebar_harga(profile, semua_perubahan)
     log_activity(
         request, "barang",
         f"Terapkan harga massal ({profile.name}): {total} satuan pada {len(per_barang) - len(gagal)} barang",
@@ -1151,9 +1198,13 @@ def sync_health_index(request):
         # Bagian kedua: pusat AMPHOREUS. Kosong kalau profil pusat belum dibuat
         # atau belum ada cabang ber-kode_sumber — halaman tetap berguna untuk
         # memantau job legacy tanpa itu.
-        hub = ServerProfile.objects.filter(name="AMPHOREUS").first()
+        # Bagian pusat membaca `HubPullState` (tarik langsung dari tabel asli),
+        # BUKAN lagi ketinggalan cursor feed. `hub_sync` sudah tidak dijadwalkan;
+        # kalau bagian lama dibiarkan, angkanya beku di posisi terakhir dan tetap
+        # tampil hijau seolah masih berarti.
+        hub = ServerProfile.objects.filter(name=nama_hub).first()
         sumber = sumber_profiles() if hub else []
-        hub_rows = services_sync.hub_health_all(hub, sumber) if sumber else []
+        hub_rows = services_sync.hub_pull_health_all(hub, sumber) if sumber else []
 
         # Bagian ketiga: fan-out master data gudang -> toko (feed_sync). Tujuan
         # dibaca dari FEED_SYNC_TARGETS supaya yang tampil di layar sama persis
