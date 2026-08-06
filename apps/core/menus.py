@@ -120,7 +120,15 @@ def landing_for(user) -> str | None:
     if not menus:
         return None
     kerja = [m for m in menus if not m.get("always")]
-    return (kerja or menus)[0]["href"]
+    if not kerja:
+        return menus[0]["href"]
+    # Utamakan menu BAWAAN perannya. Superadmin melihat seluruh ALL_MENUS, jadi
+    # mengambil elemen pertama begitu saja mengantarnya ke menu apa pun yang
+    # kebetulan ada di awal daftar — saat menu kasir ditaruh di atas, seluruh
+    # superadmin mendarat di layar Cek Stok, bukan Dashboard.
+    bawaan = set(default_keys_for(user.role))
+    milik = [m for m in kerja if m["key"] in bawaan]
+    return (milik or kerja)[0]["href"]
 
 
 def default_keys_for(role) -> list[str]:
@@ -137,7 +145,7 @@ def default_keys_for(role) -> list[str]:
     """
     from apps.auth_app.models import Role
 
-    if role == Role.ADMIN:
+    if role in (Role.ADMIN, Role.SUPERADMIN):
         return [m["key"] for m in assignable_menus() if not m.get("roles")]
     return [m["key"] for m in ALL_MENUS if role in m.get("roles", ())]
 

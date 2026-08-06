@@ -53,6 +53,18 @@ class MenuBawaanPeranTests(TestCase):
         boss = User.objects.create_user("boss9", password="rahasia-kuat-123", role=Role.SUPERADMIN)
         self.assertEqual(_keys(boss), {m["key"] for m in ALL_MENUS})
 
+    def test_pendaratan_ikut_peran_bukan_urutan_daftar(self):
+        """Superadmin melihat seluruh ALL_MENUS. Mengambil elemen pertama begitu
+        saja mengantarnya ke menu apa pun yang kebetulan ada di awal daftar —
+        saat menu kasir ditaruh di atas, semua superadmin mendarat di Cek Stok."""
+        from apps.core.menus import landing_for
+
+        boss = User.objects.create_user("boss8", password="rahasia-kuat-123", role=Role.SUPERADMIN)
+        self.assertEqual(landing_for(boss), "/admin-panel/dashboard")
+        self.assertEqual(landing_for(self.admin), "/admin-panel/dashboard")
+        self.assertEqual(landing_for(self.kasir), "/kasir/stok")
+        self.assertEqual(landing_for(self.spv), "/kasir/stok")
+
     def test_kasir_bisa_diberi_menu_admin(self):
         """Inti permintaannya: akses ke fitur admin tetap dikelola admin/superadmin."""
         self.kasir.allowed_menu_keys = ["kasir_stok", "stock"]
