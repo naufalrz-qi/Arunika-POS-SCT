@@ -52,6 +52,7 @@ python manage.py pull_hub --mode segar --hari 7 --dry-run   # fill AMPHOREUS str
 python manage.py pull_hub --mode cocok --dry-run            # report which days differ, branch vs hub
 python manage.py pull_master --dry-run                      # master data into AMPHOREUS, from GUDANG only
 python manage.py sync_harga --dry-run                       # GUDANG prices vs every toko; report what differs
+python manage.py sync_master --dry-run                      # GUDANG names/brands/suppliers vs every toko
 ```
 
 ## Architecture

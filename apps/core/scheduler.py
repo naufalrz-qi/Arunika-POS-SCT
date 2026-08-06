@@ -345,10 +345,29 @@ def _run_due_hub_pull(now) -> None:
                         "hub_pull cocok %s: %s hari berbeda, disalin ulang",
                         cocok["source"], cocok["hari_beda"],
                     )
-            if s.name == nama_master and _flag("HUB_MASTER_ENABLED", "0"):
-                m = hub_master.sync_master(s, hub)
-                if m["status"] == "failed":
-                    log.warning("hub_master GAGAL: %s", m["error"])
+            if s.name == nama_master:
+                if _flag("HUB_MASTER_ENABLED", "0"):
+                    m = hub_master.sync_master(s, hub)
+                    if m["status"] == "failed":
+                        log.warning("hub_master GAGAL: %s", m["error"])
+                # Arah lain, jadwal sama: samakan nama barang/merek/supplier di
+                # toko dengan gudang. Harga TIDAK ikut — itu milik `harga_sync`
+                # yang menyapunya tiap 60 detik, dan menyapunya dua kali cuma
+                # menambah tulisan yang menyalakan trigger legacy di toko.
+                if _flag("MASTER_TOKO_ENABLED", "0"):
+                    from apps.transactions import harga_sync
+
+                    _, toko = harga_sync.profil_fanout()
+                    if toko:
+                        mt = hub_master.sync_master_toko(s, toko)
+                        ditulis = sum(
+                            b["baru"] + b["ubah"]
+                            for baris in mt["per_toko"].values() for b in baris
+                        )
+                        if ditulis:
+                            log.info("master ke toko: %s baris ditulis", ditulis)
+                        if mt["gagal"]:
+                            log.warning("master ke toko GAGAL: %s", mt["gagal"])
             # Slot harian ditandai selesai apa pun yang jalan di dalamnya.
             HubPullState.objects.filter(source_profile=s, target_profile=hub).update(
                 cocok_terakhir_at=timezone.now()

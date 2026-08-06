@@ -138,6 +138,56 @@ class DorongPerubahanTests(SimpleTestCase):
         self.assertEqual(d.call_args[0][2], set())
 
 
+class MasterKeTokoTests(SimpleTestCase):
+    """Menyamakan katalog toko dengan gudang. Yang paling berbahaya di sini bukan
+    salah salin, tapi salah HAPUS: toko punya barang lokal yang tak ada di
+    gudang, dan nota-nota lamanya masih menunjuk ke sana."""
+
+    def _sync(self, boleh_hapus):
+        from apps.transactions import hub_master
+
+        class Kursor:
+            def __init__(self, baris):
+                self.sql, self.params, self._antre = [], [], [baris]
+            def execute(self, sql, params=None):
+                self.sql.append(sql); self.params.append(list(params or []))
+            def executemany(self, sql, seq):
+                self.sql.append(sql); self.params.append(list(seq))
+            def fetchall(self):
+                return self._antre.pop(0) if self._antre else []
+
+        src = Kursor([("A1", "Barang Gudang")])          # gudang: cuma A1
+        dst = Kursor([("A1", "Barang Lama"), ("LOKAL9", "Barang Toko")])
+        with patch.object(hub_master, "_kolom_tujuan", return_value=["kd_barang", "nama"]):
+            return dst, hub_master.sync_tabel(
+                src, dst, "m_barang", kd_sumber=None, boleh_hapus=boleh_hapus
+            )
+
+    def test_barang_lokal_toko_tidak_dihapus(self):
+        dst, hasil = self._sync(boleh_hapus=False)
+        self.assertEqual(hasil["hapus"], 0)
+        self.assertEqual(hasil["hapus_dilewati"], 1)
+        self.assertFalse([s for s in dst.sql if s.startswith("DELETE")])
+
+    def test_yang_beda_tetap_diperbarui(self):
+        _, hasil = self._sync(boleh_hapus=False)
+        self.assertEqual(hasil["ubah"], 1)   # A1 namanya beda
+
+    def test_tanpa_kd_sumber_tidak_menulis_kolom_itu(self):
+        """Tabel toko itu legacy apa adanya; menyebut `kd_sumber` di WHERE akan
+        gagal 'invalid column name'."""
+        dst, _ = self._sync(boleh_hapus=False)
+        self.assertFalse([s for s in dst.sql if "kd_sumber" in s])
+
+    def test_harga_bukan_urusan_modul_ini(self):
+        """`m_barang_satuan` disapu `harga_sync` tiap 60 detik. Menyapunya lagi
+        di sini cuma menambah tulisan yang menyalakan trigger legacy di toko."""
+        from apps.transactions import hub_master
+
+        self.assertNotIn("m_barang_satuan", hub_master.TABEL_TOKO)
+        self.assertIn("m_barang", hub_master.TABEL_TOKO)
+
+
 class IkatanVarcharTests(SimpleTestCase):
     def test_ambil_baris_mengikat_varchar(self):
         """Kolom kunci `m_barang_satuan` bertipe varchar/char. Tanpa ikatan ini

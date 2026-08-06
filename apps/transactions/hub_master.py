@@ -35,7 +35,7 @@ from __future__ import annotations
 import pyodbc
 
 from apps.inventory.services import _k
-from apps.transactions.feed_sync import _kolom_tujuan
+from apps.transactions.feed_sync import FEED_TABLE_SPECS, _kolom_tujuan
 from apps.transactions.hub_schema import KOL_SUMBER
 from apps.transactions.hub_sync import HUB_TABLE_SPECS, SEED_TABLES
 from core import mssql
@@ -59,8 +59,21 @@ def _muat(cur, tabel: str, kolom: list[str], where: str = "", params=None) -> di
     return [dict(zip(kolom, r)) for r in cur.fetchall()]
 
 
-def sync_tabel(src_cur, hub_cur, tabel: str, kd_sumber: str = SUMBER_MASTER) -> dict:
-    """Satu tabel master: tulis yang beda, sisipkan yang belum ada, hapus yang lenyap."""
+def sync_tabel(src_cur, hub_cur, tabel: str, kd_sumber: str | None = SUMBER_MASTER,
+               boleh_hapus: bool = True) -> dict:
+    """Satu tabel master: tulis yang beda, sisipkan yang belum ada, hapus yang lenyap.
+
+    Dipakai untuk DUA tujuan yang berbeda sifatnya:
+
+    - **AMPHOREUS** (`kd_sumber='GUDANG'`, `boleh_hapus=True`) — isinya salinan
+      kita sendiri, jadi baris yang lenyap di GUDANG memang harus ikut lenyap.
+    - **Server toko** (`kd_sumber=None`, `boleh_hapus=False`) — tabelnya legacy
+      tanpa kolom `kd_sumber`, dan isinya BUKAN milik kita. Toko boleh punya
+      barang lokal yang tak ada di gudang; menghapusnya berarti membuang data
+      orang lain, dan barang yang dihapus masih ditunjuk nota-nota lamanya.
+      Karena itu ke toko hanya menyisipkan dan memperbarui, tidak pernah
+      menghapus.
+    """
     spec = HUB_TABLE_SPECS[tabel]
     kunci_kol = spec["key_columns"]
     kol_hub = _kolom_tujuan(hub_cur, tabel)
@@ -74,11 +87,15 @@ def sync_tabel(src_cur, hub_cur, tabel: str, kd_sumber: str = SUMBER_MASTER) -> 
         # sekerabat. Pelajaran yang sama sudah dibayar `feed_sync._kunci_lengkap`.
         raise RuntimeError(f"{tabel}: kolom kunci {hilang} tak ada di kedua sisi")
 
+    # Prefiks `kd_sumber` hanya ada di AMPHOREUS. Di toko, tabelnya legacy apa
+    # adanya dan menambahkan kolom itu ke WHERE akan gagal "invalid column".
+    pre_sql, pre_arg = (f"[{KOL_SUMBER}] = ?", [kd_sumber]) if kd_sumber is not None else ("", [])
+
     sumber = _muat(src_cur, tabel, boleh)
-    tujuan = _muat(hub_cur, tabel, boleh, f"[{KOL_SUMBER}] = ?", [kd_sumber])
+    tujuan = _muat(hub_cur, tabel, boleh, pre_sql, pre_arg)
     peta_tujuan = {_kunci(b, kunci_kol): b for b in tujuan}
 
-    hasil = {"tabel": tabel, "baru": 0, "ubah": 0, "hapus": 0, "sama": 0}
+    hasil = {"tabel": tabel, "baru": 0, "ubah": 0, "hapus": 0, "hapus_dilewati": 0, "sama": 0}
     lain = [k for k in boleh if k not in kunci_kol]
     terlihat = set()
 
@@ -97,33 +114,42 @@ def sync_tabel(src_cur, hub_cur, tabel: str, kd_sumber: str = SUMBER_MASTER) -> 
         terlihat.add(kk)
         lama = peta_tujuan.get(kk)
         if lama is None:
-            antre_baru.append([kd_sumber] + [baris[k] for k in boleh])
+            antre_baru.append(pre_arg + [baris[k] for k in boleh])
             hasil["baru"] += 1
             continue
         if all(lama[k] == baris[k] for k in lain):
             hasil["sama"] += 1
             continue
+        where_kunci = " AND ".join(f"[{k}] = ?" for k in kunci_kol)
         hub_cur.execute(
             f"UPDATE [{tabel}] SET {', '.join(f'[{k}] = ?' for k in lain)} "
-            f"WHERE [{KOL_SUMBER}] = ? AND " + " AND ".join(f"[{k}] = ?" for k in kunci_kol),
-            [baris[k] for k in lain] + [kd_sumber] + [baris[k] for k in kunci_kol],
+            f"WHERE {(pre_sql + ' AND ') if pre_sql else ''}{where_kunci}",
+            [baris[k] for k in lain] + pre_arg + [baris[k] for k in kunci_kol],
         )
         hasil["ubah"] += 1
 
     if antre_baru:
+        kol_insert = ([KOL_SUMBER] if kd_sumber is not None else []) + boleh
         hub_cur.executemany(
-            f"INSERT INTO [{tabel}] ([{KOL_SUMBER}], {', '.join(f'[{k}]' for k in boleh)}) "
-            f"VALUES ({', '.join('?' * (len(boleh) + 1))})",
+            f"INSERT INTO [{tabel}] ({', '.join(f'[{k}]' for k in kol_insert)}) "
+            f"VALUES ({', '.join('?' * len(kol_insert))})",
             antre_baru,
         )
+
+    # Menghapus HANYA di AMPHOREUS. Di toko, baris yang tak ada di gudang adalah
+    # barang lokal milik toko itu — membuangnya berarti menghapus data orang
+    # lain, dan nota-nota lama toko masih menunjuk ke sana.
+    if not boleh_hapus:
+        hasil["hapus_dilewati"] = sum(1 for kk in peta_tujuan if kk not in terlihat)
+        return hasil
 
     for kk, baris in peta_tujuan.items():
         if kk in terlihat:
             continue
+        where_kunci = " AND ".join(f"[{k}] = ?" for k in kunci_kol)
         hub_cur.execute(
-            f"DELETE FROM [{tabel}] WHERE [{KOL_SUMBER}] = ? AND "
-            + " AND ".join(f"[{k}] = ?" for k in kunci_kol),
-            [kd_sumber] + [baris[k] for k in kunci_kol],
+            f"DELETE FROM [{tabel}] WHERE {(pre_sql + ' AND ') if pre_sql else ''}{where_kunci}",
+            pre_arg + [baris[k] for k in kunci_kol],
         )
         hasil["hapus"] += 1
     return hasil
@@ -181,4 +207,55 @@ def purge_lain(hub, dry_run: bool = True) -> dict:
     except (pyodbc.Error, RuntimeError) as exc:
         hasil["status"] = "failed"
         hasil["error"] = str(exc.args[-1] if exc.args else exc)
+    return hasil
+
+
+# --- Master GUDANG -> toko grosir -------------------------------------------
+#
+# Arah yang BERBEDA dari fungsi di atas: bukan mengisi AMPHOREUS, tapi menyamakan
+# katalog di kesembilan server toko dengan katalog gudang.
+#
+# `feed_sync` sudah melakukannya, TAPI lewat `tbl_log_transaksi` — jalur memo
+# yang justru ditinggalkan untuk arah cabang -> AMPHOREUS, dan cacatnya sama:
+# memo bisa dipangkas, dan trigger legacy memotong isinya. Bedanya, di sini
+# tidak ada yang membandingkan, jadi nama barang yang gagal menyeberang tidak
+# akan pernah ketahuan.
+#
+# `harga_sync` sudah menutup bagian HARGA lewat perbandingan langsung. Modul ini
+# menutup sisanya: nama barang, merek, supplier.
+#
+# `m_barang_satuan` sengaja TIDAK di sini — itu milik `harga_sync`, yang
+# menyapunya tiap 60 detik. Menyapunya dua kali cuma menambah tulisan ke server
+# toko, dan tiap tulisan menyalakan trigger legacy di sana.
+TABEL_TOKO = [t for t in FEED_TABLE_SPECS if t != "m_barang_satuan"]
+
+
+def sync_master_toko(source, targets, tabel_saja=None, dry_run: bool = False) -> dict:
+    """Samakan katalog tiap toko dengan GUDANG. TIDAK PERNAH menghapus di toko.
+
+    Toko boleh punya barang lokal yang tak ada di gudang; itu bukan kesalahan
+    yang perlu dibersihkan, dan nota-nota lama toko masih menunjuk ke sana.
+    Yang lewat cuma sisipan dan pembaruan. Jumlah baris yang DILEWATI dilaporkan
+    sebagai `hapus_dilewati` supaya keputusan itu terlihat, bukan tersembunyi.
+
+    Satu toko gagal tidak menahan yang lain — pola yang sama dipakai `feed_sync`,
+    `hub_pull`, dan `harga_sync`.
+    """
+    daftar = [t for t in TABEL_TOKO if not tabel_saja or t in tabel_saja]
+    hasil = {"source": source.name, "per_toko": {}, "gagal": {},
+             "status": "dry_run" if dry_run else "ok"}
+    for t in targets:
+        try:
+            with mssql.cursor(source) as src_cur, mssql.cursor(t, autocommit=False) as dst_cur:
+                baris = [
+                    sync_tabel(src_cur, dst_cur, tabel, kd_sumber=None, boleh_hapus=False)
+                    for tabel in daftar
+                ]
+                if dry_run:
+                    dst_cur.connection.rollback()
+                else:
+                    dst_cur.connection.commit()
+            hasil["per_toko"][t.name] = baris
+        except (pyodbc.Error, RuntimeError) as exc:
+            hasil["gagal"][t.name] = str(exc.args[-1] if exc.args else exc)[:255]
     return hasil
