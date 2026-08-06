@@ -261,6 +261,36 @@ def _salin_header(src_cur, hub_cur, tabel: str, kd_sumber: str, dari, sampai) ->
         f"DELETE FROM [{tabel}] WHERE [{KOL_SUMBER}] = ? AND {where_hub}",
         [kd_sumber] + params_hub,
     )
+
+    parents = set()
+    if kol_kunci:
+        idx = boleh.index(kol_kunci)
+        parents = {r[idx] for r in baris_src}
+        # Hapus juga BERDASARKAN KUNCI, bukan cuma rentang.
+        #
+        # Tanggal di sisi AMPHOREUS bisa BASI. Terukur: nota PAGESANGAN
+        # CP2607130001 punya `tanggal_server` 2026-08-06 di cabang (diedit ulang
+        # hari itu) tapi 2026-07-23 di AMPHOREUS — salinan lama. Jendela 7 hari
+        # memilihnya di sumber lewat tanggal baru, sementara DELETE rentang di
+        # AMPHOREUS memakai tanggal lama yang di luar jendela, jadi barisnya
+        # bertahan dan INSERT-nya bertabrakan: "Violation of PRIMARY KEY".
+        #
+        # Bentuk cek-lalu-UPDATE yang lama kebal karena berkunci pada kunci
+        # alami. Kekebalan itu dikembalikan di sini tanpa mengembalikan
+        # ongkosnya: satu DELETE per 500 kunci, bukan dua round-trip per baris.
+        daftar_kunci = sorted(parents, key=lambda v: str(v))
+        for i in range(0, len(daftar_kunci), BATCH_PARENT):
+            potong = daftar_kunci[i:i + BATCH_PARENT]
+            bind_varchar(hub_cur, len(potong) + 1)
+            try:
+                hub_cur.execute(
+                    f"DELETE FROM [{tabel}] WHERE [{KOL_SUMBER}] = ? AND [{kol_kunci}] IN "
+                    f"({', '.join('?' * len(potong))})",
+                    [kd_sumber] + potong,
+                )
+            finally:
+                hub_cur.setinputsizes(None)
+
     if baris_src:
         hub_cur.executemany(
             f"INSERT INTO [{tabel}] ([{KOL_SUMBER}], "
@@ -268,11 +298,6 @@ def _salin_header(src_cur, hub_cur, tabel: str, kd_sumber: str, dari, sampai) ->
             + ") VALUES (" + ", ".join("?" * (len(boleh) + 1)) + ")",
             [[kd_sumber] + list(r) for r in baris_src],
         )
-
-    parents = set()
-    if kol_kunci:
-        idx = boleh.index(kol_kunci)
-        parents = {r[idx] for r in baris_src}
 
     # Detail SELALU ikut header, tidak menunggu apa pun. Cakupan trigger berbeda
     # tiap cabang (PRAYA: 285 header t_penjualan, NOL feed detail), dan nota tanpa
@@ -343,6 +368,28 @@ def _salin_rentang_datar(src_cur, hub_cur, tabel: str, kd_sumber: str, dari, sam
         params_src,
     )
     baris = src_cur.fetchall()
+
+    # Hapus juga berdasarkan nota, bukan cuma rentang — alasan yang sama dengan
+    # `_salin_header`: tanggal di sisi AMPHOREUS bisa basi sehingga DELETE
+    # rentang melewatkan barisnya. Bedanya tabel ini TIDAK punya primary key,
+    # jadi akibatnya bukan error melainkan baris berganda yang diam-diam
+    # menggelembungkan hasil opname.
+    induk = HUB_TABLE_SPECS[tabel]["parent_key"]
+    if baris and induk in boleh:
+        idx = boleh.index(induk)
+        daftar = sorted({r[idx] for r in baris}, key=lambda v: str(v))
+        for i in range(0, len(daftar), BATCH_PARENT):
+            potong = daftar[i:i + BATCH_PARENT]
+            bind_varchar(hub_cur, len(potong) + 1)
+            try:
+                hub_cur.execute(
+                    f"DELETE FROM [{tabel}] WHERE [{KOL_SUMBER}] = ? AND [{induk}] IN "
+                    f"({', '.join('?' * len(potong))})",
+                    [kd_sumber] + potong,
+                )
+            finally:
+                hub_cur.setinputsizes(None)
+
     if baris:
         hub_cur.executemany(
             f"INSERT INTO [{tabel}] ([{KOL_SUMBER}], {', '.join(f'[{k}]' for k in boleh)}) "

@@ -248,15 +248,35 @@ class NotaLenyapTests(SimpleTestCase):
         _, _, hasil = self._jalankan(["tr001  "])
         self.assertEqual(hasil["dihapus"], 0)
 
+    def test_dihapus_juga_berdasarkan_kunci_bukan_cuma_rentang(self):
+        """Regresi nyata: nota PAGESANGAN CP2607130001 punya `tanggal_server`
+        2026-08-06 di cabang (diedit ulang hari itu) tapi 2026-07-23 di
+        AMPHOREUS — salinan lama. Jendela memilihnya di sumber lewat tanggal
+        baru; DELETE rentang di AMPHOREUS memakai tanggal LAMA yang di luar
+        jendela, jadi barisnya bertahan dan INSERT-nya menabrak PRIMARY KEY.
+
+        Menghapus berdasarkan kunci alami menutupnya, dan itu mengembalikan
+        kekebalan bentuk cek-lalu-UPDATE yang lama tanpa ongkosnya.
+        """
+        hub, _, _ = self._jalankan(["LAIN"])   # kunci hub berbeda dari sumber
+        hapus = [s for s in hub.sql if s.startswith("DELETE")]
+        # Satu DELETE rentang + satu DELETE berkunci.
+        self.assertEqual(len(hapus), 2)
+        self.assertIn("IN (", hapus[1])
+        self.assertIn("TR001", hub.params[hub.sql.index(hapus[1])])
+
     def test_rentang_diganti_bukan_diperiksa_per_baris(self):
         """Bentuk cek-lalu-UPDATE/INSERT mengirim DUA round-trip per baris —
         1.000 untuk 500 nota, lewat Tailscale yang me-relay ke Singapura. Aman
         diganti di sini HANYA karena modul ini membaca baris penuh dari tabel
         asli; di `feed_sync` nilainya datang dari payload yang terpotong."""
         hub, _, _ = self._jalankan(["TR001"])
-        self.assertEqual(len([s for s in hub.sql if s.startswith("DELETE")]), 1)
+        # Dua DELETE (rentang + berkunci) lalu SATU INSERT untuk seluruh batch —
+        # bukan SELECT+UPDATE/INSERT per baris.
+        self.assertEqual(len([s for s in hub.sql if s.startswith("DELETE")]), 2)
         self.assertEqual(len([s for s in hub.sql if s.startswith("INSERT")]), 1)
         self.assertFalse([s for s in hub.sql if s.startswith("UPDATE")])
+        self.assertFalse([s for s in hub.sql if s.startswith("SELECT 1")])
 
 
 class IkatanVarcharTests(SimpleTestCase):
