@@ -10,9 +10,6 @@ class Role(models.TextChoices):
     SUPERADMIN = "superadmin", "Superadmin"
 
 
-# Menu keys must match those in apps/core/menus.py.
-ADMIN_DEFAULT_MENUS = ["dashboard", "users", "connections", "products", "customers", "logs"]
-
 # Kelompok nilai uang yang bisa dicabut per user. Bukan nama kolom database:
 # satu kunci menutup beberapa field sekaligus (lihat _hidden_fields di
 # apps/monitoring/views.py untuk pemetaannya).

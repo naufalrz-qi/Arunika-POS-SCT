@@ -2,10 +2,12 @@
 
 # Section order + display labels for the collapsible sidebar groups.
 SECTIONS = [
-    "ringkasan", "penjualan", "pembelian", "stok", "analitik", "promo", "kas",
+    "pos", "ringkasan", "penjualan", "pembelian", "stok", "analitik", "promo", "kas",
     "master", "master_harga", "master_sync", "admin",
 ]
 SECTION_LABELS = {
+    # Menu harian kasir & supervisor. Bawaan peran mereka, bukan bawaan admin.
+    "pos": "Kasir",
     "ringkasan": "Ringkasan",
     "penjualan": "Penjualan",
     "pembelian": "Pembelian",
@@ -21,6 +23,12 @@ SECTION_LABELS = {
 }
 
 ALL_MENUS = [
+    # --- Kasir & supervisor ---------------------------------------------------
+    # "roles": menu ini BAWAAN peran yang disebut, dan sengaja BUKAN bawaan admin
+    # (lihat default_keys_for) — admin tetap bisa diberi lewat Kelola Menu.
+    # Rutenya di bawah /kasir, bukan /admin-panel: penjaga Tailscale menutup
+    # seluruh /admin-panel, sedangkan kasir di toko tidak ada di rentang CGNAT.
+    {"key": "kasir_stok", "label": "Cek Stok", "icon": "box", "href": "/kasir/stok", "section": "pos", "roles": ("kasir", "supervisor")},
     {"key": "dashboard", "label": "Dashboard", "icon": "dashboard", "href": "/admin-panel/dashboard", "section": "ringkasan"},
     # "always": tak bisa dicabut lewat Kelola Menu. Bantuan yang bisa hilang dari
     # sidebar justru menghilang tepat saat pengguna paling butuh.
@@ -115,6 +123,25 @@ def landing_for(user) -> str | None:
     return (kerja or menus)[0]["href"]
 
 
+def default_keys_for(role) -> list[str]:
+    """Menu bawaan sebuah peran, dipakai saat `allowed_menu_keys` masih kosong.
+
+    Admin dapat semua menu yang bisa diberikan KECUALI yang ber-`roles`. Menu
+    ber-`roles` itu milik harian kasir/supervisor; memberikannya ke setiap admin
+    secara diam-diam membuat "khusus untuk mereka" tidak berarti apa-apa. Admin
+    tetap bisa diberi menu itu lewat Kelola Menu — ia hanya tidak otomatis.
+
+    Kasir/supervisor dapat menu yang menyebut perannya. Perhatikan bahwa untuk
+    mereka "kosong" TIDAK boleh berarti akses penuh seperti pada admin: itu
+    justru membuka seluruh panel bagi akun yang belum sempat diatur.
+    """
+    from apps.auth_app.models import Role
+
+    if role == Role.ADMIN:
+        return [m["key"] for m in assignable_menus() if not m.get("roles")]
+    return [m["key"] for m in ALL_MENUS if role in m.get("roles", ())]
+
+
 def menus_for(user):
     """Return the menu list visible to `user` (PRD §4.3/§4.4)."""
     from apps.auth_app.models import Role
@@ -123,16 +150,14 @@ def menus_for(user):
         return []
     if user.role == Role.SUPERADMIN:
         return ALL_MENUS  # full access, always
-    if user.role == Role.ADMIN:
-        # Default to all assignable menus when nothing is configured yet.
-        keys = user.allowed_menu_keys or [m["key"] for m in assignable_menus()]
-        allowed = set(keys)
-        return [
-            m for m in ALL_MENUS
-            if not m.get("superadmin_only") and (m.get("always") or m["key"] in allowed)
-        ]
-    # Kasir / supervisor don't use the admin panel in this phase.
-    return []
+    # Satu jalur untuk admin, kasir, dan supervisor. Yang membedakan hanya apa
+    # arti "belum diatur" bagi tiap peran — itu ada di default_keys_for().
+    keys = user.allowed_menu_keys or default_keys_for(user.role)
+    allowed = set(keys)
+    return [
+        m for m in ALL_MENUS
+        if not m.get("superadmin_only") and (m.get("always") or m["key"] in allowed)
+    ]
 
 
 # Longest href first so /laporan/penjualan-nota resolves before /laporan/penjualan.

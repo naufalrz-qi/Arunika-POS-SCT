@@ -11,6 +11,11 @@ from apps.core.menus import landing_for, menu_key_for_path, menus_for
 # Paths reachable without authentication.
 PUBLIC_PREFIXES = ("/login", "/static", "/@vite", "/favicon")
 ADMIN_PREFIX = "/admin-panel"
+# Halaman harian kasir/supervisor. Prefix terpisah supaya penjaga Tailscale tetap
+# menutup rapat /admin-panel tanpa perlu dilonggarkan: kasir di toko tidak berada
+# di rentang CGNAT Tailscale, dan melonggarkan penjaganya demi mereka akan
+# membuka juga layar Manajemen User dan Koneksi Server.
+POS_PREFIX = "/kasir"
 
 # Admin-panel paths every admin-tier user may hit regardless of menu grants:
 # the navbar connection switcher lives on every page, so it must keep working
@@ -107,22 +112,34 @@ def _ip_allowed(ip: str) -> bool:
 
 
 def admin_network_guard(get_response):
-    """PRD §3.4/§7.6 — /admin-panel/* requires Admin-tier role and (optionally)
-    a Tailscale-range source IP. PRD §4.3 — per-menu grants (allowed_menu_keys)
-    are enforced here too, not just in the sidebar, so a restricted admin can't
-    reach revoked menus by typing the URL."""
+    """PRD §3.4/§7.6 — /admin-panel/* dan /kasir/* butuh menu yang diberikan, dan
+    khusus /admin-panel/* juga alamat IP dari rentang Tailscale.
+
+    Dulu di sini berdiri tembok berbasis peran (`is_admin_tier`). Ia diganti
+    penjagaan berbasis MENU karena keduanya menjawab pertanyaan yang berbeda:
+    peran menentukan bawaan seseorang, menu menentukan apa yang boleh ia buka.
+    Selama tembok peran masih ada, superadmin yang memberikan satu menu laporan
+    kepada supervisor tetap tidak menghasilkan apa-apa — orangnya ditolak
+    sebelum pemeriksaan menu sempat berjalan.
+
+    PRD §4.3 — pemberian per-menu ditegakkan di sini, bukan cuma di sidebar,
+    supaya menu yang dicabut tidak bisa dicapai dengan mengetik URL-nya."""
 
     def middleware(request):
-        if request.path.startswith(ADMIN_PREFIX):
+        path = request.path
+        di_admin = path.startswith(ADMIN_PREFIX)
+        if di_admin or path.startswith(POS_PREFIX):
             user = getattr(request, "user", None)
-            if not (user and user.is_authenticated and user.is_admin_tier):
+            if not (user and user.is_authenticated) or not menus_for(user):
                 return ditolak(
                     request,
                     "Halaman ini bukan untuk akun Anda",
-                    "Akun Anda dipakai di aplikasi kasir, bukan di halaman pengaturan "
-                    "ini. Kalau seharusnya bisa, minta pengelola aplikasi membukanya.",
+                    "Belum ada satu pun halaman yang dibuka untuk akun Anda. "
+                    "Minta pengelola aplikasi membukanya.",
                 )
-            if settings.ENFORCE_TAILSCALE:
+            # Tailscale hanya untuk panel pengaturan. Halaman kasir justru harus
+            # bisa dibuka dari jaringan toko.
+            if di_admin and settings.ENFORCE_TAILSCALE:
                 ip = request.META.get("REMOTE_ADDR", "")
                 if not _ip_allowed(ip):
                     return ditolak(

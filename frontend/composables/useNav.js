@@ -5,6 +5,7 @@ import { useUserStore } from "@/stores/user";
 
 // Display labels per section group. Keep in sync with apps/core/menus.py.
 const SECTION_LABELS = {
+  pos: "Kasir",
   ringkasan: "Ringkasan",
   penjualan: "Penjualan",
   pembelian: "Pembelian",
@@ -21,6 +22,7 @@ const SECTION_LABELS = {
 // Navbar tabs: backend sections consolidated into 5 groups so the tab row
 // stays airy; the original sections become sub-headers in the sidebar.
 const NAV_GROUPS = [
+  { key: "pos", label: "Kasir", sections: ["pos"] },
   { key: "ringkasan", label: "Ringkasan", sections: ["ringkasan"] },
   { key: "laporan", label: "Laporan", sections: ["penjualan", "pembelian", "analitik"] },
   { key: "operasional", label: "Operasional", sections: ["stok", "promo", "kas"] },

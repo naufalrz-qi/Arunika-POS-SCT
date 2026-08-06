@@ -5,6 +5,7 @@ from django.core.cache import cache
 from django.shortcuts import redirect
 
 from apps.core.http import get_data
+from apps.core.menus import landing_for
 from apps.auth_app.models import User
 from apps.core.models import log_activity
 
@@ -21,14 +22,14 @@ def _login_fail_key(username, ip) -> str:
 
 def root_redirect(request):
     if request.user.is_authenticated:
-        return redirect("/admin-panel/dashboard")
+        return redirect(landing_for(request.user) or "/login")
     return redirect("/login")
 
 
 def login_view(request):
     # Already logged in → go straight to the panel.
     if request.method == "GET" and request.user.is_authenticated:
-        return redirect("/admin-panel/dashboard")
+        return redirect(landing_for(request.user) or "/login")
 
     if request.method == "POST":
         data = get_data(request)
@@ -69,16 +70,19 @@ def login_view(request):
         login(request, user)
         log_activity(request, "login", "Login berhasil")
 
-        # Kasir/supervisor have no admin panel yet in this phase.
-        if not user.is_admin_tier:
+        # Tiap peran mendarat di menu pertama miliknya sendiri, bukan di Dashboard
+        # yang belum tentu ia punya. landing_for() sudah ada sejak lama untuk ini.
+        tujuan = landing_for(user)
+        if not tujuan:
             request.session["flash_error"] = (
-                "Akun kasir/supervisor dipakai di aplikasi kasir, bukan panel admin ini."
+                "Belum ada satu pun halaman yang dibuka untuk akun Anda. "
+                "Minta pengelola aplikasi membukanya."
             )
             logout(request)
             return redirect("/login")
 
         request.session["flash_success"] = f"Selamat datang, {user.get_full_name() or user.username}."
-        return redirect("/admin-panel/dashboard")
+        return redirect(tujuan)
 
     return render(request, "Auth/Login", props={})
 
