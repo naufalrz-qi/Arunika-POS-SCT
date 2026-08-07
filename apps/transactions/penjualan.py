@@ -198,16 +198,18 @@ def opsi_nota(profile) -> dict:
         }
 
 
-# Nilai bawaan form nota, mengikuti aplikasi legacy. Diambil dari data yang ada
-# di server, bukan dikarang: CAA000 = "UMUM", JAA000 = "TUNAI", KAA000 dipakai
-# 467.019 dari 474.585 nota, VAA000 sentinel "tanpa voucher" pada nota terbaru.
-# Semuanya tetap bisa diganti di layar — ini titik mulai, bukan kunci.
+# Nilai bawaan form nota, disamakan dengan layar aplikasi legacy.
+#
+# kd_kas SENGAJA KAA001 ("KAS BANK NON CV") walau KAA000 dipakai 467.019 dari
+# 474.585 nota di data lama. Yang benar adalah yang dipakai kasir hari ini, dan
+# layar legacy-nya membuka dengan KAA001 — angka historis di sini menyesatkan
+# karena memuat bertahun-tahun nota dari pengaturan yang sudah berubah.
 BAWAAN = {
-    "kd_customer": "CAA000",
-    "kd_jenis": "JAA000",
-    "kd_kas": "KAA000",
-    "kd_voucher": "VAA000",
-    "status": 1,
+    "kd_customer": "CAA000",   # UMUM
+    "kd_jenis": "JAA000",      # TUNAI
+    "kd_kas": "KAA001",        # KAS BANK NON CV
+    "kd_voucher": "VAA000",    # sentinel "tanpa voucher"
+    "status": 1,               # Tunai
     "jatuh_tempo_hari": 30,
 }
 
@@ -223,6 +225,7 @@ def bawaan_form(profile) -> dict:
     import datetime as _dt
 
     hasil = dict(BAWAAN)
+    hasil["customer_nama"] = "UMUM"
     hasil["tanggal"] = _dt.date.today().isoformat()
     hasil["jatuh_tempo"] = (
         _dt.date.today() + _dt.timedelta(days=BAWAAN["jatuh_tempo_hari"])).isoformat()
@@ -234,6 +237,25 @@ def bawaan_form(profile) -> dict:
         # Ancar-ancar nomor tak boleh menjatuhkan seluruh layar.
         hasil["no_transaksi"] = ""
     return hasil
+
+
+def cari_customer(profile, cari: str, limit: int = 20) -> list[dict]:
+    """Cari pelanggan untuk kotak isian nota.
+
+    Dicari, BUKAN di-dropdown: m_customer punya 9.367 baris di server testing,
+    dan menggulung daftar sepanjang itu tiap nota lebih lambat daripada
+    mengetik tiga huruf.
+    """
+    cari = (cari or "").strip()
+    if not cari:
+        return []
+    with mssql.cursor(profile) as cur:
+        cur.execute(
+            "SELECT TOP (?) kd_customer, nama, alamat FROM m_customer "
+            "WHERE nama LIKE ? OR kd_customer LIKE ? ORDER BY nama",
+            [limit, f"%{cari}%", f"%{cari}%"])
+        return [{"kd_customer": (r[0] or "").strip(), "nama": (r[1] or "").strip(),
+                 "alamat": (r[2] or "").strip()} for r in cur.fetchall()]
 
 
 def barang_persis(profile, kode: str) -> dict | None:

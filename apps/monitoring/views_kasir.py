@@ -63,6 +63,10 @@ def penjualan(request):
                 "opsi": pj.opsi_nota(profile),
                 "hasil_cari": pj.cari_barang(profile, cari),
                 "bawaan": pj.bawaan_form(profile),
+                "nama_divisi": _label(inv.list_divisi(profile), "kd_divisi", "nama",
+                                      request.user.kd_divisi),
+                "nama_pegawai": _label(pj.opsi_nota(profile)["pegawai"], "value", "label",
+                                       request.user.kd_pegawai),
                 "conn_error": None,
             }
         except pyodbc.Error as exc:
@@ -238,6 +242,16 @@ def _tanpa_harga(request, rows):
     return [{k: v for k, v in r.items() if k not in buang} for r in rows]
 
 
+def _label(rows, kunci, nama, kode):
+    """Nama untuk sebuah kode. Divisi & pegawai datang dari akun, jadi layar
+    hanya menampilkannya — dan kode mentah tak berarti apa pun bagi kasir."""
+    kode = (kode or "").strip()
+    for r in rows:
+        if (r.get(kunci) or "").strip() == kode:
+            return r.get(nama) or ""
+    return ""
+
+
 def cari_barang_json(request):
     """Pencarian barang tanpa memuat ulang halaman.
 
@@ -258,6 +272,20 @@ def cari_barang_json(request):
         return JsonResponse({"rows": _tanpa_harga(request, rows)})
     except pyodbc.Error as exc:
         return JsonResponse({"rows": [], "error": mssql.friendly_error(exc, "Gagal mencari barang")})
+
+
+def cari_customer_json(request):
+    """Pencarian pelanggan tanpa memuat ulang halaman — 9.367 baris tak layak
+    jadi dropdown."""
+    profile = _active()
+    if not profile:
+        return JsonResponse({"rows": [], "error": CONN_ERROR})
+    try:
+        return JsonResponse(
+            {"rows": pj.cari_customer(profile, request.GET.get("cari") or "")})
+    except pyodbc.Error as exc:
+        return JsonResponse(
+            {"rows": [], "error": mssql.friendly_error(exc, "Gagal mencari pelanggan")})
 
 
 def nota_cetak(request, no_transaksi):

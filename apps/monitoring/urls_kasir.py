@@ -11,6 +11,7 @@ urlpatterns = [
     # prefix di menu_key_for_path — path yang tak cocok menu mana pun dianggap
     # bebas, dan keduanya membocorkan nama barang, harga, serta isi nota.
     path("penjualan/cari-barang", v.cari_barang_json, name="kasir_cari_barang"),
+    path("penjualan/cari-customer", v.cari_customer_json, name="kasir_cari_customer"),
     path("penjualan/<str:no_transaksi>/cetak", v.nota_cetak, name="kasir_nota_cetak"),
     path("penjualan-retur", v.retur_penjualan, name="kasir_retur_penjualan"),
     path("penjualan-retur/save", v.retur_penjualan_save, name="kasir_retur_penjualan_save"),

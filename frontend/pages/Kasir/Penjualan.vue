@@ -29,8 +29,38 @@ const bawaan = computed(() => isi.value.bawaan || {});
 // --- Form kepala -----------------------------------------------------------
 const form = useForm({
   kd_customer: "", kd_jenis: "", kd_kas: "", kd_voucher: "", kd_pegawai: "",
-  keterangan: "", diskon_uang: 0, pajak: 0, status: 1, items: [],
+  keterangan: "", no_bukti: "", diskon_uang: 0, pajak: 0, status: 1, items: [],
 });
+const tanggal = ref("");
+const jatuhTempo = ref("");
+
+// --- Customer: dicari, bukan digulung ---------------------------------------
+// 9.367 baris di m_customer. Dropdown sepanjang itu lebih lambat daripada
+// mengetik tiga huruf, dan itulah keluhan yang membuat kotak ini ada.
+const customerNama = ref("");
+const cariCustomer = ref("");
+const hasilCustomer = ref([]);
+const bukaCustomer = ref(false);
+let timerCust = null;
+watch(cariCustomer, (q) => {
+  clearTimeout(timerCust);
+  if (!q.trim()) {
+    hasilCustomer.value = [];
+    return;
+  }
+  timerCust = setTimeout(async () => {
+    const { data } = await axios.get("/kasir/penjualan/cari-customer", { params: { cari: q } });
+    hasilCustomer.value = data.rows || [];
+    bukaCustomer.value = true;
+  }, 250);
+});
+function pilihCustomer(c) {
+  form.kd_customer = c.kd_customer;
+  customerNama.value = c.nama;
+  cariCustomer.value = "";
+  hasilCustomer.value = [];
+  bukaCustomer.value = false;
+}
 
 // Terisi begitu bawaan tiba. Layar legacy membuka form yang SUDAH terisi —
 // kasir tinggal memindai; mengosongkan lima dropdown tiap nota membuat
@@ -43,6 +73,9 @@ watch(bawaan, (b) => {
   form.kd_voucher = form.kd_voucher || b.kd_voucher;
   form.status = b.status ?? 1;
   form.kd_pegawai = form.kd_pegawai || props.kd_pegawai;
+  customerNama.value = customerNama.value || b.customer_nama || "";
+  tanggal.value = tanggal.value || b.tanggal || "";
+  jatuhTempo.value = jatuhTempo.value || b.jatuh_tempo || "";
 }, { immediate: true });
 
 // --- Pemindai + pencarian --------------------------------------------------
@@ -131,7 +164,7 @@ const jumlahItem = computed(() => baris.value.reduce((s, b) => s + Number(b.qty 
 const notaTerakhir = ref("");
 const siap = computed(
   () => Boolean(props.kd_user && props.kd_divisi) && baris.value.length > 0
-    && form.kd_customer && form.kd_jenis && form.kd_kas && form.kd_voucher && form.kd_pegawai,
+    && form.kd_customer && form.kd_jenis && form.kd_kas && form.kd_voucher,
 );
 function simpan() {
   if (!siap.value) return;
@@ -287,10 +320,56 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 
         <!-- Kepala nota + total -->
         <div class="space-y-4">
-          <Card title="Nota">
+          <Card title="Input Data">
             <div class="space-y-3">
-              <Select v-model="form.kd_customer" label="Customer" :options="opsi.pelanggan || []" />
-              <Select v-model="form.kd_pegawai" label="Pegawai" :options="opsi.pegawai || []" />
+              <!-- Divisi & Pegawai datang dari AKUN, jadi ditampilkan saja —
+                   sama seperti layar legacy yang mengabukan keduanya. -->
+              <div class="grid grid-cols-2 gap-2 text-sm">
+                <div>
+                  <p class="text-xs text-ink-muted">Divisi</p>
+                  <p class="text-ink">{{ isi.nama_divisi || kd_divisi || "—" }}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-ink-muted">Pegawai</p>
+                  <p class="text-ink">{{ isi.nama_pegawai || kd_pegawai || "—" }}</p>
+                </div>
+              </div>
+
+              <div class="relative">
+                <label class="mb-1 block text-xs font-medium text-ink-muted">Customer</label>
+                <p class="mb-1 text-sm text-ink">
+                  {{ customerNama || "—" }}
+                  <span class="font-mono text-xs text-ink-subtle">{{ form.kd_customer }}</span>
+                </p>
+                <input
+                  v-model="cariCustomer"
+                  class="w-full rounded-control border border-border-strong bg-surface px-2.5 py-1.5 text-sm"
+                  placeholder="Ketik nama untuk ganti…"
+                  @focus="bukaCustomer = true"
+                />
+                <ul
+                  v-if="bukaCustomer && hasilCustomer.length"
+                  class="absolute z-10 mt-1 max-h-60 w-full overflow-y-auto rounded-control border border-border-strong bg-surface shadow-lg"
+                >
+                  <li
+                    v-for="c in hasilCustomer"
+                    :key="c.kd_customer"
+                    class="cursor-pointer px-2 py-1.5 text-sm hover:bg-surface-2"
+                    @click="pilihCustomer(c)"
+                  >
+                    <p class="text-ink">{{ c.nama }}</p>
+                    <p class="truncate font-mono text-xs text-ink-subtle">
+                      {{ c.kd_customer }} <span v-if="c.alamat">· {{ c.alamat }}</span>
+                    </p>
+                  </li>
+                </ul>
+              </div>
+
+              <div class="grid grid-cols-2 gap-2">
+                <Input v-model="tanggal" type="date" label="Tanggal" />
+                <Input v-model="jatuhTempo" type="date" label="Jatuh Tempo" />
+              </div>
+              <Input v-model="form.no_bukti" label="No. Order" placeholder="-" />
               <Select v-model="form.kd_jenis" label="Jenis Bayar" :options="opsi.jenis_bayar || []" />
               <Select v-model="form.kd_kas" label="Kas" :options="opsi.kas || []" />
               <Select v-model="form.kd_voucher" label="Voucher" :options="opsi.voucher || []" />
