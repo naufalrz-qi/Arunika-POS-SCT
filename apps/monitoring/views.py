@@ -19,7 +19,12 @@ from apps.auth_app.models import DATA_KEY_SET, DATA_KEYS, Role, User
 from apps.connections.models import ServerProfile
 from apps.core.http import get_data
 from apps.core.middleware import ditolak
-from apps.core.menus import SECTION_LABELS, SECTIONS, assignable_menus
+from apps.core.menus import (
+    SECTION_LABELS,
+    SECTIONS,
+    assignable_menus,
+    default_keys_for,
+)
 from apps.core.models import (
     ActivityLog,
     BarangHargaChange,
@@ -1593,6 +1598,13 @@ def menus_index(request):
             ],
             "menus": assignable_menus(),
             "data_keys": DATA_KEYS,
+            # Menu bawaan tiap peran. Tanpa ini layar berbohong: user yang
+            # `allowed_menu_keys`-nya kosong tampil tanpa satu centang pun,
+            # padahal ia SEDANG memegang menu bawaan perannya.
+            "role_defaults": {
+                r: default_keys_for(r)
+                for r in (Role.KASIR, Role.SUPERVISOR, Role.ADMIN)
+            },
             # Urutan + label section untuk pengelompokan di UI (hanya section
             # yang punya menu assignable).
             "sections": [

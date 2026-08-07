@@ -11,7 +11,12 @@ apa adanya ke kasir akan membuka seluruh panel bagi akun yang belum sempat diatu
 from django.test import TestCase
 
 from apps.auth_app.models import Role, User
-from apps.core.menus import ALL_MENUS, default_keys_for, menus_for
+from apps.core.menus import (
+    ALL_MENUS,
+    assignable_menus,
+    default_keys_for,
+    menus_for,
+)
 
 
 def _keys(user):
@@ -115,3 +120,39 @@ class GerbangHalamanKasirTests(TestCase):
         r = self.client.get("/kasir/stok")
         self.assertEqual(r.status_code, 302)
         self.assertIn("/login", r["Location"])
+
+
+class LayarKelolaMenuTests(TestCase):
+    """Layar Kelola Menu harus JUJUR soal apa yang sedang dipegang seseorang."""
+
+    def setUp(self):
+        self.boss = User.objects.create_user(
+            "boss5", password="rahasia-kuat-123", role=Role.SUPERADMIN)
+        User.objects.create_user("kasir5", password="rahasia-kuat-123", role=Role.KASIR)
+        self.client.force_login(self.boss)
+
+    def test_mengirim_menu_bawaan_tiap_peran(self):
+        """Tanpa ini layar berbohong: akun yang belum diatur tampil tanpa satu
+        centang pun, padahal ia SEDANG memegang menu bawaan perannya."""
+        self.assertIn("kasir_stok", default_keys_for(Role.KASIR))
+        self.assertIn("kasir_stok", default_keys_for(Role.SUPERVISOR))
+        self.assertNotIn("kasir_stok", default_keys_for(Role.ADMIN))
+        self.assertIn("users", default_keys_for(Role.ADMIN))
+        # Dan benar-benar sampai ke layar, bukan cuma benar di Python.
+        isi = self.client.get("/admin-panel/menus").content.decode()
+        self.assertIn("role_defaults", isi)
+
+    def test_menu_membawa_penanda_peran(self):
+        """Penanda di tiap baris berasal dari `roles` di registry menu."""
+        menus = {m["key"]: m for m in assignable_menus()}
+        self.assertEqual(list(menus["kasir_stok"]["roles"]), ["kasir", "supervisor"])
+        self.assertEqual(list(menus["kasir_pelanggan"]["roles"]), ["supervisor"])
+        self.assertNotIn("roles", menus["users"])
+
+    def test_menyimpan_kosong_mengembalikan_ke_bawaan_bukan_mencabut_semua(self):
+        """Yang tertulis di layar harus benar: `allowed_menu_keys` kosong
+        dibaca menus_for sebagai 'pakai bawaan peran', bukan 'tak boleh apa-apa'."""
+        kasir = User.objects.get(username="kasir5")
+        kasir.allowed_menu_keys = []
+        kasir.save(update_fields=["allowed_menu_keys"])
+        self.assertEqual(_keys(kasir), {"kasir_stok", "bantuan"})
