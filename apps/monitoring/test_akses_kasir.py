@@ -175,3 +175,70 @@ class LayarKelolaMenuTests(TestCase):
         kasir.allowed_menu_keys = []
         kasir.save(update_fields=["allowed_menu_keys"])
         self.assertEqual(_keys(kasir), set(default_keys_for(Role.KASIR)) | {"bantuan"})
+
+
+class KoneksiTerkunciTests(TestCase):
+    """Kasir/supervisor tak memilih koneksi — koneksi menentukan ke server toko
+    MANA notanya tertulis, dan nota yang masuk ke cabang salah tak bisa ditarik:
+    trigger legacy langsung mengirimkannya ke pusat."""
+
+    def setUp(self):
+        from apps.connections.models import ServerProfile
+
+        self.a = ServerProfile.objects.create(name="TOKO A", db_type="grosir",
+                                              host="a", db_name="x", is_default=True)
+        self.b = ServerProfile.objects.create(name="TOKO B", db_type="grosir",
+                                              host="b", db_name="y")
+        self.kasir = User.objects.create_user("kasir4", password="rahasia-kuat-123",
+                                              role=Role.KASIR, server_profile=self.b)
+        self.admin = User.objects.create_user("admin4", password="rahasia-kuat-123",
+                                              role=Role.ADMIN)
+
+    def test_peran_toko_terkunci_peran_kantor_tidak(self):
+        self.assertTrue(self.kasir.koneksi_terkunci)
+        self.assertFalse(self.admin.koneksi_terkunci)
+
+    def test_kasir_memakai_servernya_sendiri_bukan_default(self):
+        from core import mssql
+
+        self.client.force_login(self.kasir)
+        s = self.client.session
+        s["active_profile_id"] = self.a.pk   # coba paksa lewat sesi
+        s.save()
+        self.client.get("/kasir/stok")
+        # Middleware mengunci ke server akun, bukan pilihan sesi.
+        mssql.set_request_profile_id(self.kasir.server_profile_id, strict=True)
+        self.assertEqual(mssql.get_active_profile().pk, self.b.pk)
+
+    def test_terkunci_tanpa_server_tidak_jatuh_ke_default(self):
+        """Menebak berarti nota tertulis ke server toko yang salah."""
+        from core import mssql
+
+        mssql.set_request_profile_id(None, strict=True)
+        try:
+            self.assertIsNone(mssql.get_active_profile())
+        finally:
+            mssql.clear_request_profile()
+
+    def test_tanpa_strict_masih_jatuh_ke_default(self):
+        """Perilaku lama untuk admin & pekerjaan latar tak boleh berubah."""
+        from core import mssql
+
+        mssql.set_request_profile_id(None)
+        try:
+            self.assertEqual(mssql.get_active_profile().pk, self.a.pk)
+        finally:
+            mssql.clear_request_profile()
+
+    def test_kasir_tak_bisa_pindah_koneksi(self):
+        self.client.force_login(self.kasir)
+        r = self.client.post(f"/admin-panel/connections/{self.a.pk}/set-default", {})
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("terikat", self.client.session.get("flash_error", ""))
+
+    def test_kasir_hanya_melihat_koneksinya_sendiri(self):
+        """Pemilih koneksi di navbar jadi tak punya apa pun untuk dipindah."""
+        self.client.force_login(self.kasir)
+        isi = self.client.get("/kasir/stok").content.decode()
+        self.assertIn("TOKO B", isi)
+        self.assertNotIn("TOKO A", isi)

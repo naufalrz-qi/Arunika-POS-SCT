@@ -29,7 +29,8 @@ const bawaan = computed(() => isi.value.bawaan || {});
 // --- Form kepala -----------------------------------------------------------
 const form = useForm({
   kd_customer: "", kd_jenis: "", kd_kas: "", kd_voucher: "", kd_pegawai: "",
-  keterangan: "", no_bukti: "", diskon_uang: 0, pajak: 0, status: 1, items: [],
+  keterangan: "", no_bukti: "", tanggal: "", jatuh_tempo: "",
+  diskon_uang: 0, pajak: 0, status: 1, items: [],
 });
 const tanggal = ref("");
 const jatuhTempo = ref("");
@@ -54,6 +55,14 @@ watch(cariCustomer, (q) => {
     bukaCustomer.value = true;
   }, 250);
 });
+// Jatuh tempo mengikuti tanggal transaksi: sebulan sesudahnya.
+watch(tanggal, (t) => {
+  if (!t) return;
+  const d = new Date(`${t}T00:00:00`);
+  d.setDate(d.getDate() + 30);
+  jatuhTempo.value = d.toISOString().slice(0, 10);
+});
+
 function pilihCustomer(c) {
   form.kd_customer = c.kd_customer;
   customerNama.value = c.nama;
@@ -176,6 +185,13 @@ function simpan() {
   }));
   form.diskon_uang = Number(diskonUang.value) || 0;
   form.pajak = Number(pajak.value) || 0;
+  // Jam PC kasir, bukan jam server — sama seperti aplikasi legacy. Kalau
+  // tanggalnya diubah kasir, jamnya tetap jam sekarang supaya urutan nota
+  // dalam satu hari tetap terbaca.
+  const jam = new Date();
+  const hhmm = `${String(jam.getHours()).padStart(2, "0")}:${String(jam.getMinutes()).padStart(2, "0")}:${String(jam.getSeconds()).padStart(2, "0")}`;
+  form.tanggal = `${tanggal.value}T${hhmm}`;
+  form.jatuh_tempo = jatuhTempo.value;
   const nomorTampil = bawaan.value.no_transaksi;
   form.post("/kasir/penjualan/save", {
     preserveScroll: true,

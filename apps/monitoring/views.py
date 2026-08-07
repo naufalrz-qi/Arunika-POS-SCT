@@ -243,6 +243,8 @@ def _user_dict(u):
         "kd_user": u.kd_user,
         "kd_divisi": u.kd_divisi,
         "kd_pegawai": u.kd_pegawai,
+        "server_profile_id": u.server_profile_id,
+        "koneksi_terkunci": u.koneksi_terkunci,
     }
 
 
@@ -294,6 +296,10 @@ def users_index(request):
         "users": [_user_dict(u) for u in users],
         "assignable_roles": roles,
         "me": request.user.id,
+        "server_profiles": [
+            {"value": p.pk, "label": f"{p.name} ({p.db_type})"}
+            for p in ServerProfile.objects.all().order_by("name")
+        ],
         "legacy": defer(load_legacy),
     })
 
@@ -350,6 +356,10 @@ def users_save(request):
     user.kd_user = (data.get("kd_user") or "").strip()[:6]
     user.kd_divisi = (data.get("kd_divisi") or "").strip()[:6]
     user.kd_pegawai = (data.get("kd_pegawai") or "").strip()[:6]
+    # Server yang boleh dipakai. Untuk kasir/supervisor ini mengunci ke mana
+    # nota mereka tertulis; salah isi berarti nota masuk ke cabang lain.
+    sp = data.get("server_profile_id")
+    user.server_profile_id = int(sp) if str(sp or "").isdigit() else None
     user.save()
 
     log_activity(request, "user", f"Simpan user {user.username}")

@@ -4,6 +4,8 @@ Terpisah dari views.py bukan karena rapi-rapian: penjaga di apps/core/middleware
 memperlakukan /kasir berbeda dari /admin-panel (tanpa syarat Tailscale), jadi
 memisahkan berkasnya membuat batas itu terlihat saat membaca kode.
 """
+import datetime as dt
+
 import pyodbc
 from django.http import JsonResponse
 from django.shortcuts import redirect
@@ -105,6 +107,9 @@ def penjualan_save(request):
             kd_pegawai=data.get("kd_pegawai") or request.user.kd_pegawai,
             items=data.get("items") or [],
             keterangan=data.get("keterangan") or pj.KOSONG,
+            no_bukti=data.get("no_bukti") or pj.KOSONG,
+            tanggal=_waktu(data.get("tanggal")),
+            jatuh_tempo=_waktu(data.get("jatuh_tempo")),
             diskon_uang=float(data.get("diskon_uang") or 0),
             pajak=float(data.get("pajak") or 0),
             status=int(data.get("status") or 1),
@@ -231,6 +236,18 @@ def retur_pembelian(request):
 @require_POST
 def retur_pembelian_save(request):
     return _transaksi_save(request, "pembelian_retur")
+
+
+def _waktu(nilai):
+    """Parse waktu kiriman layar (jam PC kasir). None kalau tak masuk akal —
+    pemanggil lalu memakai jam mesin ini, bukan menolak nota karena satu kolom."""
+    teks = (nilai or "").strip().replace("Z", "")
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+        try:
+            return dt.datetime.strptime(teks, fmt)
+        except ValueError:
+            continue
+    return None
 
 
 def _tanpa_harga(request, rows):

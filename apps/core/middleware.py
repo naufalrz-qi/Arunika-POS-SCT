@@ -51,7 +51,15 @@ def inertia_share(get_response):
         # another user could change. Cleared in finally so the pooled thread never
         # carries a choice into the next request.
         session = getattr(request, "session", None)
-        mssql.set_request_profile_id(session.get("active_profile_id") if session else None)
+        # Kasir/supervisor DIKUNCI ke server yang ditetapkan untuk akunnya dan
+        # tak bisa berpindah lewat sesi. Koneksi menentukan ke server toko MANA
+        # sebuah nota tertulis; nota yang masuk ke cabang salah tak bisa ditarik
+        # karena trigger legacy langsung mengirimkannya ke pusat.
+        if user is not None and getattr(user, "is_authenticated", False) \
+                and getattr(user, "koneksi_terkunci", False):
+            mssql.set_request_profile_id(user.server_profile_id, strict=True)
+        else:
+            mssql.set_request_profile_id(session.get("active_profile_id") if session else None)
 
         def active_connection():
             # Lazy: only hit the DB on Inertia renders, not asset/XHR noise.
@@ -61,6 +69,12 @@ def inertia_share(get_response):
         def connections_list():
             from apps.connections.models import ServerProfile
 
+            if user is not None and getattr(user, "is_authenticated", False)                     and getattr(user, "koneksi_terkunci", False):
+                # Hanya miliknya sendiri: pemilih koneksi di navbar jadi tak
+                # punya apa pun untuk dipindah. Penjagaan sebenarnya tetap di
+                # server (connections_set_default) — ini supaya layarnya jujur.
+                p = user.server_profile
+                return [p.as_dict()] if p else []
             return [p.as_dict() for p in ServerProfile.objects.all()]
 
         share(

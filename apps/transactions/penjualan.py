@@ -104,8 +104,12 @@ def buat_nota(profile, *, kd_user, kd_divisi, kd_customer, kd_jenis, kd_kas,
               status=1, tanggal=None, jatuh_tempo=None) -> dict:
     """Tulis satu nota penjualan. Mengembalikan {no_transaksi, total, baris}."""
     _periksa(items, kd_user)
+    # `tanggal` datang dari PC kasir (jam mesin itu sendiri, seperti aplikasi
+    # legacy). `tanggal_server` TIDAK ditulis di sini — kolomnya ber-DEFAULT
+    # GETDATE(), jadi ia selalu jam SERVER. Dua jam yang berbeda memang
+    # disengaja: yang satu kapan kasir mencatat, yang lain kapan server menerima.
     tanggal = tanggal or dt.datetime.now()
-    jatuh_tempo = jatuh_tempo or tanggal
+    jatuh_tempo = jatuh_tempo or (tanggal + dt.timedelta(days=BAWAAN["jatuh_tempo_hari"]))
     dh = list(diskon_header) + [0, 0, 0, 0]
     dh = dh[:4]
     total = total_nota(items, dh, diskon_uang, pajak)

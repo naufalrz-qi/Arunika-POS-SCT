@@ -17,6 +17,7 @@ const props = defineProps({
   assignable_roles: { type: Array, default: () => ["kasir", "supervisor"] },
   me: { type: Number, default: null },
   legacy: { type: Object, default: null },
+  server_profiles: { type: Array, default: () => [] },
 });
 
 // Pilihan tautan ke akun legacy; datang belakangan lewat deferred prop, jadi
@@ -59,7 +60,7 @@ const roleOptions = computed(() =>
 const showForm = ref(false);
 const form = useForm({
   id: null, username: "", name: "", role: "kasir", password: "",
-  kd_user: "", kd_divisi: "", kd_pegawai: "",
+  kd_user: "", kd_divisi: "", kd_pegawai: "", server_profile_id: "",
 });
 
 function openCreate() {
@@ -76,6 +77,7 @@ function openEdit(u) {
   form.kd_user = u.kd_user || "";
   form.kd_divisi = u.kd_divisi || "";
   form.kd_pegawai = u.kd_pegawai || "";
+  form.server_profile_id = u.server_profile_id ?? "";
   showForm.value = true;
 }
 function save() {
@@ -176,6 +178,16 @@ function confirmDelete() {
           :options="pegawaiOptions"
           placeholder="Belum dipilih"
         />
+        <Select
+          v-model="form.server_profile_id"
+          label="Server (koneksi)"
+          :options="server_profiles"
+          placeholder="Belum ditentukan"
+        />
+        <p class="-mt-2 text-xs text-ink-subtle">
+          Kasir &amp; supervisor terkunci ke server ini dan tak bisa berpindah
+          koneksi — ia menentukan ke server toko mana nota mereka tertulis.
+        </p>
         <Select
           v-model="form.kd_divisi"
           label="Divisi"

@@ -63,6 +63,21 @@ class User(AbstractUser):
     # galat — nota lalu tercatat atas nama pegawai lain.
     kd_pegawai = models.CharField(max_length=6, blank=True, default="")
 
+    # Server yang boleh dipakai akun ini. Kasir/supervisor DIKUNCI ke sini dan
+    # tak bisa berpindah: koneksi menentukan ke server toko MANA sebuah nota
+    # tertulis, dan nota yang masuk ke cabang yang salah tak bisa ditarik —
+    # ia langsung ikut terkirim ke pusat oleh trigger legacy.
+    # Kosong berarti belum ditentukan; jalur tulis menolak, bukan menebak.
+    server_profile = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="pengguna",
+    )
+
+    @property
+    def koneksi_terkunci(self) -> bool:
+        """Peran toko tak memilih koneksi; peran kantor memilih sendiri."""
+        return self.role in (Role.KASIR, Role.SUPERVISOR)
+
     @property
     def is_admin_tier(self) -> bool:
         return self.role in (Role.ADMIN, Role.SUPERADMIN)
