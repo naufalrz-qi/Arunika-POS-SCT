@@ -126,7 +126,7 @@ function simpan() {
     </Deferred>
 
     <Modal
-      :open="buka"
+      :show="buka"
       :title="sedangEdit ? `Ubah ${label}` : `Tambah ${label}`"
       @close="buka = false"
     >

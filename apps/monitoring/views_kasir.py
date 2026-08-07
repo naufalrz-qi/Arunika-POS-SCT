@@ -5,6 +5,7 @@ memperlakukan /kasir berbeda dari /admin-panel (tanpa syarat Tailscale), jadi
 memisahkan berkasnya membuat batas itu terlihat saat membaca kode.
 """
 import pyodbc
+from django.http import JsonResponse
 from django.shortcuts import redirect
 from django.views.decorators.http import require_POST
 from inertia import defer, render
@@ -61,6 +62,7 @@ def penjualan(request):
             return {
                 "opsi": pj.opsi_nota(profile),
                 "hasil_cari": pj.cari_barang(profile, cari),
+                "bawaan": pj.bawaan_form(profile),
                 "conn_error": None,
             }
         except pyodbc.Error as exc:
@@ -74,6 +76,7 @@ def penjualan(request):
         # siapa — dan tahu sejak awal kalau akunnya belum ditautkan.
         "kd_user": request.user.kd_user,
         "kd_divisi": request.user.kd_divisi,
+        "kd_pegawai": request.user.kd_pegawai,
     })
 
 
@@ -95,7 +98,7 @@ def penjualan_save(request):
             kd_jenis=data.get("kd_jenis"),
             kd_kas=data.get("kd_kas"),
             kd_voucher=data.get("kd_voucher"),
-            kd_pegawai=data.get("kd_pegawai"),
+            kd_pegawai=data.get("kd_pegawai") or request.user.kd_pegawai,
             items=data.get("items") or [],
             keterangan=data.get("keterangan") or pj.KOSONG,
             diskon_uang=float(data.get("diskon_uang") or 0),
@@ -224,3 +227,51 @@ def retur_pembelian(request):
 @require_POST
 def retur_pembelian_save(request):
     return _transaksi_save(request, "pembelian_retur")
+
+
+def _tanpa_harga(request, rows):
+    """Buang kolom uang yang dicabut dari user ini. Penjagaannya di server —
+    membuangnya di Vue hanya kosmetik (lihat useHiddenData.js)."""
+    buang = _hidden_fields(request)
+    if not buang:
+        return rows
+    return [{k: v for k, v in r.items() if k not in buang} for r in rows]
+
+
+def cari_barang_json(request):
+    """Pencarian barang tanpa memuat ulang halaman.
+
+    Sebelumnya kotak cari memakai router.get, yang berarti satu kunjungan Inertia
+    penuh — seluruh prop layar dibangun ulang hanya untuk mengganti daftar hasil.
+    Di layar kasir yang dipakai puluhan kali per nota, itu terasa lambat.
+    """
+    profile = _active()
+    if not profile:
+        return JsonResponse({"rows": [], "error": CONN_ERROR})
+    kode = (request.GET.get("kode") or "").strip()
+    try:
+        if kode:  # jalur pemindai: kode persis, satu hasil, langsung dipakai
+            b = pj.barang_persis(profile, kode)
+            return JsonResponse(
+                {"rows": _tanpa_harga(request, [b] if b else []), "persis": True})
+        rows = pj.cari_barang(profile, request.GET.get("cari") or "")
+        return JsonResponse({"rows": _tanpa_harga(request, rows)})
+    except pyodbc.Error as exc:
+        return JsonResponse({"rows": [], "error": mssql.friendly_error(exc, "Gagal mencari barang")})
+
+
+def nota_cetak(request, no_transaksi):
+    """Faktur siap cetak untuk Epson LX-310.
+
+    Dot matrix 9-pin: yang dicetak dengan benar adalah TEKS monospace pada lebar
+    kolom tetap, bukan tata letak grafis. Halaman ini sengaja polos — satu
+    kolom monospace 40 karakter, tanpa warna dan tanpa bingkai — supaya driver
+    Windows LX-310 mengeluarkannya apa adanya dan cepat, alih-alih merender
+    grafis baris demi baris.
+    """
+    profile = _active()
+    nota = pj.baca_nota(profile, no_transaksi) if profile else None
+    if not nota:
+        request.session["flash_error"] = f"Nota {no_transaksi} tidak ditemukan."
+        return redirect("/kasir/penjualan")
+    return render(request, "Kasir/NotaCetak", props={"nota": nota})

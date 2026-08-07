@@ -88,7 +88,7 @@ const pratinjau = computed(() =>
       </Card>
     </Deferred>
 
-    <Modal :open="Boolean(target)" title="Ubah kode nota" @close="target = null">
+    <Modal :show="Boolean(target)" title="Ubah kode nota" @close="target = null">
       <div class="space-y-3">
         <p class="text-sm text-ink-subtle">
           Divisi <strong>{{ target?.nama }}</strong> ({{ target?.kd_divisi }})

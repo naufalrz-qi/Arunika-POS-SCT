@@ -57,6 +57,11 @@ class User(AbstractUser):
     #             kerusakan yang sudah ada, bukan memperbaikinya.
     kd_user = models.CharField(max_length=6, blank=True, default="")
     kd_divisi = models.CharField(max_length=6, blank=True, default="")
+    # Pegawai yang melayani, terisi otomatis di form nota. Tak bisa disimpulkan
+    # dari kd_user: m_pegawai menyebutnya "KASIR9" sedangkan m_userx "KASIR01",
+    # dan mencocokkan lewat nama akan menautkan orang yang salah tanpa satu pun
+    # galat — nota lalu tercatat atas nama pegawai lain.
+    kd_pegawai = models.CharField(max_length=6, blank=True, default="")
 
     @property
     def is_admin_tier(self) -> bool:

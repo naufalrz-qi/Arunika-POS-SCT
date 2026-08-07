@@ -37,6 +37,7 @@ from apps.core.models import (
 )
 from apps.inventory import services as inv
 from apps.master_data import master_crud
+from apps.transactions.penjualan import opsi_nota as _opsi_nota
 from apps.master_data import services as master
 from apps.transactions import services as tx
 from apps.core import reporting
@@ -241,6 +242,7 @@ def _user_dict(u):
         "created_at": _local(u.date_joined, "%Y-%m-%d"),
         "kd_user": u.kd_user,
         "kd_divisi": u.kd_divisi,
+        "kd_pegawai": u.kd_pegawai,
     }
 
 
@@ -276,15 +278,16 @@ def users_index(request):
         tak boleh menahan tampilnya daftar user, yang datanya ada di SQLite."""
         profile = _active()
         if not profile:
-            return {"userx": [], "divisi": [], "conn_error": CONN_ERROR}
+            return {"userx": [], "divisi": [], "pegawai": [], "conn_error": CONN_ERROR}
         try:
             return {
                 "userx": master.list_userx(profile),
                 "divisi": inv.list_divisi(profile),
+                "pegawai": _opsi_nota(profile)["pegawai"],
                 "conn_error": None,
             }
         except pyodbc.Error as exc:
-            return {"userx": [], "divisi": [],
+            return {"userx": [], "divisi": [], "pegawai": [],
                     "conn_error": mssql.friendly_error(exc, "Gagal membaca user legacy")}
 
     return render(request, "Admin/Users/Index", props={
@@ -346,6 +349,7 @@ def users_save(request):
     # pun bagi yang mengisinya.
     user.kd_user = (data.get("kd_user") or "").strip()[:6]
     user.kd_divisi = (data.get("kd_divisi") or "").strip()[:6]
+    user.kd_pegawai = (data.get("kd_pegawai") or "").strip()[:6]
     user.save()
 
     log_activity(request, "user", f"Simpan user {user.username}")

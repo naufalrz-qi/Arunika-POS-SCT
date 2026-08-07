@@ -196,3 +196,99 @@ def opsi_nota(profile) -> dict:
             "pelanggan": ambil(
                 cur, "SELECT TOP 200 kd_customer, nama FROM m_customer ORDER BY nama"),
         }
+
+
+# Nilai bawaan form nota, mengikuti aplikasi legacy. Diambil dari data yang ada
+# di server, bukan dikarang: CAA000 = "UMUM", JAA000 = "TUNAI", KAA000 dipakai
+# 467.019 dari 474.585 nota, VAA000 sentinel "tanpa voucher" pada nota terbaru.
+# Semuanya tetap bisa diganti di layar — ini titik mulai, bukan kunci.
+BAWAAN = {
+    "kd_customer": "CAA000",
+    "kd_jenis": "JAA000",
+    "kd_kas": "KAA000",
+    "kd_voucher": "VAA000",
+    "status": 1,
+    "jatuh_tempo_hari": 30,
+}
+
+
+def bawaan_form(profile) -> dict:
+    """Nilai bawaan + nomor nota BERIKUTNYA untuk ditampilkan sebelum disimpan.
+
+    Nomornya cuma ancar-ancar: nomor yang benar-benar dipakai dihitung ulang di
+    dalam transaksi saat menyimpan, karena kasir lain (atau aplikasi POS lama)
+    bisa memakainya lebih dulu. Menampilkannya tetap berguna — begitulah layar
+    legacy bekerja, dan kasir memakainya untuk mencocokkan lembar fisik.
+    """
+    import datetime as _dt
+
+    hasil = dict(BAWAAN)
+    hasil["tanggal"] = _dt.date.today().isoformat()
+    hasil["jatuh_tempo"] = (
+        _dt.date.today() + _dt.timedelta(days=BAWAAN["jatuh_tempo_hari"])).isoformat()
+    try:
+        with mssql.cursor(profile) as cur:
+            awalan = awalan_untuk(cur)
+            hasil["no_transaksi"] = no_berikutnya(cur, "penjualan", awalan)
+    except Exception:
+        # Ancar-ancar nomor tak boleh menjatuhkan seluruh layar.
+        hasil["no_transaksi"] = ""
+    return hasil
+
+
+def barang_persis(profile, kode: str) -> dict | None:
+    """Cari SATU barang dengan kode persis — jalur pemindai barcode.
+
+    Tak ada kolom barcode di skema ini; label barcode memuat `kd_barang`, jadi
+    pemindai pada dasarnya mengetik kode itu lalu menekan Enter. Kalau satu
+    barang punya beberapa satuan, yang termurah dipilih (satuan terkecil), dan
+    kasir masih bisa menggantinya di baris.
+    """
+    kode = (kode or "").strip()
+    if not kode:
+        return None
+    with mssql.cursor(profile) as cur:
+        cur.execute(
+            "SELECT TOP 1 b.kd_barang, b.nama, bs.kd_satuan, s.nama, bs.harga_jual "
+            "FROM m_barang b INNER JOIN m_barang_satuan bs ON bs.kd_barang = b.kd_barang "
+            "LEFT JOIN m_satuan s ON s.kd_satuan = bs.kd_satuan "
+            "WHERE b.kd_barang = ? ORDER BY bs.harga_jual",
+            [kode])
+        r = cur.fetchone()
+    if not r:
+        return None
+    return {"kd_barang": (r[0] or "").strip(), "nama": (r[1] or "").strip(),
+            "kd_satuan": (r[2] or "").strip(), "satuan": (r[3] or "").strip(),
+            "harga_jual": float(r[4] or 0)}
+
+
+def baca_nota(profile, no_transaksi: str) -> dict | None:
+    """Satu nota lengkap untuk dicetak."""
+    with mssql.cursor(profile) as cur:
+        cur.execute(
+            "SELECT h.no_transaksi, h.tanggal, h.kd_customer, c.nama, h.kd_user, "
+            "h.keterangan, h.diskon_uang, h.pajak, t.total "
+            "FROM t_penjualan h LEFT JOIN m_customer c ON c.kd_customer = h.kd_customer "
+            "LEFT JOIN t_penjualan_total t ON t.no_transaksi = h.no_transaksi "
+            "WHERE h.no_transaksi = ?", [no_transaksi])
+        h = cur.fetchone()
+        if not h:
+            return None
+        cur.execute(
+            "SELECT d.kd_barang, b.nama, d.kd_satuan, d.qty, d.harga_jual, d.total "
+            "FROM t_penjualan_detail d LEFT JOIN m_barang b ON b.kd_barang = d.kd_barang "
+            "WHERE d.no_transaksi = ?", [no_transaksi])
+        baris = [{"kd_barang": (r[0] or "").strip(), "nama": (r[1] or "").strip(),
+                  "satuan": (r[2] or "").strip(), "qty": float(r[3] or 0),
+                  "harga": float(r[4] or 0), "total": float(r[5] or 0)}
+                 for r in cur.fetchall()]
+        cur.execute("SELECT nama, kepala_nota FROM m_divisi")
+        d = cur.fetchone()
+    return {
+        "no_transaksi": (h[0] or "").strip(), "tanggal": h[1],
+        "kd_customer": (h[2] or "").strip(), "customer": (h[3] or "").strip(),
+        "kd_user": (h[4] or "").strip(), "keterangan": (h[5] or "").strip(),
+        "diskon_uang": float(h[6] or 0), "pajak": float(h[7] or 0),
+        "total": float(h[8] or 0), "baris": baris,
+        "toko": (d[0] if d else "") or "",
+    }

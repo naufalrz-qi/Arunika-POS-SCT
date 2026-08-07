@@ -28,6 +28,7 @@ const userxOptions = computed(() =>
     label: `${u.nama} (${u.kd_user})${u.aktif ? "" : " — nonaktif"}`,
   })),
 );
+const pegawaiOptions = computed(() => legacyData.value.pegawai || []);
 const divisiOptions = computed(() =>
   (legacyData.value.divisi || []).map((d) => ({ value: d.kd_divisi, label: d.nama })),
 );
@@ -58,7 +59,7 @@ const roleOptions = computed(() =>
 const showForm = ref(false);
 const form = useForm({
   id: null, username: "", name: "", role: "kasir", password: "",
-  kd_user: "", kd_divisi: "",
+  kd_user: "", kd_divisi: "", kd_pegawai: "",
 });
 
 function openCreate() {
@@ -74,6 +75,7 @@ function openEdit(u) {
   form.password = "";
   form.kd_user = u.kd_user || "";
   form.kd_divisi = u.kd_divisi || "";
+  form.kd_pegawai = u.kd_pegawai || "";
   showForm.value = true;
 }
 function save() {
@@ -167,6 +169,12 @@ function confirmDelete() {
           label="Tautan user legacy"
           :options="userxOptions"
           placeholder="Belum ditautkan"
+        />
+        <Select
+          v-model="form.kd_pegawai"
+          label="Pegawai (untuk nota)"
+          :options="pegawaiOptions"
+          placeholder="Belum dipilih"
         />
         <Select
           v-model="form.kd_divisi"
