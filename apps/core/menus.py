@@ -29,6 +29,7 @@ ALL_MENUS = [
     # Rutenya di bawah /kasir, bukan /admin-panel: penjaga Tailscale menutup
     # seluruh /admin-panel, sedangkan kasir di toko tidak ada di rentang CGNAT.
     {"key": "kasir_stok", "label": "Cek Stok", "icon": "box", "href": "/kasir/stok", "section": "pos", "roles": ("kasir", "supervisor")},
+    {"key": "kasir_penjualan", "label": "Buat Nota", "icon": "cart", "href": "/kasir/penjualan", "section": "pos", "roles": ("kasir", "supervisor")},
     {"key": "kasir_pelanggan", "label": "Pelanggan", "icon": "user", "href": "/kasir/pelanggan", "section": "pos", "roles": ("supervisor",)},
     {"key": "kasir_supplier", "label": "Supplier", "icon": "truck", "href": "/kasir/supplier", "section": "pos", "roles": ("supervisor",)},
     {"key": "dashboard", "label": "Dashboard", "icon": "dashboard", "href": "/admin-panel/dashboard", "section": "ringkasan"},

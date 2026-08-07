@@ -33,6 +33,7 @@ class MenuBawaanPeranTests(TestCase):
         """Kosong = menu POS saja, BUKAN akses penuh."""
         keys = _keys(self.kasir)
         self.assertIn("kasir_stok", keys)
+        self.assertIn("kasir_penjualan", keys)
         for terlarang in ("users", "connections", "logs", "dashboard", "stock"):
             self.assertNotIn(terlarang, keys, f"{terlarang} bocor ke kasir")
 
@@ -155,4 +156,4 @@ class LayarKelolaMenuTests(TestCase):
         kasir = User.objects.get(username="kasir5")
         kasir.allowed_menu_keys = []
         kasir.save(update_fields=["allowed_menu_keys"])
-        self.assertEqual(_keys(kasir), {"kasir_stok", "bantuan"})
+        self.assertEqual(_keys(kasir), set(default_keys_for(Role.KASIR)) | {"bantuan"})
