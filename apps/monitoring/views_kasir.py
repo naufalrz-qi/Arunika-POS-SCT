@@ -12,7 +12,6 @@ from inertia import defer, render
 from apps.core.http import get_data
 from apps.core.models import log_activity
 from apps.inventory import services as inv
-from apps.master_data import master_crud
 from apps.transactions import penjualan as pj
 from apps.monitoring.views import CONN_ERROR, _active, _hidden_fields
 from core import mssql
@@ -46,82 +45,6 @@ def cek_stok(request):
         "Kasir/CekStok",
         props={"stok": defer(muat), "filters": {"cari": cari, "kd_divisi": kd_divisi}},
     )
-
-
-def _master_index(request, entitas: str):
-    """Layar daftar+form untuk satu entitas master (pelanggan/supplier)."""
-    s = master_crud.spec(entitas)
-    cari = (request.GET.get("cari") or "").strip()
-
-    def muat():
-        profile = _active()
-        if not profile:
-            return {"rows": [], "conn_error": CONN_ERROR}
-        try:
-            return {
-                "rows": master_crud.list_master(profile, entitas, cari),
-                # Ikut di bundel yang sama: tanpa pilihan kota/bank, penyimpanan
-                # pertama pasti gagal — kolomnya berkunci-asing dan menolak kosong.
-                "lookups": master_crud.list_lookups(profile, entitas),
-                "conn_error": None,
-            }
-        except pyodbc.Error as exc:
-            return {"rows": [], "lookups": {},
-                    "conn_error": mssql.friendly_error(exc, f"Gagal membaca {s['label'].lower()}")}
-
-    return render(request, "Kasir/MasterUmum", props={
-        "data": defer(muat),
-        "filters": {"cari": cari},
-        "entitas": entitas,
-        "label": s["label"],
-        "kunci": s["kunci"],
-        "teks": s["teks"],
-        "angka": s["angka"],
-        "lookup_fields": list(s["lookup"]),
-        "wajib": s["wajib"],
-    })
-
-
-def _master_save(request, entitas: str):
-    s = master_crud.spec(entitas)
-    tujuan = f"/kasir/{entitas}"
-    profile = _active()
-    if not profile:
-        request.session["flash_error"] = CONN_ERROR
-        return redirect(tujuan)
-    try:
-        hasil = master_crud.simpan_master(profile, entitas, get_data(request))
-    except ValueError as exc:
-        request.session["flash_error"] = str(exc)
-        return redirect(tujuan)
-    except pyodbc.Error as exc:
-        request.session["flash_error"] = mssql.friendly_error(
-            exc, f"Gagal menyimpan {s['label'].lower()}")
-        return redirect(tujuan)
-
-    log_activity(request, entitas,
-                 f"{'Tambah' if hasil['baru'] else 'Ubah'} {s['label']} {hasil['kode']}")
-    request.session["flash_success"] = (
-        f"{s['label']} {hasil['kode']} {'ditambahkan' if hasil['baru'] else 'disimpan'}.")
-    return redirect(tujuan)
-
-
-def pelanggan(request):
-    return _master_index(request, "pelanggan")
-
-
-@require_POST
-def pelanggan_save(request):
-    return _master_save(request, "pelanggan")
-
-
-def supplier(request):
-    return _master_index(request, "supplier")
-
-
-@require_POST
-def supplier_save(request):
-    return _master_save(request, "supplier")
 
 
 def penjualan(request):

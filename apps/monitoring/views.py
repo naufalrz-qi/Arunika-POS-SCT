@@ -36,6 +36,7 @@ from apps.core.models import (
     log_sync,
 )
 from apps.inventory import services as inv
+from apps.master_data import master_crud
 from apps.master_data import services as master
 from apps.transactions import services as tx
 from apps.core import reporting
@@ -3133,3 +3134,84 @@ def profile_save(request):
     log_activity(request, "profil", "Ubah profil sendiri")
     request.session["flash_success"] = "Profil diperbarui."
     return redirect("/admin-panel/profile")
+
+
+# --- Kelola master pelanggan & supplier (Master Data, admin) ---------------
+# Sengaja di sini dan bukan di views_kasir.py: mengubah data induk bukan
+# pekerjaan harian toko, dan berkas itu menjelaskan batas /kasir yang justru
+# TIDAK menuntut Tailscale.
+def _master_index(request, entitas: str):
+    """Layar daftar+form untuk satu entitas master (pelanggan/supplier)."""
+    s = master_crud.spec(entitas)
+    cari = (request.GET.get("cari") or "").strip()
+
+    def muat():
+        profile = _active()
+        if not profile:
+            return {"rows": [], "conn_error": CONN_ERROR}
+        try:
+            return {
+                "rows": master_crud.list_master(profile, entitas, cari),
+                # Ikut di bundel yang sama: tanpa pilihan kota/bank, penyimpanan
+                # pertama pasti gagal — kolomnya berkunci-asing dan menolak kosong.
+                "lookups": master_crud.list_lookups(profile, entitas),
+                "conn_error": None,
+            }
+        except pyodbc.Error as exc:
+            return {"rows": [], "lookups": {},
+                    "conn_error": mssql.friendly_error(exc, f"Gagal membaca {s['label'].lower()}")}
+
+    return render(request, "Admin/MasterData/KelolaUmum", props={
+        "data": defer(muat),
+        "filters": {"cari": cari},
+        "entitas": entitas,
+        "aksi_url": f"/admin-panel/master/kelola-{entitas}",
+        "label": s["label"],
+        "kunci": s["kunci"],
+        "teks": s["teks"],
+        "angka": s["angka"],
+        "lookup_fields": list(s["lookup"]),
+        "wajib": s["wajib"],
+    })
+
+
+def _master_save(request, entitas: str):
+    s = master_crud.spec(entitas)
+    tujuan = f"/admin-panel/master/kelola-{entitas}"
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect(tujuan)
+    try:
+        hasil = master_crud.simpan_master(profile, entitas, get_data(request))
+    except ValueError as exc:
+        request.session["flash_error"] = str(exc)
+        return redirect(tujuan)
+    except pyodbc.Error as exc:
+        request.session["flash_error"] = mssql.friendly_error(
+            exc, f"Gagal menyimpan {s['label'].lower()}")
+        return redirect(tujuan)
+
+    log_activity(request, entitas,
+                 f"{'Tambah' if hasil['baru'] else 'Ubah'} {s['label']} {hasil['kode']}")
+    request.session["flash_success"] = (
+        f"{s['label']} {hasil['kode']} {'ditambahkan' if hasil['baru'] else 'disimpan'}.")
+    return redirect(tujuan)
+
+
+def pelanggan(request):
+    return _master_index(request, "pelanggan")
+
+
+@require_POST
+def pelanggan_save(request):
+    return _master_save(request, "pelanggan")
+
+
+def supplier(request):
+    return _master_index(request, "supplier")
+
+
+@require_POST
+def supplier_save(request):
+    return _master_save(request, "supplier")

@@ -30,26 +30,26 @@ ALL_MENUS = [
     # seluruh /admin-panel, sedangkan kasir di toko tidak ada di rentang CGNAT.
     {"key": "kasir_stok", "label": "Cek Stok", "icon": "box", "href": "/kasir/stok", "section": "pos", "roles": ("kasir", "supervisor")},
     {"key": "kasir_penjualan", "label": "Buat Nota", "icon": "cart", "href": "/kasir/penjualan", "section": "pos", "roles": ("kasir", "supervisor")},
-    {"key": "kasir_pelanggan", "label": "Pelanggan", "icon": "user", "href": "/kasir/pelanggan", "section": "pos", "roles": ("supervisor",)},
-    {"key": "kasir_supplier", "label": "Supplier", "icon": "truck", "href": "/kasir/supplier", "section": "pos", "roles": ("supervisor",)},
     {"key": "dashboard", "label": "Dashboard", "icon": "dashboard", "href": "/admin-panel/dashboard", "section": "ringkasan"},
     # "always": tak bisa dicabut lewat Kelola Menu. Bantuan yang bisa hilang dari
     # sidebar justru menghilang tepat saat pengguna paling butuh.
     {"key": "bantuan", "label": "Bantuan & Istilah", "icon": "help", "href": "/admin-panel/bantuan", "section": "ringkasan", "always": True},
-    # Penjualan (laporan)
-    {"key": "penjualan_all", "label": "Penjualan (Detail)", "icon": "cart", "href": "/admin-panel/laporan/penjualan", "section": "penjualan"},
+    # Penjualan (laporan). Sebagian jadi bawaan supervisor: memantau hasil
+    # penjualan/pembelian/retur itu pekerjaan hariannya, beda dari mengubah
+    # data induk yang tetap wewenang admin.
+    {"key": "penjualan_all", "label": "Penjualan (Detail)", "icon": "cart", "href": "/admin-panel/laporan/penjualan", "section": "penjualan", "roles": ("supervisor",)},
     {"key": "penjualan_hpp", "label": "Laba per Barang", "icon": "trending", "href": "/admin-panel/laporan/penjualan-hpp", "section": "penjualan"},
-    {"key": "penjualan_nota", "label": "Penjualan per Nota", "icon": "list", "href": "/admin-panel/laporan/penjualan-nota", "section": "penjualan"},
+    {"key": "penjualan_nota", "label": "Penjualan per Nota", "icon": "list", "href": "/admin-panel/laporan/penjualan-nota", "section": "penjualan", "roles": ("kasir", "supervisor")},
     {"key": "penjualan_customer", "label": "Penjualan per Customer", "icon": "user", "href": "/admin-panel/laporan/penjualan-customer", "section": "penjualan"},
     {"key": "penjualan_user", "label": "Penjualan per User", "icon": "users", "href": "/admin-panel/laporan/penjualan-user", "section": "penjualan"},
     {"key": "penjualan_periode", "label": "Penjualan per Periode", "icon": "calendar", "href": "/admin-panel/laporan/penjualan-periode", "section": "penjualan"},
-    {"key": "retur_penjualan", "label": "Retur Penjualan", "icon": "refund", "href": "/admin-panel/laporan/retur-penjualan", "section": "penjualan"},
+    {"key": "retur_penjualan", "label": "Retur Penjualan", "icon": "refund", "href": "/admin-panel/laporan/retur-penjualan", "section": "penjualan", "roles": ("supervisor",)},
     {"key": "piutang", "label": "Piutang Pelanggan", "icon": "cash", "href": "/admin-panel/laporan/piutang", "section": "penjualan"},
     # Pembelian
-    {"key": "pembelian", "label": "Pembelian", "icon": "truck", "href": "/admin-panel/laporan/pembelian", "section": "pembelian"},
+    {"key": "pembelian", "label": "Pembelian", "icon": "truck", "href": "/admin-panel/laporan/pembelian", "section": "pembelian", "roles": ("supervisor",)},
     {"key": "pembelian_supplier", "label": "Pembelian per Supplier", "icon": "truck", "href": "/admin-panel/laporan/pembelian-supplier", "section": "pembelian"},
     {"key": "pembelian_periode", "label": "Pembelian per Periode", "icon": "calendar", "href": "/admin-panel/laporan/pembelian-periode", "section": "pembelian"},
-    {"key": "retur_pembelian", "label": "Retur Pembelian", "icon": "refund", "href": "/admin-panel/laporan/retur-pembelian", "section": "pembelian"},
+    {"key": "retur_pembelian", "label": "Retur Pembelian", "icon": "refund", "href": "/admin-panel/laporan/retur-pembelian", "section": "pembelian", "roles": ("supervisor",)},
     # Inventori & Stok
     {"key": "stock", "label": "Stok Akhir", "icon": "box", "href": "/admin-panel/inventory/stock", "section": "stok"},
     {"key": "barang_histori", "label": "Barang Histori", "icon": "list", "href": "/admin-panel/inventory/histori", "section": "stok"},
@@ -75,16 +75,16 @@ ALL_MENUS = [
     {"key": "biaya_operasional", "label": "Biaya Operasional", "icon": "cash", "href": "/admin-panel/laporan/biaya-operasional", "section": "kas"},
     {"key": "biaya_kategori", "label": "Biaya per Kategori", "icon": "chart", "href": "/admin-panel/laporan/biaya-kategori", "section": "kas"},
     # Master Data — sub-grup 1: data master
-    # Bawaan supervisor juga. Barang TIDAK dibuatkan layar CRUD sendiri: kedua
-    # layar ini sudah menegakkan batas gudang (nama barang identitas bersama
-    # seluruh cabang), penyebaran harga, dan pencatatan riwayatnya. Menyalinnya
-    # ke /kasir berarti menyalin ketiga aturan itu — dan salinan yang tertinggal
-    # zaman justru merusak data yang dijaga aslinya.
-    {"key": "products", "label": "Master Produk", "icon": "box", "href": "/admin-panel/master/products", "section": "master", "roles": ("supervisor",)},
+    # Master data adalah wewenang admin, bukan pekerjaan harian toko: satu salah
+    # ketik di sini ikut terbawa ke SETIAP nota yang menunjuk ke baris itu, dan
+    # nota yang sudah tertulis tak bisa ditarik.
+    {"key": "products", "label": "Master Produk", "icon": "box", "href": "/admin-panel/master/products", "section": "master"},
     {"key": "customers", "label": "Master Pelanggan", "icon": "user", "href": "/admin-panel/master/customers", "section": "master"},
     {"key": "suppliers", "label": "Master Supplier", "icon": "truck", "href": "/admin-panel/master/suppliers", "section": "master"},
+    {"key": "kelola_pelanggan", "label": "Kelola Pelanggan", "icon": "pencil", "href": "/admin-panel/master/kelola-pelanggan", "section": "master"},
+    {"key": "kelola_supplier", "label": "Kelola Supplier", "icon": "pencil", "href": "/admin-panel/master/kelola-supplier", "section": "master"},
     # Master Data — sub-grup 2: harga & update barang
-    {"key": "update_barang", "label": "Update Barang", "icon": "pencil", "href": "/admin-panel/master/update-barang", "section": "master_harga", "roles": ("supervisor",)},
+    {"key": "update_barang", "label": "Update Barang", "icon": "pencil", "href": "/admin-panel/master/update-barang", "section": "master_harga"},
     {"key": "riwayat_update_barang", "label": "Riwayat Update Barang", "icon": "clock", "href": "/admin-panel/master/riwayat-update-barang", "section": "master_harga"},
     {"key": "pergerakan_harga", "label": "Pergerakan Harga", "icon": "trending", "href": "/admin-panel/master/pergerakan-harga", "section": "master_harga"},
     # Master Data — sub-grup 3: sinkronisasi antar-server

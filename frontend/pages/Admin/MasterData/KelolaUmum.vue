@@ -11,7 +11,7 @@ import Modal from "@/components/ui/Modal.vue";
 import DataTable from "@/components/ui/DataTable.vue";
 import LoadingCard from "@/components/ui/LoadingCard.vue";
 
-// Satu layar untuk Pelanggan dan Supplier. Bentuk keduanya nyaris sama, jadi
+// Satu layar untuk Kelola Pelanggan dan Kelola Supplier. Bentuk keduanya nyaris sama, jadi
 // yang berbeda datang sebagai prop dari _MASTER di apps/master_data/master_crud.py
 // — satu sumber kebenaran untuk kolom apa yang ada, bukan dua daftar yang
 // pelan-pelan berbeda.
@@ -19,6 +19,7 @@ const props = defineProps({
   data: { type: Object, default: null },
   filters: { type: Object, default: () => ({}) },
   entitas: { type: String, required: true },
+  aksi_url: { type: String, required: true },
   label: { type: String, required: true },
   kunci: { type: String, required: true },
   teks: { type: Array, default: () => [] },
@@ -52,7 +53,7 @@ const columns = computed(() => [
 ]);
 
 function submitCari() {
-  router.get(`/kasir/${props.entitas}`, { cari: cari.value },
+  router.get(props.aksi_url, { cari: cari.value },
     { preserveState: true, preserveScroll: true });
 }
 
@@ -80,7 +81,7 @@ function openEdit(row) {
   buka.value = true;
 }
 function simpan() {
-  form.post(`/kasir/${props.entitas}/save`, {
+  form.post(`${props.aksi_url}/save`, {
     preserveScroll: true,
     onSuccess: () => (buka.value = false),
   });

@@ -147,8 +147,26 @@ class LayarKelolaMenuTests(TestCase):
         """Penanda di tiap baris berasal dari `roles` di registry menu."""
         menus = {m["key"]: m for m in assignable_menus()}
         self.assertEqual(list(menus["kasir_stok"]["roles"]), ["kasir", "supervisor"])
-        self.assertEqual(list(menus["kasir_pelanggan"]["roles"]), ["supervisor"])
+        self.assertEqual(list(menus["retur_penjualan"]["roles"]), ["supervisor"])
         self.assertNotIn("roles", menus["users"])
+
+    def test_master_data_tetap_wewenang_admin(self):
+        """Mengubah data induk bukan pekerjaan harian toko: satu salah ketik di
+        sini ikut terbawa ke SETIAP nota yang menunjuk ke baris itu."""
+        menus = {m["key"]: m for m in assignable_menus()}
+        for kunci in ("products", "customers", "suppliers", "update_barang",
+                      "kelola_pelanggan", "kelola_supplier"):
+            self.assertNotIn("roles", menus[kunci], f"{kunci} bocor ke kasir/supervisor")
+            self.assertIn(kunci, default_keys_for(Role.ADMIN))
+
+    def test_supervisor_dapat_pemantauan_transaksi(self):
+        """Yang jadi jatah mereka: memantau hasil penjualan/pembelian/retur."""
+        bawaan = default_keys_for(Role.SUPERVISOR)
+        for kunci in ("penjualan_all", "penjualan_nota", "retur_penjualan",
+                      "pembelian", "retur_pembelian"):
+            self.assertIn(kunci, bawaan)
+        for terlarang in ("products", "kelola_pelanggan", "users"):
+            self.assertNotIn(terlarang, bawaan)
 
     def test_menyimpan_kosong_mengembalikan_ke_bawaan_bukan_mencabut_semua(self):
         """Yang tertulis di layar harus benar: `allowed_menu_keys` kosong
