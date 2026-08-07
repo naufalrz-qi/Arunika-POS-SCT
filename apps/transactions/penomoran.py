@@ -35,9 +35,6 @@ JENIS = {
     "pembelian_retur": ("t_pembelian_retur", "no_retur"),
 }
 
-# Empat digit urutan per hari per awalan. Bukan pilihan kita — begitulah bentuk
-# nomor yang sudah dipakai POS lama selama bertahun-tahun.
-URUT_MAKS = 9999
 _PERCOBAAN = 5
 
 
@@ -58,17 +55,17 @@ def awalan_untuk(cur, kd_divisi=None) -> str:
     return awalan
 
 
-def no_berikutnya(cur, jenis: str, awalan: str, tanggal=None) -> str:
-    """Nomor berikutnya untuk hari itu. WAJIB dipanggil di dalam transaksi.
+def urut_berikutnya(cur, tabel: str, kolom: str, pola: str, lebar: int) -> str:
+    """Inti penomoran: MAX TERKUNCI untuk `pola`, lalu +1 dengan lebar tetap.
 
     `UPDLOCK, HOLDLOCK` mengunci RENTANGNYA, bukan cuma baris yang sudah ada —
-    tanpa HOLDLOCK dua kasir Arunika bisa sama-sama membaca MAX yang sama dan
+    nomor baru justru baris yang BELUM ada, jadi mengunci baris saja tak cukup:
+    tanpa HOLDLOCK dua penulis bisa sama-sama membaca MAX yang sama dan
     sama-sama menyimpulkan nomor yang sama.
-    """
-    tabel, kolom = JENIS[jenis]  # KeyError kalau jenisnya tak dikenal — memang.
-    tanggal = tanggal or dt.datetime.now()
-    pola = f"{awalan}{tanggal:%y%m%d}"
 
+    Dipakai nomor nota maupun kode master (pelanggan/supplier) — balapannya
+    persis sama, jadi penangkalnya tak perlu ditulis dua kali.
+    """
     # Kolom kunci legacy bertipe varchar; pyodbc mengikat str sebagai NVARCHAR,
     # dan konversi implisit di sisi kolom membuang index seek-nya.
     bind_varchar(cur, 1, len(pola) + 1)
@@ -90,12 +87,19 @@ def no_berikutnya(cur, jenis: str, awalan: str, tanggal=None) -> str:
     # dijadikan galat: satu baris aneh peninggalan lama tak boleh menghentikan
     # kasir yang sedang melayani antrean.
     urut = int(ekor) + 1 if ekor.isdigit() else 1
-    if urut > URUT_MAKS:
+    if urut > 10 ** lebar - 1:
         raise ValueError(
-            f"Nomor nota hari ini sudah habis untuk awalan {awalan} "
-            f"(batas {URUT_MAKS}). Hubungi pengelola aplikasi."
+            f"Nomor sudah habis untuk awalan {pola} (batas {10 ** lebar - 1}). "
+            f"Hubungi pengelola aplikasi."
         )
-    return f"{pola}{urut:04d}"
+    return f"{pola}{urut:0{lebar}d}"
+
+
+def no_berikutnya(cur, jenis: str, awalan: str, tanggal=None) -> str:
+    """Nomor nota berikutnya. WAJIB dipanggil di dalam transaksi."""
+    tabel, kolom = JENIS[jenis]  # KeyError kalau jenisnya tak dikenal — memang.
+    tanggal = tanggal or dt.datetime.now()
+    return urut_berikutnya(cur, tabel, kolom, f"{awalan}{tanggal:%y%m%d}", 4)
 
 
 def _duplikat(exc: Exception) -> bool:
@@ -104,9 +108,8 @@ def _duplikat(exc: Exception) -> bool:
     return "2627" in teks or "2601" in teks
 
 
-def simpan_dengan_nomor(cur, jenis: str, awalan: str, tulis, tanggal=None,
-                        percobaan: int = _PERCOBAAN) -> str:
-    """Panggil `tulis(nomor)`; ulangi dengan nomor baru kalau nomornya keburu dipakai.
+def simpan_dengan_nomor(cur, buat_nomor, tulis, percobaan: int = _PERCOBAAN) -> str:
+    """Panggil `tulis(buat_nomor())`; ulangi dengan nomor baru kalau keburu dipakai.
 
     Kunci rentang di `no_berikutnya` menahan sesama penulis Arunika. Ia TIDAK
     menahan aplikasi POS lama kalau aplikasi itu menyisipkan barisnya lewat
@@ -116,8 +119,8 @@ def simpan_dengan_nomor(cur, jenis: str, awalan: str, tulis, tanggal=None,
     dengan nomor yang salah.
     """
     galat = None
-    for sisa in range(percobaan, 0, -1):
-        nomor = no_berikutnya(cur, jenis, awalan, tanggal)
+    for _ in range(percobaan):
+        nomor = buat_nomor()
         try:
             tulis(nomor)
             return nomor
@@ -126,6 +129,6 @@ def simpan_dengan_nomor(cur, jenis: str, awalan: str, tulis, tanggal=None,
                 raise
             galat = exc
     raise RuntimeError(
-        f"Gagal membuat nomor nota setelah {percobaan} percobaan — nomornya "
-        f"selalu keburu dipakai aplikasi lain. Coba lagi sebentar lagi."
+        f"Gagal membuat nomor setelah {percobaan} percobaan — nomornya selalu "
+        f"keburu dipakai aplikasi lain. Coba lagi sebentar lagi."
     ) from galat

@@ -121,7 +121,8 @@ class SimpanDenganNomorTests(SimpleTestCase):
                 cur.maks = "SC2608070002"
                 raise _galat_duplikat()
 
-        hasil = pn.simpan_dengan_nomor(cur, "penjualan", "SC", tulis, TGL)
+        hasil = pn.simpan_dengan_nomor(
+            cur, lambda: pn.no_berikutnya(cur, "penjualan", "SC", TGL), tulis)
         self.assertEqual(dicoba, ["SC2608070002", "SC2608070003"])
         self.assertEqual(hasil, "SC2608070003")
 
@@ -135,7 +136,8 @@ class SimpanDenganNomorTests(SimpleTestCase):
             raise pyodbc.Error("42S22", "[42S22] Invalid column name")
 
         with self.assertRaises(pyodbc.Error):
-            pn.simpan_dengan_nomor(cur, "penjualan", "SC", tulis, TGL)
+            pn.simpan_dengan_nomor(
+                cur, lambda: pn.no_berikutnya(cur, "penjualan", "SC", TGL), tulis)
         self.assertEqual(len(panggil), 1)
 
     def test_menyerah_dengan_jujur_bukan_menyimpan_nomor_salah(self):
@@ -145,11 +147,13 @@ class SimpanDenganNomorTests(SimpleTestCase):
             raise _galat_duplikat()
 
         with self.assertRaises(RuntimeError) as ctx:
-            pn.simpan_dengan_nomor(cur, "penjualan", "SC", tulis, TGL, percobaan=3)
+            pn.simpan_dengan_nomor(
+                cur, lambda: pn.no_berikutnya(cur, "penjualan", "SC", TGL), tulis, percobaan=3)
         self.assertIn("Coba lagi", str(ctx.exception))
 
     def test_berhasil_sekali_jalan_mengembalikan_nomornya(self):
         cur = FakeCursor(maks=None)
         self.assertEqual(
-            pn.simpan_dengan_nomor(cur, "penjualan", "SC", lambda n: None, TGL),
+            pn.simpan_dengan_nomor(
+                cur, lambda: pn.no_berikutnya(cur, "penjualan", "SC", TGL), lambda n: None),
             "SC2608070001")

@@ -29,6 +29,8 @@ ALL_MENUS = [
     # Rutenya di bawah /kasir, bukan /admin-panel: penjaga Tailscale menutup
     # seluruh /admin-panel, sedangkan kasir di toko tidak ada di rentang CGNAT.
     {"key": "kasir_stok", "label": "Cek Stok", "icon": "box", "href": "/kasir/stok", "section": "pos", "roles": ("kasir", "supervisor")},
+    {"key": "kasir_pelanggan", "label": "Pelanggan", "icon": "user", "href": "/kasir/pelanggan", "section": "pos", "roles": ("supervisor",)},
+    {"key": "kasir_supplier", "label": "Supplier", "icon": "truck", "href": "/kasir/supplier", "section": "pos", "roles": ("supervisor",)},
     {"key": "dashboard", "label": "Dashboard", "icon": "dashboard", "href": "/admin-panel/dashboard", "section": "ringkasan"},
     # "always": tak bisa dicabut lewat Kelola Menu. Bantuan yang bisa hilang dari
     # sidebar justru menghilang tepat saat pengguna paling butuh.
@@ -72,11 +74,16 @@ ALL_MENUS = [
     {"key": "biaya_operasional", "label": "Biaya Operasional", "icon": "cash", "href": "/admin-panel/laporan/biaya-operasional", "section": "kas"},
     {"key": "biaya_kategori", "label": "Biaya per Kategori", "icon": "chart", "href": "/admin-panel/laporan/biaya-kategori", "section": "kas"},
     # Master Data — sub-grup 1: data master
-    {"key": "products", "label": "Master Produk", "icon": "box", "href": "/admin-panel/master/products", "section": "master"},
+    # Bawaan supervisor juga. Barang TIDAK dibuatkan layar CRUD sendiri: kedua
+    # layar ini sudah menegakkan batas gudang (nama barang identitas bersama
+    # seluruh cabang), penyebaran harga, dan pencatatan riwayatnya. Menyalinnya
+    # ke /kasir berarti menyalin ketiga aturan itu — dan salinan yang tertinggal
+    # zaman justru merusak data yang dijaga aslinya.
+    {"key": "products", "label": "Master Produk", "icon": "box", "href": "/admin-panel/master/products", "section": "master", "roles": ("supervisor",)},
     {"key": "customers", "label": "Master Pelanggan", "icon": "user", "href": "/admin-panel/master/customers", "section": "master"},
     {"key": "suppliers", "label": "Master Supplier", "icon": "truck", "href": "/admin-panel/master/suppliers", "section": "master"},
     # Master Data — sub-grup 2: harga & update barang
-    {"key": "update_barang", "label": "Update Barang", "icon": "pencil", "href": "/admin-panel/master/update-barang", "section": "master_harga"},
+    {"key": "update_barang", "label": "Update Barang", "icon": "pencil", "href": "/admin-panel/master/update-barang", "section": "master_harga", "roles": ("supervisor",)},
     {"key": "riwayat_update_barang", "label": "Riwayat Update Barang", "icon": "clock", "href": "/admin-panel/master/riwayat-update-barang", "section": "master_harga"},
     {"key": "pergerakan_harga", "label": "Pergerakan Harga", "icon": "trending", "href": "/admin-panel/master/pergerakan-harga", "section": "master_harga"},
     # Master Data — sub-grup 3: sinkronisasi antar-server
@@ -149,8 +156,13 @@ def default_keys_for(role) -> list[str]:
     """
     from apps.auth_app.models import Role
 
+    # Yang dikecualikan dari bawaan admin adalah SECTION "pos", bukan setiap
+    # menu ber-`roles`. Bedanya penting: menu admin yang juga diberikan ke
+    # supervisor (mis. Update Barang) tetap harus jadi bawaan admin — kalau
+    # patokannya `roles`, menambahkan supervisor ke satu menu justru
+    # MENCABUTNYA dari seluruh admin.
     if role in (Role.ADMIN, Role.SUPERADMIN):
-        return [m["key"] for m in assignable_menus() if not m.get("roles")]
+        return [m["key"] for m in assignable_menus() if m["section"] != "pos"]
     return [m["key"] for m in ALL_MENUS if role in m.get("roles", ())]
 
 
