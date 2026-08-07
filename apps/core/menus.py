@@ -30,6 +30,9 @@ ALL_MENUS = [
     # seluruh /admin-panel, sedangkan kasir di toko tidak ada di rentang CGNAT.
     {"key": "kasir_stok", "label": "Cek Stok", "icon": "box", "href": "/kasir/stok", "section": "pos", "roles": ("kasir", "supervisor")},
     {"key": "kasir_penjualan", "label": "Buat Nota", "icon": "cart", "href": "/kasir/penjualan", "section": "pos", "roles": ("kasir", "supervisor")},
+    {"key": "kasir_retur_penjualan", "label": "Retur Penjualan", "icon": "refund", "href": "/kasir/penjualan-retur", "section": "pos", "roles": ("supervisor",)},
+    {"key": "kasir_pembelian", "label": "Terima Pembelian", "icon": "truck", "href": "/kasir/pembelian", "section": "pos", "roles": ("supervisor",)},
+    {"key": "kasir_retur_pembelian", "label": "Retur Pembelian", "icon": "refund", "href": "/kasir/pembelian-retur", "section": "pos", "roles": ("supervisor",)},
     {"key": "dashboard", "label": "Dashboard", "icon": "dashboard", "href": "/admin-panel/dashboard", "section": "ringkasan"},
     # "always": tak bisa dicabut lewat Kelola Menu. Bantuan yang bisa hilang dari
     # sidebar justru menghilang tepat saat pengguna paling butuh.
