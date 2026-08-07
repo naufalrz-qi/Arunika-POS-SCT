@@ -87,6 +87,10 @@ ALL_MENUS = [
     # (antrean menumpuk, sync yang mati), bukan data satu koneksi yang sedang
     # dipakai. Itu urusan yang memegang seluruh jaringan toko, bukan per-admin.
     {"key": "sync_health", "label": "Kesehatan Sync", "icon": "power", "href": "/admin-panel/master/sync-health", "section": "master_sync", "superadmin_only": True},
+    # Superadmin-only: kepala_nota menentukan awalan SETIAP nomor nota yang
+    # dibuat sesudahnya, dan salah isi berarti nota tercatat atas nama cabang
+    # lain — sekali tertulis, tak bisa ditarik.
+    {"key": "kode_nota", "label": "Kelola Kode Nota", "icon": "key", "href": "/admin-panel/master/kode-nota", "section": "master_sync", "superadmin_only": True},
     # Administrasi
     {"key": "users", "label": "Manajemen User", "icon": "users", "href": "/admin-panel/users", "section": "admin"},
     {"key": "connections", "label": "Koneksi Server", "icon": "server", "href": "/admin-panel/connections", "section": "admin"},

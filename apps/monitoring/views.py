@@ -12,6 +12,7 @@ from django.core.exceptions import ValidationError
 from django.http import HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
+from django.views.decorators.http import require_POST
 from inertia import defer, render
 
 from apps.auth_app.models import DATA_KEY_SET, DATA_KEYS, Role, User
@@ -1508,6 +1509,54 @@ def barang_histori_index(request):
 
 
 # --- Kelola Menu (superadmin only) -----------------------------------------
+
+def kode_nota_index(request):
+    """Kode nota (m_divisi.kepala_nota) per divisi — awalan tiap nomor nota."""
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+
+    def muat():
+        profile = _active()
+        if not profile:
+            return {"rows": [], "conn_error": CONN_ERROR}
+        try:
+            return {"rows": master.list_kode_nota(profile), "conn_error": None}
+        except pyodbc.Error as exc:
+            return {"rows": [],
+                    "conn_error": mssql.friendly_error(exc, "Gagal membaca kode nota")}
+
+    return render(request, "Admin/MasterData/KodeNota", props={"kode": defer(muat)})
+
+
+@require_POST
+def kode_nota_save(request):
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+    data = get_data(request)
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect("/admin-panel/master/kode-nota")
+    try:
+        hasil = master.update_kepala_nota(
+            profile, data.get("kd_divisi"), data.get("kepala_nota"))
+    except ValueError as exc:
+        request.session["flash_error"] = str(exc)
+        return redirect("/admin-panel/master/kode-nota")
+    except pyodbc.Error as exc:
+        request.session["flash_error"] = mssql.friendly_error(exc, "Gagal menyimpan kode nota")
+        return redirect("/admin-panel/master/kode-nota")
+
+    # Nilai lamanya ikut dicatat: kalau suatu hari muncul nota berawalan aneh,
+    # yang dicari pertama adalah kapan setelan ini berubah dan dari apa.
+    log_activity(request, "kode_nota",
+                 f"Kode nota {hasil['kd_divisi']}: {hasil['lama'] or '(kosong)'} → {hasil['baru']}")
+    request.session["flash_success"] = (
+        f"Kode nota {hasil['kd_divisi']} kini {hasil['baru']}. "
+        "Nota yang sudah ada tidak berubah."
+    )
+    return redirect("/admin-panel/master/kode-nota")
+
 
 def _deny_non_superadmin(request):
     if request.user.role != Role.SUPERADMIN:

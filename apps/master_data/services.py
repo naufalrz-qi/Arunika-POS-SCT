@@ -199,6 +199,63 @@ def list_products(profile, search: str = "", kd_kategori: str = "") -> list[dict
     return products
 
 
+# varchar(5) di m_divisi. Dibatasi huruf/angka karena nilainya jadi AWALAN
+# no_transaksi: spasi atau tanda baca di sana membuat nomor nota tak bisa lagi
+# dicocokkan dengan LIKE, dan itu jalan yang dipakai penomoran maupun laporan.
+_KEPALA_NOTA_RE = re.compile(r"^[A-Z0-9]{1,5}$")
+
+
+def list_kode_nota(profile) -> list[dict]:
+    """Kode nota (m_divisi.kepala_nota) per divisi — layar superadmin."""
+    with mssql.cursor(profile) as cur:
+        cur.execute(
+            "SELECT kd_divisi, nama, kepala_nota, status FROM m_divisi ORDER BY kd_divisi")
+        return [
+            {
+                "kd_divisi": _st(r["kd_divisi"]),
+                "nama": _st(r["nama"]),
+                "kepala_nota": _st(r["kepala_nota"]),
+                "aktif": _active(r["status"]),
+            }
+            for r in _dictify(cur)
+        ]
+
+
+def update_kepala_nota(profile, kd_divisi, kepala_nota) -> dict:
+    """Ubah kode nota satu divisi. Mengembalikan nilai lama & barunya.
+
+    Ini setelan yang menentukan awalan SETIAP nomor nota yang dibuat sesudahnya,
+    jadi nilai lamanya ikut dikembalikan untuk dicatat — kalau suatu hari ada
+    nota berawalan aneh, yang dicari pertama adalah kapan setelan ini berubah.
+
+    Mengubahnya TIDAK menyentuh nota yang sudah ada; urutan harian dihitung
+    dari awalan yang sedang berlaku, jadi mengganti kode di tengah hari memulai
+    urutan baru dari 0001 dan itu memang benar — deretan yang lama tetap utuh.
+    """
+    kd_divisi = _st(kd_divisi)
+    kepala = _st(kepala_nota).upper()
+    if not kd_divisi:
+        raise ValueError("Divisi wajib dipilih.")
+    if not _KEPALA_NOTA_RE.match(kepala):
+        raise ValueError(
+            "Kode nota hanya boleh huruf dan angka, 1-5 karakter, tanpa spasi.")
+
+    with mssql.cursor(profile, autocommit=False) as cur:
+        cur.execute("SELECT kepala_nota FROM m_divisi WHERE kd_divisi = ?", [kd_divisi])
+        baris = cur.fetchone()
+        # SELECT eksplisit, bukan cur.rowcount: trigger legacy membuat rowcount
+        # tak bisa dipercaya untuk menyimpulkan sebuah baris ada.
+        if not baris:
+            raise ValueError(f"Divisi {kd_divisi} tidak ada di server ini.")
+        lama = (baris[0] or "").strip()
+        cur.execute(
+            "UPDATE m_divisi SET kepala_nota = ? WHERE kd_divisi = ?", [kepala, kd_divisi])
+        cur.connection.commit()
+
+    invalidate_master_cache(profile.pk, prefix="divisi")
+    return {"kd_divisi": kd_divisi, "lama": lama, "baru": kepala}
+
+
 def list_userx(profile) -> list[dict]:
     """User legacy (m_userx) untuk dropdown penautan di Manajemen User.
 
