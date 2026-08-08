@@ -99,7 +99,7 @@ watch(
             <thead class="text-xs text-ink-subtle">
               <tr class="border-b border-border-default">
                 <th class="px-2 py-1 text-left font-medium">Barang</th>
-                <th class="px-2 py-1 text-left font-medium">Warna</th>
+                <th class="px-2 py-1 text-left font-medium">Sub Kategori</th>
                 <th class="px-2 py-1 text-left font-medium">Ukuran</th>
                 <th class="px-2 py-1 text-right font-medium">Selisih</th>
                 <th v-if="adaNilai(data.anggota)" class="px-2 py-1 text-right font-medium">Nilai</th>

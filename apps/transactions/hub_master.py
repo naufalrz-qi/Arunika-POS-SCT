@@ -222,11 +222,16 @@ def purge_lain(hub, dry_run: bool = True) -> dict:
 # akan pernah ketahuan.
 #
 # `harga_sync` sudah menutup bagian HARGA lewat perbandingan langsung. Modul ini
-# menutup sisanya: nama barang, merek, supplier.
+# menutup sisanya: nama barang dan merek.
 #
 # `m_barang_satuan` sengaja TIDAK di sini — itu milik `harga_sync`, yang
 # menyapunya tiap 60 detik. Menyapunya dua kali cuma menambah tulisan ke server
 # toko, dan tiap tulisan menyalakan trigger legacy di sana.
+#
+# `m_supplier` juga TIDAK, dan alasannya beda sifat: supplier urusan gudang, dan
+# toko cuma punya segelintir milik sendiri. Daftar-izin `feed_sync` yang memegang
+# aturan itu — daftar di bawah ini diturunkan darinya supaya satu tempat saja
+# yang menentukan apa yang boleh menyeberang ke toko.
 TABEL_TOKO = [t for t in FEED_TABLE_SPECS if t != "m_barang_satuan"]
 
 

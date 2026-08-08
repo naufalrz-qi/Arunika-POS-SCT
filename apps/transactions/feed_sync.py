@@ -122,9 +122,17 @@ FEED_TABLE_SPECS = {
     "m_barang": {"key_columns": ["kd_barang"], "columns": None},
     "m_barang_satuan": {"key_columns": ["kd_barang", "kd_satuan"], "columns": None},
     "m_merk": {"key_columns": ["kd_merk"], "columns": None},
-    "m_supplier": {"key_columns": ["kd_supplier"], "columns": None},
     # SENGAJA TIDAK DIDAFTARKAN:
     #
+    # m_supplier — supplier itu URUSAN GUDANG, bukan urusan toko. Gudang yang
+    #   membeli, jadi gudang yang menyimpan daftar supplier lengkap; server toko
+    #   grosir/ecer hanya memakai segelintir supplier miliknya sendiri (di
+    #   PAGESANGAN: 3 baris). Mendorong daftar gudang ke sana membanjiri layar
+    #   pembelian toko dengan ratusan nama yang tak pernah mereka pakai — dan
+    #   itu sudah terjadi sekali, harus dipulihkan manual dari PAGESANGAN.
+    #   Aturannya satu arah dan permanen: supplier TIDAK PERNAH difan-out ke
+    #   toko. Ke AMPHOREUS tetap ikut (`hub_sync.SEED_TABLES`) — pusat itu milik
+    #   kita sendiri, dan laporan pembelian gudang butuh namanya.
     # m_barang_divisi — membawa stok_awal / stok_min / harga_beli_awal yang
     #   MILIK TIAP TOKO. Mendorong baris gudang ke sana menimpa konfigurasi stok
     #   toko itu dengan angka gudang. Kalau nanti dibutuhkan, daftarkan dengan

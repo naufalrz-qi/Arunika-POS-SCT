@@ -16,7 +16,10 @@ import Banner from "@/components/ui/Banner.vue";
 
 const istilah = [
   { t: "FMI", d: "Fast / Medium / Idle Moving — pengelompokan barang menurut kecepatan lakunya. Fast = cepat laku, Medium = sedang, Idle = nyaris tidak bergerak.", ke: "/admin-panel/analitik/fmi-penjualan", nama: "FMI Penjualan" },
-  { t: "Divisi", d: "Pembagian tempat/unit penyimpanan stok di dalam satu server. Satu barang bisa punya stok berbeda di tiap divisi." },
+  { t: "Divisi", d: "Pembagian tempat/unit penyimpanan stok di dalam satu server. Satu barang bisa punya stok berbeda di tiap divisi. Ini soal TEMPAT — jangan tertukar dengan \"Divisi Barang\" yang menggolongkan barangnya." },
+  { t: "Divisi Barang", d: "Penggolongan barang menurut merek/lini produknya. Di database tersimpan sebagai \"merk\". Ini soal JENIS BARANG, bukan tempat penyimpanan — lihat \"Divisi\"." },
+  { t: "Departemen", d: "Penggolongan barang tingkat teratas. Di database tersimpan sebagai \"model\"." },
+  { t: "Kategori & Sub Kategori", d: "Dua tingkat penggolongan barang di bawah Departemen. Sub Kategori di database tersimpan sebagai \"warna\" — nama kolomnya peninggalan lama, isinya penggolongan." },
   { t: "Opname", d: "Pencocokan stok fisik dengan stok di sistem. Selisihnya dicatat sebagai koreksi.", ke: "/admin-panel/inventory/opname", nama: "Opname Stok" },
   { t: "Mutasi", d: "Perpindahan stok antar divisi/gudang. Berbeda dari Opname: mutasi memindahkan, opname mengoreksi.", ke: "/admin-panel/inventory/mutasi-stok", nama: "Mutasi Stok" },
   { t: "Stok Awal", d: "Saldo pembukaan barang, dihitung dari tanggal tutup buku terakhir. Bukan pergerakan, jadi tidak ikut disaring oleh filter tanggal." },

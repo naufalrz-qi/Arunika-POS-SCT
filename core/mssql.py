@@ -72,16 +72,29 @@ def friendly_error(exc, prefix: str = "Gagal membaca data") -> str:
 _request_local = threading.local()
 
 
-def set_request_profile_id(profile_id) -> None:
+def set_request_profile_id(profile_id, strict: bool = False) -> None:
+    """Profil untuk permintaan ini. `strict` mematikan jatuh-tempo ke default.
+
+    Dipakai untuk akun yang DIKUNCI ke satu server (kasir/supervisor): kalau
+    servernya belum ditetapkan, jawabannya harus "tidak ada", bukan diam-diam
+    memakai koneksi default. Menebak berarti nota tertulis ke server toko yang
+    salah, dan trigger legacy langsung mengirimkannya ke pusat.
+    """
     _request_local.profile_id = profile_id
+    _request_local.strict = strict
 
 
 def clear_request_profile() -> None:
     _request_local.profile_id = None
+    _request_local.strict = False
 
 
 def _request_profile_id():
     return getattr(_request_local, "profile_id", None)
+
+
+def _request_strict() -> bool:
+    return getattr(_request_local, "strict", False)
 
 # Preferred newest-first; picks whichever is actually registered on this
 # machine instead of hard-failing when only an older/legacy driver is present.
@@ -244,6 +257,10 @@ def get_active_profile(db_type: str | None = None):
         if profile and db_type and profile.db_type != db_type:
             profile = None  # session choice doesn't match requested type → fall back
     if profile is None:
+        # Akun terkunci tak boleh jatuh ke koneksi default — lihat
+        # set_request_profile_id(strict=True).
+        if _request_strict():
+            return None
         qs = ServerProfile.objects.filter(db_type=db_type) if db_type else ServerProfile.objects.all()
         profile = qs.filter(is_default=True).first() or qs.first()
     if profile:

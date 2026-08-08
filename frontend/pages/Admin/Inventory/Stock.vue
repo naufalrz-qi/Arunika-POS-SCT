@@ -76,9 +76,10 @@ const SEMUA_KOLOM = [
   { key: "kd_barang", label: "Kode", sortable: true },
   { key: "barang", label: "Barang", sortable: true },
   { key: "kategori", label: "Kategori", sortable: true },
-  { key: "merk", label: "Merk", sortable: true },
-  { key: "model", label: "Model" },
-  { key: "warna", label: "Warna" },
+  // Kunci mengikuti kolom legacy (merk/model/warna); labelnya sebutan di toko.
+  { key: "merk", label: "Divisi Barang", sortable: true },
+  { key: "model", label: "Departemen" },
+  { key: "warna", label: "Sub Kategori" },
   { key: "ukuran", label: "Ukuran" },
   { key: "stok_akhir", label: "Stok Akhir", align: "right", sortable: true },
   { key: "harga_average", label: "Harga Avg", align: "right", format: "rupiah" },

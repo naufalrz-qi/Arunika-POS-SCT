@@ -71,10 +71,12 @@ const columns = [
   { key: "kd_barang", label: "Kode", sortable: true },
   { key: "nama", label: "Nama Produk", sortable: true },
   { key: "kategori", label: "Kategori", sortable: true },
-  { key: "kd_jenis_bahan", label: "Jenis Bahan" },
-  { key: "kd_model", label: "Model" },
-  { key: "kd_merk", label: "Merk" },
-  { key: "kd_warna", label: "Warna" },
+  // Nama, bukan kode. Kolom ini dulu berlabel manusiawi tapi terikat ke kunci
+  // kd_* sehingga yang tampil MAA003, bukan namanya.
+  { key: "jenis_bahan", label: "Jenis Bahan", sortable: true },
+  { key: "departemen", label: "Departemen", sortable: true },
+  { key: "divisi_barang", label: "Divisi Barang", sortable: true },
+  { key: "sub_kategori", label: "Sub Kategori", sortable: true },
   { key: "ukuran", label: "Ukuran" },
   { key: "pabrik", label: "Pabrik" },
   { key: "satuan", label: "Satuan", align: "center" },

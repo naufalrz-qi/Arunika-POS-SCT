@@ -12,13 +12,19 @@ from django.core.exceptions import ValidationError
 from django.http import HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
+from django.views.decorators.http import require_POST
 from inertia import defer, render
 
 from apps.auth_app.models import DATA_KEY_SET, DATA_KEYS, Role, User
 from apps.connections.models import ServerProfile
 from apps.core.http import get_data
 from apps.core.middleware import ditolak
-from apps.core.menus import SECTION_LABELS, SECTIONS, assignable_menus
+from apps.core.menus import (
+    SECTION_LABELS,
+    SECTIONS,
+    assignable_menus,
+    default_keys_for,
+)
 from apps.core.models import (
     ActivityLog,
     BarangHargaChange,
@@ -30,6 +36,8 @@ from apps.core.models import (
     log_sync,
 )
 from apps.inventory import services as inv
+from apps.master_data import master_crud
+from apps.transactions.penjualan import opsi_nota as _opsi_nota
 from apps.master_data import services as master
 from apps.transactions import services as tx
 from apps.core import reporting
@@ -232,6 +240,11 @@ def _user_dict(u):
         "role": u.role,
         "is_active": u.is_active,
         "created_at": _local(u.date_joined, "%Y-%m-%d"),
+        "kd_user": u.kd_user,
+        "kd_divisi": u.kd_divisi,
+        "kd_pegawai": u.kd_pegawai,
+        "server_profile_id": u.server_profile_id,
+        "koneksi_terkunci": u.koneksi_terkunci,
     }
 
 
@@ -261,10 +274,33 @@ def _last_superadmin_guard(target, new_role=None, deactivate=False):
 def users_index(request):
     roles = _managed_roles(request.user)
     users = User.objects.filter(role__in=roles).order_by("role", "username")
+
+    def load_legacy():
+        """Pilihan tautan ke user & divisi legacy. Ditunda: dua query MS SQL ini
+        tak boleh menahan tampilnya daftar user, yang datanya ada di SQLite."""
+        profile = _active()
+        if not profile:
+            return {"userx": [], "divisi": [], "pegawai": [], "conn_error": CONN_ERROR}
+        try:
+            return {
+                "userx": master.list_userx(profile),
+                "divisi": inv.list_divisi(profile),
+                "pegawai": _opsi_nota(profile)["pegawai"],
+                "conn_error": None,
+            }
+        except pyodbc.Error as exc:
+            return {"userx": [], "divisi": [], "pegawai": [],
+                    "conn_error": mssql.friendly_error(exc, "Gagal membaca user legacy")}
+
     return render(request, "Admin/Users/Index", props={
         "users": [_user_dict(u) for u in users],
         "assignable_roles": roles,
         "me": request.user.id,
+        "server_profiles": [
+            {"value": p.pk, "label": f"{p.name} ({p.db_type})"}
+            for p in ServerProfile.objects.all().order_by("name")
+        ],
+        "legacy": defer(load_legacy),
     })
 
 
@@ -313,6 +349,17 @@ def users_save(request):
             request.session["flash_error"] = " ".join(exc.messages)
             return redirect("/admin-panel/users")
         user.set_password(password)
+
+    # Tautan ke akun legacy. Dipangkas ke panjang kolomnya supaya kode yang
+    # kepanjangan ditolak di sini, bukan jadi galat SQLite yang tak berarti apa
+    # pun bagi yang mengisinya.
+    user.kd_user = (data.get("kd_user") or "").strip()[:6]
+    user.kd_divisi = (data.get("kd_divisi") or "").strip()[:6]
+    user.kd_pegawai = (data.get("kd_pegawai") or "").strip()[:6]
+    # Server yang boleh dipakai. Untuk kasir/supervisor ini mengunci ke mana
+    # nota mereka tertulis; salah isi berarti nota masuk ke cabang lain.
+    sp = data.get("server_profile_id")
+    user.server_profile_id = int(sp) if str(sp or "").isdigit() else None
     user.save()
 
     log_activity(request, "user", f"Simpan user {user.username}")
@@ -1065,9 +1112,13 @@ def sync_harga_apply(request):
     return redirect(f"/admin-panel/master/sync-harga?mode={mode}&src={src.id}&dst={dst.id}")
 
 
-# --- Sinkronisasi Master Data (m_barang/m_customer/m_supplier) -------------
+# --- Sinkronisasi Master Data (m_barang/m_customer) ------------------------
 # Arah tetap: gudang = sumber data master, tujuan = server aktif/dipilih
 # (grosir/retail) — beda dari sync-harga yang punya 2 mode simetris.
+#
+# Supplier tidak ada di daftar entitas, dan itu disengaja — lihat catatan di
+# `master._SYNC_ENTITIES`. Entitas di luar daftar ditolak `sync_master_apply`,
+# jadi form yang dikirim tangan pun tidak bisa menembusnya.
 
 _SYNC_MASTER_ENTITIES = [
     {"value": k, "label": v["label"]} for k, v in master._SYNC_ENTITIES.items()
@@ -1483,6 +1534,54 @@ def barang_histori_index(request):
 
 # --- Kelola Menu (superadmin only) -----------------------------------------
 
+def kode_nota_index(request):
+    """Kode nota (m_divisi.kepala_nota) per divisi — awalan tiap nomor nota."""
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+
+    def muat():
+        profile = _active()
+        if not profile:
+            return {"rows": [], "conn_error": CONN_ERROR}
+        try:
+            return {"rows": master.list_kode_nota(profile), "conn_error": None}
+        except pyodbc.Error as exc:
+            return {"rows": [],
+                    "conn_error": mssql.friendly_error(exc, "Gagal membaca kode nota")}
+
+    return render(request, "Admin/MasterData/KodeNota", props={"kode": defer(muat)})
+
+
+@require_POST
+def kode_nota_save(request):
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+    data = get_data(request)
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect("/admin-panel/master/kode-nota")
+    try:
+        hasil = master.update_kepala_nota(
+            profile, data.get("kd_divisi"), data.get("kepala_nota"))
+    except ValueError as exc:
+        request.session["flash_error"] = str(exc)
+        return redirect("/admin-panel/master/kode-nota")
+    except pyodbc.Error as exc:
+        request.session["flash_error"] = mssql.friendly_error(exc, "Gagal menyimpan kode nota")
+        return redirect("/admin-panel/master/kode-nota")
+
+    # Nilai lamanya ikut dicatat: kalau suatu hari muncul nota berawalan aneh,
+    # yang dicari pertama adalah kapan setelan ini berubah dan dari apa.
+    log_activity(request, "kode_nota",
+                 f"Kode nota {hasil['kd_divisi']}: {hasil['lama'] or '(kosong)'} → {hasil['baru']}")
+    request.session["flash_success"] = (
+        f"Kode nota {hasil['kd_divisi']} kini {hasil['baru']}. "
+        "Nota yang sudah ada tidak berubah."
+    )
+    return redirect("/admin-panel/master/kode-nota")
+
+
 def _deny_non_superadmin(request):
     if request.user.role != Role.SUPERADMIN:
         return ditolak(
@@ -1518,6 +1617,13 @@ def menus_index(request):
             ],
             "menus": assignable_menus(),
             "data_keys": DATA_KEYS,
+            # Menu bawaan tiap peran. Tanpa ini layar berbohong: user yang
+            # `allowed_menu_keys`-nya kosong tampil tanpa satu centang pun,
+            # padahal ia SEDANG memegang menu bawaan perannya.
+            "role_defaults": {
+                r: default_keys_for(r)
+                for r in (Role.KASIR, Role.SUPERVISOR, Role.ADMIN)
+            },
             # Urutan + label section untuk pengelompokan di UI (hanya section
             # yang punya menu assignable).
             "sections": [
@@ -3046,3 +3152,84 @@ def profile_save(request):
     log_activity(request, "profil", "Ubah profil sendiri")
     request.session["flash_success"] = "Profil diperbarui."
     return redirect("/admin-panel/profile")
+
+
+# --- Kelola master pelanggan & supplier (Master Data, admin) ---------------
+# Sengaja di sini dan bukan di views_kasir.py: mengubah data induk bukan
+# pekerjaan harian toko, dan berkas itu menjelaskan batas /kasir yang justru
+# TIDAK menuntut Tailscale.
+def _master_index(request, entitas: str):
+    """Layar daftar+form untuk satu entitas master (pelanggan/supplier)."""
+    s = master_crud.spec(entitas)
+    cari = (request.GET.get("cari") or "").strip()
+
+    def muat():
+        profile = _active()
+        if not profile:
+            return {"rows": [], "conn_error": CONN_ERROR}
+        try:
+            return {
+                "rows": master_crud.list_master(profile, entitas, cari),
+                # Ikut di bundel yang sama: tanpa pilihan kota/bank, penyimpanan
+                # pertama pasti gagal — kolomnya berkunci-asing dan menolak kosong.
+                "lookups": master_crud.list_lookups(profile, entitas),
+                "conn_error": None,
+            }
+        except pyodbc.Error as exc:
+            return {"rows": [], "lookups": {},
+                    "conn_error": mssql.friendly_error(exc, f"Gagal membaca {s['label'].lower()}")}
+
+    return render(request, "Admin/MasterData/KelolaUmum", props={
+        "data": defer(muat),
+        "filters": {"cari": cari},
+        "entitas": entitas,
+        "aksi_url": f"/admin-panel/master/kelola-{entitas}",
+        "label": s["label"],
+        "kunci": s["kunci"],
+        "teks": s["teks"],
+        "angka": s["angka"],
+        "lookup_fields": list(s["lookup"]),
+        "wajib": s["wajib"],
+    })
+
+
+def _master_save(request, entitas: str):
+    s = master_crud.spec(entitas)
+    tujuan = f"/admin-panel/master/kelola-{entitas}"
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect(tujuan)
+    try:
+        hasil = master_crud.simpan_master(profile, entitas, get_data(request))
+    except ValueError as exc:
+        request.session["flash_error"] = str(exc)
+        return redirect(tujuan)
+    except pyodbc.Error as exc:
+        request.session["flash_error"] = mssql.friendly_error(
+            exc, f"Gagal menyimpan {s['label'].lower()}")
+        return redirect(tujuan)
+
+    log_activity(request, entitas,
+                 f"{'Tambah' if hasil['baru'] else 'Ubah'} {s['label']} {hasil['kode']}")
+    request.session["flash_success"] = (
+        f"{s['label']} {hasil['kode']} {'ditambahkan' if hasil['baru'] else 'disimpan'}.")
+    return redirect(tujuan)
+
+
+def pelanggan(request):
+    return _master_index(request, "pelanggan")
+
+
+@require_POST
+def pelanggan_save(request):
+    return _master_save(request, "pelanggan")
+
+
+def supplier(request):
+    return _master_index(request, "supplier")
+
+
+@require_POST
+def supplier_save(request):
+    return _master_save(request, "supplier")

@@ -3,14 +3,16 @@
     python manage.py sync_master --dry-run
     python manage.py sync_master
 
-Menutup celah yang ditinggalkan `feed_sync`: nama barang, merek, dan supplier
-disebar lewat memo `tbl_log_transaksi`, dan memo bisa dipangkas atau terpotong
-trigger. Di sini kedua sisi dibaca lalu dibandingkan, jadi yang beda pasti
-ketahuan.
+Menutup celah yang ditinggalkan `feed_sync`: nama barang dan merek disebar lewat
+memo `tbl_log_transaksi`, dan memo bisa dipangkas atau terpotong trigger. Di sini
+kedua sisi dibaca lalu dibandingkan, jadi yang beda pasti ketahuan.
 
 Harga TIDAK ikut — `m_barang_satuan` milik `harga_sync`, yang menyapunya tiap
 60 detik. Menyapunya dua kali cuma menambah tulisan ke server toko, dan tiap
 tulisan menyalakan trigger legacy di sana.
+
+Supplier TIDAK ikut, dan itu aturan tetap: yang membeli adalah gudang, toko cuma
+memakai segelintir supplier miliknya sendiri. Lihat daftar-izin `feed_sync`.
 
 TIDAK PERNAH MENGHAPUS di toko. Barang lokal toko yang tak ada di gudang
 dibiarkan; jumlahnya dilaporkan sebagai `dilewati` supaya keputusan itu
@@ -22,7 +24,7 @@ from apps.transactions import harga_sync, hub_master
 
 
 class Command(BaseCommand):
-    help = "Samakan nama barang/merek/supplier di toko grosir dengan GUDANG."
+    help = "Samakan nama barang & merek di toko grosir dengan GUDANG."
 
     def add_arguments(self, parser):
         parser.add_argument("--dry-run", action="store_true")

@@ -10,9 +10,6 @@ class Role(models.TextChoices):
     SUPERADMIN = "superadmin", "Superadmin"
 
 
-# Menu keys must match those in apps/core/menus.py.
-ADMIN_DEFAULT_MENUS = ["dashboard", "users", "connections", "products", "customers", "logs"]
-
 # Kelompok nilai uang yang bisa dicabut per user. Bukan nama kolom database:
 # satu kunci menutup beberapa field sekaligus (lihat _hidden_fields di
 # apps/monitoring/views.py untuk pemetaannya).
@@ -40,6 +37,46 @@ class User(AbstractUser):
     # perilaku hari ini, jadi tak ada user yang kehilangan akses saat deploy)
     # dan mematikan semua centang mengisi ketiga kunci.
     hidden_data_keys = models.JSONField(default=list, blank=True)
+
+    # Tautan ke user legacy di MS SQL (m_userx.kd_user) dan divisi tempat ia
+    # bekerja (m_divisi.kd_divisi). Transaksi menyimpan kd_user, bukan id user
+    # Arunika, jadi tanpa tautan ini nota yang kita tulis tak bisa dikenali
+    # laporan "Penjualan per User" — di Arunika MAUPUN di aplikasi POS lama.
+    #
+    # Hanya TAUTAN, bukan salinan akun — skema m_userx memang jauh berbeda dari
+    # AbstractUser, jadi memetakan kolomnya satu per satu tak akan pernah rapi.
+    # Yang dipinjam cuma kd_user-nya.
+    #
+    # Kata sandi tetap milik Arunika. Arunika TIDAK PERNAH membaca maupun
+    # menulis dua kolom sandi di m_userx:
+    #   passwd  — menyimpan sandi apa adanya (terukur 4-9 karakter, bukan hash);
+    #             menyalinnya ke sini berarti menyebarkan sandi terbuka ke
+    #             sistem kedua.
+    #   passweb — peninggalan pengembang sebelumnya dan sudah diketahui
+    #             mengganggu aplikasi legacy. Menulisinya berarti mengulang
+    #             kerusakan yang sudah ada, bukan memperbaikinya.
+    kd_user = models.CharField(max_length=6, blank=True, default="")
+    kd_divisi = models.CharField(max_length=6, blank=True, default="")
+    # Pegawai yang melayani, terisi otomatis di form nota. Tak bisa disimpulkan
+    # dari kd_user: m_pegawai menyebutnya "KASIR9" sedangkan m_userx "KASIR01",
+    # dan mencocokkan lewat nama akan menautkan orang yang salah tanpa satu pun
+    # galat — nota lalu tercatat atas nama pegawai lain.
+    kd_pegawai = models.CharField(max_length=6, blank=True, default="")
+
+    # Server yang boleh dipakai akun ini. Kasir/supervisor DIKUNCI ke sini dan
+    # tak bisa berpindah: koneksi menentukan ke server toko MANA sebuah nota
+    # tertulis, dan nota yang masuk ke cabang yang salah tak bisa ditarik —
+    # ia langsung ikut terkirim ke pusat oleh trigger legacy.
+    # Kosong berarti belum ditentukan; jalur tulis menolak, bukan menebak.
+    server_profile = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="pengguna",
+    )
+
+    @property
+    def koneksi_terkunci(self) -> bool:
+        """Peran toko tak memilih koneksi; peran kantor memilih sendiri."""
+        return self.role in (Role.KASIR, Role.SUPERVISOR)
 
     @property
     def is_admin_tier(self) -> bool:
