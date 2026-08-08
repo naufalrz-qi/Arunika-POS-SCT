@@ -7,9 +7,17 @@ Semantik yang ditiru ada di tiga UDF legacy, dan kembaran SQL-nya di
 `_ghb`/`_nota_net` (apps/transactions/reports.py). Diperiksa terhadap 300 nota
 SC nyata di server testing: 300 cocok, 0 beda.
 """
+from contextlib import contextmanager
+from unittest.mock import patch
+
 from django.test import SimpleTestCase
 
 from apps.transactions import penjualan as pj
+
+
+@contextmanager
+def _ctx(cur):
+    yield cur
 
 
 class GhbTests(SimpleTestCase):
@@ -79,7 +87,124 @@ class ValidasiTests(SimpleTestCase):
             pj._periksa([{"kd_barang": "  ", "qty": 1}], "UAA002")
 
 
+class FakeCursor:
+    """Cursor palsu yang merekam SQL — MS SQL tak disentuh (lihat test_transaksi)."""
+
+    def __init__(self):
+        self.sql = []
+        self.params = []
+        self.connection = self
+
+    def setinputsizes(self, v):
+        pass
+
+    def commit(self):
+        pass
+
+    def execute(self, sql, params=None):
+        self.sql.append(" ".join(sql.split()))
+        self.params.append(list(params or []))
+
+    def fetchone(self):
+        return (None,)   # belum ada nomor untuk awalan ini
+
+
+class OrderTests(SimpleTestCase):
+    """Order yang salah tanda tak bisa diambil jadi nota — dan tak ada galat
+    apa pun yang memberi tahu; ia cuma hilang dari daftar order terbuka."""
+
+    ITEM = [{"kd_barang": "000-06", "kd_satuan": "SAA000", "qty": 2,
+             "harga_jual": 146000.0}]
+
+    def _buat(self, **kw):
+        cur = FakeCursor()
+        dasar = dict(kd_user="UAA002", kd_divisi="DAA000", kd_customer="CAA000",
+                     kd_jenis="JAA000", kd_kas="KAA001", kd_voucher="VAA000",
+                     kd_pegawai="PAA000", items=self.ITEM)
+        dasar.update(kw)
+        with patch.object(pj.mssql, "cursor", lambda *a, **k: _ctx(cur)):
+            return cur, pj.buat_order(object(), **dasar)
+
+    def test_nomor_memakai_awalan_order_bukan_kepala_nota(self):
+        """kepala_nota divisi ini `SC`, tapi seluruh 7.209 order legacy `OJ`."""
+        cur, hasil = self._buat()
+        self.assertTrue(hasil["no_order"].startswith("OJ"), hasil["no_order"])
+        # kepala_nota tak dibaca sama sekali: layar order tetap jalan walau
+        # kolomnya belum diisi.
+        self.assertFalse(any("kepala_nota" in s for s in cur.sql))
+
+    def test_ditandai_belum_diambil(self):
+        """no_transaksi = no_order DAN status 0 — `daftar_order` menyaring pada
+        yang pertama, jadi mengosongkannya membuat order langsung dianggap
+        sudah jadi nota."""
+        cur, hasil = self._buat()
+        i = next(k for k, s in enumerate(cur.sql) if "INSERT INTO t_penjualan_order (" in s)
+        nilai = dict(zip(pj._ORDER_HEADER, cur.params[i]))
+        self.assertEqual(nilai["no_transaksi"], hasil["no_order"])
+        self.assertEqual(nilai["status"], 0)
+
+    def test_tanggal_server_diisi_jam_server(self):
+        """Kolomnya NOT-NULL-able tanpa DEFAULT, beda dari t_penjualan; kalau
+        tak disebut ia jadi NULL padahal 7.209 baris legacy semuanya terisi."""
+        cur, _ = self._buat()
+        insert = next(s for s in cur.sql if "INSERT INTO t_penjualan_order (" in s)
+        self.assertIn("tanggal_server", insert)
+        self.assertIn("GETDATE()", insert)
+
+    def test_baris_ditulis_dengan_jenis_satu(self):
+        cur, _ = self._buat()
+        i = next(k for k, s in enumerate(cur.sql) if "t_penjualan_order_detail" in s)
+        nilai = dict(zip(pj._ORDER_DETAIL, cur.params[i]))
+        self.assertEqual(nilai["jenis"], pj.JENIS_BARIS)
+
+    def test_order_kosong_ditolak_sebelum_menyentuh_database(self):
+        with self.assertRaises(ValueError):
+            self._buat(items=[])
+
+
+class SatuanBarangTests(SimpleTestCase):
+    """Ganti satuan harus ikut mengganti harga: 541 barang punya >1 satuan dan
+    harganya beda per satuan (1001: PCS 4.800, LUSIN 57.600)."""
+
+    class _Cur(FakeCursor):
+        def fetchall(self):
+            return [("SAA000", "PCS", 1.0, 4800.0, 1),
+                    ("SAA001  ", " LUSIN ", 12.0, 57600.0, 1)]
+
+    def _panggil(self, kode="1001"):
+        cur = self._Cur()
+        with patch.object(pj.mssql, "cursor", lambda *a, **k: _ctx(cur)):
+            return cur, pj.satuan_barang(object(), kode)
+
+    def test_mengembalikan_harga_per_satuan(self):
+        _, rows = self._panggil()
+        self.assertEqual(
+            rows,
+            [{"kd_satuan": "SAA000", "satuan": "PCS", "jumlah": 1.0,
+              "harga_jual": 4800.0, "status": 1},
+             {"kd_satuan": "SAA001", "satuan": "LUSIN", "jumlah": 12.0,
+              "harga_jual": 57600.0, "status": 1}])
+
+    def test_kode_kosong_tidak_menyentuh_database(self):
+        cur, rows = self._panggil("   ")
+        self.assertEqual(rows, [])
+        self.assertEqual(cur.sql, [])
+
+
 class BentukInsertTests(SimpleTestCase):
+    def test_jenis_baris_mengikuti_data_legacy(self):
+        """Legacy menulis 1 di SELURUH 2.990.259 baris t_penjualan_detail; 68
+        baris ber-jenis 0 semuanya tulisan Arunika sendiri saat pengujian."""
+        self.assertEqual(pj.JENIS_BARIS, 1)
+
+    def test_kolom_order_menyebut_semua_kolom_wajib(self):
+        """Seluruh kolom t_penjualan_order NOT NULL kecuali tanggal_server &
+        no_transaksi — yang tak disebut membuat INSERT ditolak."""
+        for k in ("no_order", "kd_customer", "kd_divisi", "kd_jenis", "kd_kas",
+                  "kd_voucher", "no_bukti", "tanggal", "tanggal_terima", "status",
+                  "diskon_uang", "pajak", "keterangan", "jaminan", "kd_user"):
+            self.assertIn(k, pj._ORDER_HEADER, f"{k} hilang — kolomnya NOT NULL")
+
     def test_kolom_terhitung_tidak_ikut_ditulis(self):
         """t_penjualan_detail.total kolom terhitung — menyebutnya membuat INSERT
         ditolak SQL Server, dan itu baru ketahuan saat menulis nota sungguhan."""

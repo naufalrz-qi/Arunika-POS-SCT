@@ -10,19 +10,33 @@ import Select from "@/components/ui/Select.vue";
 import Button from "@/components/ui/Button.vue";
 import Banner from "@/components/ui/Banner.vue";
 import LoadingCard from "@/components/ui/LoadingCard.vue";
+import { useGridNav } from "@/composables/useGridNav";
+import { useSatuan } from "@/composables/useSatuan";
 
 const rp = new Intl.NumberFormat("id-ID", {
   style: "currency", currency: "IDR", maximumFractionDigits: 0,
 });
-const formatRupiah = (v) => rp.format(Number(v) || 0);
+const formatRupiah = (v) => rp.format(angka(v));
+// Sel angka di tabel kini type="text" (lihat useGridNav soal kursor), jadi
+// koma desimal ala Indonesia benar-benar bisa terketik — dan Number("1,5")
+// adalah NaN, yang diam-diam membuat satu baris hilang dari total.
+const angka = (v) => Number(String(v ?? "").replace(",", ".")) || 0;
 
 const props = defineProps({
   nota: { type: Object, default: null },
+  // "nota" = penjualan langsung (uang berpindah), "order" = pesanan yang
+  // menunggu diambil. Satu layar untuk keduanya; lihat _layar_penjualan().
+  mode: { type: String, default: "nota" },
+  base: { type: String, default: "/kasir/penjualan" },
   kd_user: { type: String, default: "" },
   kd_divisi: { type: String, default: "" },
   kd_pegawai: { type: String, default: "" },
   nota_terakhir: { type: String, default: "" },
 });
+
+const order = computed(() => props.mode === "order");
+const judul = computed(() => (order.value ? "Penjualan Order" : "Penjualan"));
+const sebutan = computed(() => (order.value ? "Order" : "Nota"));
 
 const isi = computed(() => props.nota || {});
 const opsi = computed(() => isi.value.opsi || {});
@@ -33,7 +47,9 @@ const bawaan = computed(() => isi.value.bawaan || {});
 // yang lain sudah siap bayar. Tiap tab adalah satu keranjang utuh, jadi "hold"
 // bukan tombol tersendiri — cukup pindah tab. Disimpan di localStorage supaya
 // keranjang tak hilang kalau layar ter-refresh atau browser tertutup.
-const SIMPANAN = `arunika.nota.${props.kd_user || "anon"}`;
+// Kuncinya memuat mode: keranjang order dan keranjang nota tak boleh saling
+// menimpa walau dibuka oleh orang yang sama.
+const SIMPANAN = `arunika.${props.mode}.${props.kd_user || "anon"}`;
 let urutan = 1;
 
 function tabBaru() {
@@ -69,7 +85,7 @@ function tambahTab() {
   isiBawaan(t);
   tabs.value.push(t);
   aktif.value = tabs.value.length - 1;
-  fokusPindai();
+  fokusEntri();
 }
 function tutupTab(i = aktif.value) {
   if (tabs.value.length === 1) {
@@ -79,12 +95,12 @@ function tutupTab(i = aktif.value) {
     tabs.value.splice(i, 1);
     aktif.value = Math.min(aktif.value, tabs.value.length - 1);
   }
-  fokusPindai();
+  fokusEntri();
 }
 function keTab(i) {
   if (i >= 0 && i < tabs.value.length) {
     aktif.value = i;
-    fokusPindai();
+    fokusEntri();
   }
 }
 
@@ -115,51 +131,106 @@ watch(() => tab.value?.tanggal, (t) => {
   tab.value.jatuh_tempo = d.toISOString().slice(0, 10);
 });
 
-// --- Pemindai ---------------------------------------------------------------
-const scan = ref("");
-const pesan = ref("");
-const kotakScan = ref(null);
-const fokusPindai = () => nextTick(() => kotakScan.value?.focus?.());
-
-async function pindai() {
-  const kode = scan.value.trim();
-  if (!kode) return;
-  pesan.value = "";
-  const { data } = await axios.get("/kasir/penjualan/cari-barang", { params: { kode } });
-  const b = (data.rows || [])[0];
-  if (!b) {
-    pesan.value = `Kode "${kode}" tidak ada.`;
-    return;
-  }
-  tambah(b);
-  scan.value = "";
-}
-
-// --- Cari barang ------------------------------------------------------------
-const cari = ref("");
+// --- Kotak entri di dalam tabel ---------------------------------------------
+// Satu kotak untuk pemindai DAN pencarian, di dalam tabel seperti layar
+// desktop lama: pemindai mengetik kode lalu Enter, tangan mengetik sepotong
+// nama lalu ↑↓ Enter. Dulu keduanya kotak terpisah di dua kartu berbeda.
+const entri = ref("");
 const hasil = ref([]);
-const sorotBarang = ref(0);
+const sorot = ref(0);
+const digeser = ref(false);   // kasir sudah memilih sendiri dengan ↑↓?
+const pesan = ref("");
+const kotakEntri = ref(null);
+const wadahTabel = ref(null);
+const fokusEntri = () => nextTick(() => kotakEntri.value?.focus?.());
+
 let timer = null;
-watch(cari, (q) => {
+watch(entri, (q) => {
   clearTimeout(timer);
-  sorotBarang.value = 0;
+  sorot.value = 0;
+  digeser.value = false;
   if (!q.trim()) {
     hasil.value = [];
     return;
   }
   timer = setTimeout(async () => {
-    const { data } = await axios.get("/kasir/penjualan/cari-barang", { params: { cari: q } });
+    const { data } = await axios.get(`${props.base}/cari-barang`, { params: { cari: q } });
     hasil.value = data.rows || [];
   }, 250);
 });
-function pilihHasil() {
-  const b = hasil.value[sorotBarang.value];
+
+/**
+ * Enter di kotak entri. Urutannya menentukan pemindai tetap aman:
+ * pemindai mengetik lalu Enter dalam sekejap, sering SEBELUM hasil pencarian
+ * sempat datang — kalau Enter selalu mengambil sorotan, barang yang masuk bisa
+ * barang lain yang namanya kebetulan memuat kode itu.
+ */
+async function masukkan() {
+  const q = entri.value.trim();
+  if (!q) return;
+  pesan.value = "";
+  const sama = (b) => (b.kd_barang || "").toUpperCase() === q.toUpperCase();
+
+  let b = null;
+  if (digeser.value) b = hasil.value[sorot.value];              // 1. pilihan kasir
+  if (!b) b = hasil.value.find(sama);                           // 2. kode persis
+  if (!b) {                                                     // 3. jalur pemindai
+    const { data } = await axios.get(`${props.base}/cari-barang`, { params: { kode: q } });
+    b = (data.rows || [])[0];
+  }
+  if (!b) b = hasil.value[0];                                   // 4. hasil teratas
+  if (!b) {
+    pesan.value = `Barang "${q}" tidak ada.`;
+    return;
+  }
+  tambah(b);
+  entri.value = "";
+  hasil.value = [];
+  fokusEntri();
+}
+
+function pilihHasil(i) {
+  const b = hasil.value[i];
   if (!b) return;
   tambah(b);
-  cari.value = "";
+  entri.value = "";
   hasil.value = [];
-  fokusPindai();
+  fokusEntri();
 }
+
+function entriKey(e) {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    if (!hasil.value.length) {
+      // Tak ada hasil: ↑ masuk kembali ke baris terakhir keranjang, supaya
+      // menyunting qty barang yang barusan dipindai tak perlu tetikus.
+      if (e.key === "ArrowUp") fokusBarisTerakhir();
+      return;
+    }
+    digeser.value = true;
+    const n = hasil.value.length;
+    sorot.value = (sorot.value + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+    return;
+  }
+  if (e.key === "Enter") {
+    e.preventDefault();
+    masukkan();
+  }
+}
+
+function fokusBarisTerakhir() {
+  const baris = wadahTabel.value?.querySelectorAll("tbody tr[data-baris]");
+  if (!baris?.length) return;
+  const kotak = baris[baris.length - 1].querySelector("[data-nav]");
+  kotak?.focus();
+  kotak?.select?.();
+}
+
+const navGrid = useGridNav(wadahTabel, {
+  keEntri: fokusEntri,
+  hapusBaris: (i) => hapus(i),
+});
+const satuan = useSatuan(props.base, "harga_jual");
 
 // --- Customer ---------------------------------------------------------------
 const cariCustomer = ref("");
@@ -174,7 +245,7 @@ watch(cariCustomer, (q) => {
     return;
   }
   timerCust = setTimeout(async () => {
-    const { data } = await axios.get("/kasir/penjualan/cari-customer", { params: { cari: q } });
+    const { data } = await axios.get(`${props.base}/cari-customer`, { params: { cari: q } });
     hasilCustomer.value = data.rows || [];
   }, 250);
 });
@@ -184,7 +255,7 @@ function pilihCustomer(c) {
   tab.value.customer_nama = c.nama;
   cariCustomer.value = "";
   hasilCustomer.value = [];
-  fokusPindai();
+  fokusEntri();
 }
 
 // --- Order ------------------------------------------------------------------
@@ -192,6 +263,7 @@ const bukaOrder = ref(false);
 const daftarOrder = ref([]);
 const sorotOrder = ref(0);
 async function bukaDaftarOrder() {
+  if (order.value) return;   // order tidak mengambil order
   bukaOrder.value = true;
   sorotOrder.value = 0;
   const { data } = await axios.get("/kasir/penjualan/order");
@@ -222,7 +294,7 @@ async function ambilOrder() {
   tabs.value.push(t);
   aktif.value = tabs.value.length - 1;
   bukaOrder.value = false;
-  fokusPindai();
+  fokusEntri();
 }
 
 // --- Baris ------------------------------------------------------------------
@@ -230,7 +302,7 @@ function tambah(b) {
   const ada = tab.value.baris.find(
     (x) => x.kd_barang === b.kd_barang && x.kd_satuan === b.kd_satuan);
   if (ada) {
-    ada.qty = Number(ada.qty) + 1;
+    ada.qty = angka(ada.qty) + 1;
     return;
   }
   tab.value.baris.push({
@@ -247,21 +319,21 @@ function ghb(harga, diskon) {
   if (harga <= 0) return harga;
   let v = harga;
   for (const d of diskon) {
-    const n = Number(d) || 0;
+    const n = angka(d);
     v = n > -1 && n < 1 ? v * (1 - n) : v - n;
   }
   return v;
 }
 const subtotal = (b) =>
-  ghb(Number(b.harga_jual), [b.diskon1, b.diskon2, b.diskon3, b.diskon4]) * Number(b.qty || 0);
+  ghb(angka(b.harga_jual), [b.diskon1, b.diskon2, b.diskon3, b.diskon4]) * angka(b.qty);
 const totalTab = (t) => {
   const net = (t.baris || []).reduce((s, b) => s + subtotal(b), 0);
-  return net * (1 + (Number(t.pajak) || 0)) - (Number(t.diskon_uang) || 0);
+  return net * (1 + angka(t.pajak)) - angka(t.diskon_uang);
 };
 const total = computed(() => totalTab(tab.value));
-const kembali = computed(() => Math.max(0, (Number(tab.value.bayar) || 0) - total.value));
+const kembali = computed(() => Math.max(0, angka(tab.value.bayar) - total.value));
 const jumlahItem = computed(
-  () => tab.value.baris.reduce((s, b) => s + Number(b.qty || 0), 0));
+  () => tab.value.baris.reduce((s, b) => s + angka(b.qty), 0));
 
 // --- Simpan + cetak ---------------------------------------------------------
 const menyimpan = ref(false);
@@ -281,21 +353,21 @@ function simpan() {
   const jam = new Date();
   const hh = (n) => String(n).padStart(2, "0");
   menyimpan.value = true;
-  router.post("/kasir/penjualan/save", {
+  router.post(`${props.base}/save`, {
     kd_customer: t.kd_customer, kd_jenis: t.kd_jenis, kd_kas: t.kd_kas,
     kd_voucher: t.kd_voucher, kd_pegawai: props.kd_pegawai,
     keterangan: t.keterangan, no_order: t.no_order,
     // Jam PC kasir, bukan jam server — tanggal_server diisi database sendiri.
     tanggal: `${t.tanggal}T${hh(jam.getHours())}:${hh(jam.getMinutes())}:${hh(jam.getSeconds())}`,
     jatuh_tempo: t.jatuh_tempo,
-    diskon_uang: Number(t.diskon_uang) || 0,
-    pajak: Number(t.pajak) || 0,
+    diskon_uang: angka(t.diskon_uang),
+    pajak: angka(t.pajak),
     status: 1,
     items: t.baris.map((b) => ({
-      kd_barang: b.kd_barang, kd_satuan: b.kd_satuan, qty: Number(b.qty),
-      harga_jual: Number(b.harga_jual),
-      diskon1: Number(b.diskon1) || 0, diskon2: Number(b.diskon2) || 0,
-      diskon3: Number(b.diskon3) || 0, diskon4: Number(b.diskon4) || 0,
+      kd_barang: b.kd_barang, kd_satuan: b.kd_satuan, qty: angka(b.qty),
+      harga_jual: angka(b.harga_jual),
+      diskon1: angka(b.diskon1), diskon2: angka(b.diskon2),
+      diskon3: angka(b.diskon3), diskon4: angka(b.diskon4),
     })),
   }, {
     preserveScroll: true,
@@ -304,12 +376,12 @@ function simpan() {
     },
     onFinish: () => {
       menyimpan.value = false;
-      fokusPindai();
+      fokusEntri();
     },
   });
 }
 function cetak() {
-  if (notaTerakhir.value) {
+  if (notaTerakhir.value && !order.value) {
     window.open(`/kasir/penjualan/${notaTerakhir.value}/cetak`, "_blank");
   }
 }
@@ -317,16 +389,17 @@ function cetak() {
 // --- Papan ketik ------------------------------------------------------------
 // Kasir bekerja dua tangan di keyboard dan pemindai, angka lewat numpad kanan.
 // Semua yang sering dipakai punya pintasan; tetikus tak pernah wajib.
-const PINTASAN = [
-  ["Alt+S", "simpan nota"],
+const PINTASAN = computed(() => [
+  ["F2", "kotak barang"],
+  ["F4", "cari customer"],
+  ["↑↓ / Enter", "pindah sel tabel"],
+  ["Ctrl+Del", "hapus baris"],
+  ["Alt+S", `simpan ${sebutan.value.toLowerCase()}`],
   ["Alt+N", "transaksi baru"],
   ["Alt+W", "tutup transaksi"],
   ["Alt+1…9", "pindah transaksi"],
-  ["Alt+O", "ambil order"],
-  ["Alt+P", "cetak nota terakhir"],
-  ["F2 / F3", "pindai / cari barang"],
-  ["F4", "cari customer"],
-];
+  ...(order.value ? [] : [["Alt+O", "ambil order"], ["Alt+P", "cetak nota terakhir"]]),
+]);
 function onKey(e) {
   if (e.key === "Escape") {
     bukaOrder.value = false;
@@ -342,8 +415,9 @@ function onKey(e) {
     return;
   }
   if (!e.altKey) {
-    if (e.key === "F2") { e.preventDefault(); fokusPindai(); }
-    else if (e.key === "F3") { e.preventDefault(); document.getElementById("kotak-cari")?.focus(); }
+    // F3 dipertahankan sebagai alias F2: dulu keduanya kotak yang berbeda, dan
+    // jari kasir sudah telanjur hafal.
+    if (e.key === "F2" || e.key === "F3") { e.preventDefault(); fokusEntri(); }
     else if (e.key === "F4") { e.preventDefault(); document.getElementById("kotak-cust")?.focus(); }
     return;
   }
@@ -356,13 +430,18 @@ function onKey(e) {
 }
 onMounted(() => {
   window.addEventListener("keydown", onKey);
-  fokusPindai();
+  fokusEntri();
 });
 onUnmounted(() => window.removeEventListener("keydown", onKey));
+
+const KELAS_SEL =
+  "w-full rounded-control border border-border-default bg-surface px-2 py-1 text-right tabular-nums";
+const KELAS_PILIH =
+  "w-full rounded-control border border-border-default bg-surface px-2 py-1 text-sm";
 </script>
 
 <template>
-  <AdminLayout title="Buat Nota">
+  <AdminLayout :title="judul">
     <Banner
       v-if="!kd_user || !kd_divisi || !kd_pegawai"
       variant="warning"
@@ -371,7 +450,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
     />
 
     <Deferred data="nota">
-      <template #fallback><LoadingCard message="Menyiapkan layar nota…" /></template>
+      <template #fallback><LoadingCard message="Menyiapkan layar…" /></template>
       <Banner v-if="isi.conn_error" variant="warning" :message="isi.conn_error" class="mb-4" />
 
       <!-- Tab transaksi: hold = cukup pindah tab. -->
@@ -391,116 +470,136 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           <span class="ml-1 text-xs opacity-70">({{ (t.baris || []).length }})</span>
         </button>
         <Button size="sm" variant="secondary" @click="tambahTab">+ Baru (Alt+N)</Button>
-        <Button size="sm" variant="secondary" @click="bukaDaftarOrder">Ambil Order (Alt+O)</Button>
+        <Button v-if="!order" size="sm" variant="secondary" @click="bukaDaftarOrder">
+          Ambil Order (Alt+O)
+        </Button>
       </div>
 
       <div class="grid gap-4 lg:grid-cols-3">
         <div class="space-y-4 lg:col-span-2">
           <Card>
-            <div class="flex flex-wrap items-end gap-3">
-              <div class="min-w-[16rem] flex-1">
-                <label class="mb-1 block text-xs font-medium text-ink-muted">
-                  Pindai / ketik kode barang <span class="text-ink-subtle">(Enter)</span>
-                </label>
-                <input
-                  ref="kotakScan"
-                  v-model="scan"
-                  class="w-full rounded-control border border-border-strong bg-surface px-3 py-2 font-mono text-lg"
-                  placeholder="kode barang…"
-                  @keydown.enter.prevent="pindai"
-                />
-              </div>
-              <div class="grid grid-cols-2 gap-x-4 text-xs text-ink-subtle">
-                <p v-for="[k, ket] in PINTASAN" :key="k">
-                  <kbd class="rounded bg-surface-2 px-1 font-mono">{{ k }}</kbd> {{ ket }}
-                </p>
-              </div>
-            </div>
-            <p v-if="pesan" class="mt-2 text-sm text-warning-fg">{{ pesan }}</p>
-          </Card>
-
-          <Card>
             <div class="mb-2 flex items-center justify-between text-sm">
               <span class="text-ink-subtle">
-                No. Nota (ancar-ancar):
-                <strong class="font-mono text-ink">{{ bawaan.no_transaksi || "—" }}</strong>
+                No. {{ sebutan }} (ancar-ancar):
+                <strong class="font-mono text-ink">{{ bawaan.nomor || "—" }}</strong>
               </span>
               <span class="text-ink-subtle">Item: <strong class="text-ink">{{ jumlahItem }}</strong></span>
             </div>
-            <div class="overflow-x-auto">
+
+            <!-- Cari & isi DI DALAM tabel, seperti layar desktop lama: baris
+                 terakhir adalah kotak pindai/cari, hasilnya muncul sebagai
+                 baris di bawahnya, dan seluruh sel bisa dijelajahi dengan
+                 panah + Enter (lihat useGridNav). -->
+            <div ref="wadahTabel" class="overflow-x-auto" @keydown="navGrid">
               <table class="w-full text-sm">
                 <thead class="text-xs text-ink-subtle">
                   <tr class="border-b border-border-default">
                     <th class="px-2 py-1 text-left font-medium">Kode / Item</th>
-                    <th class="px-2 py-1 text-right font-medium">Qty</th>
-                    <th class="px-2 py-1 text-right font-medium">Harga</th>
-                    <th class="px-2 py-1 text-right font-medium">Disc. 1</th>
+                    <th class="w-32 px-2 py-1 text-left font-medium">Satuan</th>
+                    <th class="w-24 px-2 py-1 text-right font-medium">Qty</th>
+                    <th class="w-32 px-2 py-1 text-right font-medium">Harga</th>
+                    <th class="w-28 px-2 py-1 text-right font-medium">Disc. 1</th>
                     <th class="px-2 py-1 text-right font-medium">Total</th>
                     <th></th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-if="!tab.baris.length">
-                    <td colspan="6" class="px-2 py-6 text-center text-ink-subtle">
-                      Pindai barang untuk memulai.
-                    </td>
-                  </tr>
-                  <tr v-for="(b, i) in tab.baris" :key="`${b.kd_barang}-${b.kd_satuan}`" class="border-b border-border-default">
+                  <tr
+                    v-for="(b, i) in tab.baris"
+                    :key="`${b.kd_barang}-${b.kd_satuan}`"
+                    data-baris
+                    class="border-b border-border-default"
+                  >
                     <td class="px-2 py-1">
                       <p class="text-ink">{{ b.nama }}</p>
-                      <p class="font-mono text-xs text-ink-subtle">{{ b.kd_barang }} · {{ b.satuan }}</p>
+                      <p class="font-mono text-xs text-ink-subtle">{{ b.kd_barang }}</p>
                     </td>
-                    <td class="px-2 py-1 text-right">
-                      <input v-model="b.qty" type="number" min="0" step="any"
-                             class="w-20 rounded-control border border-border-default bg-surface px-2 py-1 text-right"
-                             @keydown.enter.prevent="fokusPindai" />
+                    <td class="px-2 py-1">
+                      <!-- Ganti satuan = ganti harga (lihat useSatuan). Daftar
+                           satuannya diambil saat kotak ini disentuh. -->
+                      <select
+                        data-nav
+                        :value="b.kd_satuan"
+                        :class="KELAS_PILIH"
+                        @focus="satuan.muat(b)"
+                        @change="satuan.ganti(b, $event.target.value)"
+                      >
+                        <option v-if="!satuan.opsi(b).length" :value="b.kd_satuan">
+                          {{ b.satuan || b.kd_satuan }}
+                        </option>
+                        <option v-for="s in satuan.opsi(b)" :key="s.kd_satuan" :value="s.kd_satuan">
+                          {{ satuan.label(s) }}
+                        </option>
+                      </select>
                     </td>
-                    <td class="px-2 py-1 text-right">
-                      <input v-model="b.harga_jual" type="number" min="0" step="any"
-                             class="w-28 rounded-control border border-border-default bg-surface px-2 py-1 text-right"
-                             @keydown.enter.prevent="fokusPindai" />
+                    <td class="px-2 py-1">
+                      <input v-model="b.qty" data-nav inputmode="decimal" :class="KELAS_SEL" />
                     </td>
-                    <td class="px-2 py-1 text-right">
-                      <input v-model="b.diskon1" type="number" step="any"
-                             class="w-24 rounded-control border border-border-default bg-surface px-2 py-1 text-right"
-                             @keydown.enter.prevent="fokusPindai" />
+                    <td class="px-2 py-1">
+                      <input v-model="b.harga_jual" data-nav inputmode="decimal" :class="KELAS_SEL" />
+                    </td>
+                    <td class="px-2 py-1">
+                      <input v-model="b.diskon1" data-nav inputmode="decimal" :class="KELAS_SEL" />
                     </td>
                     <td class="px-2 py-1 text-right tabular-nums">{{ formatRupiah(subtotal(b)) }}</td>
                     <td class="px-2 py-1 text-right">
                       <Button size="sm" variant="secondary" @click="hapus(i)">Hapus</Button>
                     </td>
                   </tr>
+
+                  <!-- Baris entri: pemindai DAN pencarian, satu kotak. -->
+                  <tr class="border-b-2 border-border-strong bg-surface-2/50">
+                    <td class="px-2 py-2" colspan="5">
+                      <input
+                        ref="kotakEntri"
+                        v-model="entri"
+                        class="w-full rounded-control border border-border-strong bg-surface px-3 py-2 font-mono text-lg"
+                        placeholder="Pindai / ketik kode atau nama barang… (F2)"
+                        @keydown="entriKey"
+                      />
+                    </td>
+                    <td class="px-2 py-2 text-right text-xs text-ink-subtle" colspan="2">
+                      ↑↓ pilih · Enter masukkan
+                    </td>
+                  </tr>
+
+                  <!-- Hasil pencarian, sebagai baris tabel juga. -->
+                  <tr
+                    v-for="(b, i) in hasil"
+                    :key="`cari-${b.kd_barang}-${b.kd_satuan}`"
+                    :class="['cursor-pointer border-b border-border-default text-sm',
+                             i === sorot ? 'bg-brand-bg' : 'hover:bg-surface-2']"
+                    @click="pilihHasil(i)"
+                  >
+                    <td class="px-2 py-1.5">
+                      <p class="truncate text-ink">{{ b.nama }}</p>
+                      <p class="font-mono text-xs text-ink-subtle">{{ b.kd_barang }} · {{ b.satuan }}</p>
+                    </td>
+                    <td class="px-2 py-1.5 text-right text-xs text-ink-subtle" colspan="3">
+                      <span v-if="b.harga_jual !== undefined">{{ formatRupiah(b.harga_jual) }}</span>
+                    </td>
+                    <td class="px-2 py-1.5 text-right text-xs text-ink-subtle" colspan="3">
+                      Enter untuk masukkan
+                    </td>
+                  </tr>
+
+                  <tr v-if="!tab.baris.length && !hasil.length">
+                    <td colspan="7" class="px-2 py-4 text-center text-ink-subtle">
+                      Pindai atau ketik nama barang di kotak di atas untuk memulai.
+                    </td>
+                  </tr>
                 </tbody>
               </table>
             </div>
+            <p v-if="pesan" class="mt-2 text-sm text-warning-fg">{{ pesan }}</p>
           </Card>
 
-          <Card title="Cari barang (F3)">
-            <input
-              id="kotak-cari"
-              v-model="cari"
-              class="w-full rounded-control border border-border-default bg-surface px-3 py-2"
-              placeholder="Nama atau kode… ↑↓ lalu Enter"
-              @keydown.down.prevent="sorotBarang = Math.min(sorotBarang + 1, hasil.length - 1)"
-              @keydown.up.prevent="sorotBarang = Math.max(sorotBarang - 1, 0)"
-              @keydown.enter.prevent="pilihHasil"
-            />
-            <ul v-if="hasil.length" class="mt-2 max-h-56 divide-y divide-border-default overflow-y-auto">
-              <li
-                v-for="(b, i) in hasil"
-                :key="`${b.kd_barang}-${b.kd_satuan}`"
-                :class="['flex items-center justify-between gap-2 px-1 py-1.5', i === sorotBarang ? 'bg-brand-bg' : '']"
-              >
-                <div class="min-w-0">
-                  <p class="truncate text-sm text-ink">{{ b.nama }}</p>
-                  <p class="font-mono text-xs text-ink-subtle">
-                    {{ b.kd_barang }} · {{ b.satuan }}
-                    <span v-if="b.harga_jual !== undefined"> · {{ formatRupiah(b.harga_jual) }}</span>
-                  </p>
-                </div>
-                <Button size="sm" @click="tambah(b)">Tambah</Button>
-              </li>
-            </ul>
+          <Card>
+            <div class="grid grid-cols-2 gap-x-4 text-xs text-ink-subtle sm:grid-cols-3">
+              <p v-for="[k, ket] in PINTASAN" :key="k">
+                <kbd class="rounded bg-surface-2 px-1 font-mono">{{ k }}</kbd> {{ ket }}
+              </p>
+            </div>
           </Card>
         </div>
 
@@ -547,9 +646,9 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 
             <div class="grid grid-cols-2 gap-2">
               <Input v-model="tab.tanggal" type="date" label="Tanggal" />
-              <Input v-model="tab.jatuh_tempo" type="date" label="Jatuh Tempo" />
+              <Input v-if="!order" v-model="tab.jatuh_tempo" type="date" label="Jatuh Tempo" />
             </div>
-            <div>
+            <div v-if="!order">
               <p class="text-xs font-medium text-ink-muted">No. Order</p>
               <p class="font-mono text-sm text-ink">{{ tab.no_order || "—" }}</p>
             </div>
@@ -566,26 +665,32 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
               <span class="text-ink-subtle">Grand Total</span>
               <strong class="text-xl tabular-nums text-ink">{{ formatRupiah(total) }}</strong>
             </div>
-            <Input v-model="tab.bayar" type="number" label="Bayar" />
-            <div class="flex justify-between">
-              <span class="text-ink-subtle">Kembali</span>
-              <strong class="tabular-nums text-ink">{{ formatRupiah(kembali) }}</strong>
-            </div>
+            <!-- Order belum dibayar: uang berpindah nanti, saat ordernya
+                 diambil dan jadi nota. -->
+            <template v-if="!order">
+              <Input v-model="tab.bayar" type="number" label="Bayar" />
+              <div class="flex justify-between">
+                <span class="text-ink-subtle">Kembali</span>
+                <strong class="tabular-nums text-ink">{{ formatRupiah(kembali) }}</strong>
+              </div>
+            </template>
             <p class="text-xs text-ink-subtle">
-              Pratinjau; nilai yang disimpan dihitung ulang di server. Bayar &amp;
-              Kembali tak ikut tersimpan — kolomnya tak ada di database legacy.
+              Pratinjau; nilai yang disimpan dihitung ulang di server.
+              <span v-if="!order">
+                Bayar &amp; Kembali tak ikut tersimpan — kolomnya tak ada di database legacy.
+              </span>
             </p>
           </div>
 
           <div class="mt-3 flex gap-2">
             <Button class="flex-1" :disabled="!siap" :loading="menyimpan" @click="simpan">
-              Simpan (Alt+S)
+              Simpan {{ sebutan }} (Alt+S)
             </Button>
-            <Button variant="secondary" :disabled="!notaTerakhir" @click="cetak">
+            <Button v-if="!order" variant="secondary" :disabled="!notaTerakhir" @click="cetak">
               Cetak (Alt+P)
             </Button>
           </div>
-          <p v-if="notaTerakhir" class="mt-2 text-xs text-ink-subtle">
+          <p v-if="notaTerakhir && !order" class="mt-2 text-xs text-ink-subtle">
             Nota terakhir: <strong class="font-mono">{{ notaTerakhir }}</strong>
           </p>
         </Card>
