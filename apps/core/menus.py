@@ -65,11 +65,17 @@ ALL_MENUS = [
     {"key": "stok_akhir", "label": "Mutasi Stok", "icon": "refresh", "href": "/admin-panel/inventory/mutasi-stok", "section": "stok"},
     {"key": "stok_awal", "label": "Stok Awal Barang", "icon": "box", "href": "/admin-panel/inventory/stok-awal", "section": "stok"},
     {"key": "transaksi_barang", "label": "Transaksi Barang", "icon": "list", "href": "/admin-panel/inventory/transaksi", "section": "stok"},
-    {"key": "opname", "label": "Opname Stok", "icon": "clipboard", "href": "/admin-panel/inventory/opname", "section": "stok"},
+    # "admin_only": kedua layar opname khusus admin/superadmin, dan itu bukan
+    # sekadar bawaan yang bisa dilonggarkan lewat Kelola Menu. Halaman Opname
+    # Stok kini juga MENULIS koreksi stok: satu baris di t_opname_stok langsung
+    # menggeser stok lewat trigger dan terkirim ke pusat, dan tak ada layar mana
+    # pun yang bisa menariknya kembali.
+    {"key": "opname", "label": "Opname Stok", "icon": "clipboard", "href": "/admin-panel/inventory/opname", "section": "stok", "admin_only": True},
     # Section "stok" sudah cukup: "Operasional" bukan section backend, melainkan
-    # tab navbar (useNav.js) yang menggabungkan stok+promo+kas. Rute /export dan
-    # /detail mewarisi menu key ini lewat pencocokan prefix di menu_key_for_path.
-    {"key": "opname_neraca", "label": "Neraca Opname", "icon": "chart", "href": "/admin-panel/inventory/opname-neraca", "section": "stok"},
+    # tab navbar (useNav.js) yang menggabungkan stok+promo+kas. Rute /export,
+    # /detail, dan /save mewarisi menu key ini lewat pencocokan prefix di
+    # menu_key_for_path — termasuk penjagaannya.
+    {"key": "opname_neraca", "label": "Neraca Opname", "icon": "chart", "href": "/admin-panel/inventory/opname-neraca", "section": "stok", "admin_only": True},
     # Analitik (FMI)
     {"key": "fmi_penjualan", "label": "FMI Penjualan", "icon": "trending", "href": "/admin-panel/analitik/fmi-penjualan", "section": "analitik"},
     {"key": "fmi_stok", "label": "FMI Stok", "icon": "chart", "href": "/admin-panel/analitik/fmi-stok", "section": "analitik"},
@@ -187,9 +193,16 @@ def menus_for(user):
     # arti "belum diatur" bagi tiap peran — itu ada di default_keys_for().
     keys = user.allowed_menu_keys or default_keys_for(user.role)
     allowed = set(keys)
+    # Menu ber-`admin_only` tak bisa diberikan ke kasir/supervisor sama sekali —
+    # dicentang di Kelola Menu pun tak berlaku. Penjagaannya di SINI dan bukan
+    # cuma di sidebar: admin_network_guard._menu_allowed membaca fungsi yang
+    # sama, jadi mengetik URL-nya langsung ikut tertutup.
+    tier_admin = user.role in (Role.ADMIN, Role.SUPERADMIN)
     return [
         m for m in ALL_MENUS
-        if not m.get("superadmin_only") and (m.get("always") or m["key"] in allowed)
+        if not m.get("superadmin_only")
+        and (tier_admin or not m.get("admin_only"))
+        and (m.get("always") or m["key"] in allowed)
     ]
 
 

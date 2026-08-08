@@ -34,6 +34,10 @@ JENIS = {
     "penjualan_retur": ("t_penjualan_retur", "no_retur"),
     "pembelian": ("t_pembelian", "no_transaksi"),
     "pembelian_retur": ("t_pembelian_retur", "no_retur"),
+    # Koreksi stok. Bentuk nomornya sama persis dengan nota walau tabelnya datar
+    # (satu nomor = satu baris = satu barang): CP2608060001 di PAGESANGAN,
+    # SC2608080001 di PUSAT — keduanya {kepala_nota}{YYMMDD}{NNNN}.
+    "opname": ("t_opname_stok", "no_transaksi"),
 }
 
 _PERCOBAAN = 5

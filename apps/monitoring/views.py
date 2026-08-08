@@ -37,7 +37,10 @@ from apps.core.models import (
 )
 from apps.inventory import services as inv
 from apps.master_data import master_crud
+from apps.transactions import opname as opname_tulis
+from apps.transactions.penjualan import cari_barang as _cari_barang
 from apps.transactions.penjualan import opsi_nota as _opsi_nota
+from apps.transactions.penjualan import satuan_barang as _satuan_barang
 from apps.master_data import services as master
 from apps.transactions import services as tx
 from apps.core import reporting
@@ -1805,8 +1808,13 @@ def _report_view(spec):
                     "options": options, "conn_error": conn_error,
                     "notice": f["warning"] or None}
 
-        return render(request, spec["component"],
-                      props={"report": defer(load_report), "filters": _spec_filters(f, spec)})
+        props = {"report": defer(load_report), "filters": _spec_filters(f, spec)}
+        # Opsional, bawaannya tak ada — halaman yang tak menyebutnya tak berubah.
+        # Dipakai halaman laporan yang juga punya aksi tulis dan perlu tahu
+        # sesuatu tentang si pemakai (Opname: apakah akunnya sudah ditautkan).
+        if spec.get("extra_props"):
+            props.update(spec["extra_props"](request))
+        return render(request, spec["component"], props=props)
 
     return view
 
@@ -2496,6 +2504,10 @@ _OPNAME = {
     "filter_keys": ["kd_divisi"],
     "options": lambda p: {"divisi": _opt_divisi(p)},
     "filename": "opname",
+    # Layar ini juga MENULIS koreksi stok, dan t_opname_stok.kd_user NOT NULL.
+    # Dikirim supaya layar bisa mengatakan "akun belum ditautkan" sebelum
+    # operator mengisi sepuluh baris, bukan sesudahnya.
+    "extra_props": lambda request: {"kd_user": request.user.kd_user},
     "columns": [{"key": "no_transaksi", "label": "No. Opname"}, {"key": "tanggal", "label": "Tanggal", "format": "date"}, {"key": "divisi", "label": "Divisi"}, {"key": "kd_barang", "label": "Kd. Barang"}, {"key": "barang", "label": "Barang"}, {"key": "koreksi_masuk", "label": "Koreksi Masuk", "format": "number"}, {"key": "koreksi_keluar", "label": "Koreksi Keluar", "format": "number"}, {"key": "diferensi", "label": "Diferensi", "format": "number"}],
 }
 opname = _report_view(_OPNAME)
@@ -2598,6 +2610,113 @@ def opname_neraca_detail(request):
         "kejadian": kejadian,
         "periode": {"dari": f["date_from_s"], "sampai": f["date_to_s"]},
     })
+
+
+# --- Koreksi stok — satu-satunya jalur TULIS di halaman laporan -------------
+#
+# Ketiga rute di bawah sengaja duduk di bawah prefix /admin-panel/inventory/opname
+# supaya menu_key_for_path memberinya key `opname` lewat pencocokan prefix. Itu
+# berarti penjagaannya ikut: menu `opname` ber-admin_only, jadi kasir/supervisor
+# tak bisa mencapainya walau mengetik URL-nya sendiri.
+
+def _harga_dibuang(rows):
+    """Layar koreksi stok tak pernah menampilkan harga — ia soal jumlah unit.
+
+    Dibuang di server, bukan sekadar tak dirender: mengirimkan harga ke layar
+    yang tak memerlukannya membuat pembatasan `hidden_data_keys` bocor lewat
+    pintu belakang yang paling mudah terlupakan.
+    """
+    return [{k: v for k, v in r.items() if k != "harga_jual"} for r in rows]
+
+
+def _bukan_admin(request):
+    """Lapis kedua di atas penjaga menu.
+
+    Penjaga menu sudah menutup rute ini, tapi ia bergantung pada satu flag di
+    menus.py yang bisa hilang saat menu disusun ulang. Yang ditulis di sini
+    menggeser stok sungguhan dan langsung terkirim ke pusat, jadi ia layak
+    diperiksa dua kali.
+    """
+    if request.user.role in (Role.ADMIN, Role.SUPERADMIN):
+        return None
+    return ditolak(
+        request,
+        "Koreksi stok hanya untuk pengelola",
+        "Menggeser stok mengubah angka yang dipakai seluruh laporan, dan tak "
+        "bisa dibatalkan dari layar mana pun. Minta pengelola aplikasi yang "
+        "melakukannya.",
+    )
+
+
+def opname_cari_barang(request):
+    """Cari barang untuk baris koreksi. Memakai ulang pencarian layar kasir."""
+    profile = _active()
+    if not profile:
+        return JsonResponse({"rows": [], "error": CONN_ERROR})
+    try:
+        rows = _cari_barang(profile, request.GET.get("cari") or "")
+        return JsonResponse({"rows": _harga_dibuang(rows)})
+    except pyodbc.Error as exc:
+        return JsonResponse(
+            {"rows": [], "error": mssql.friendly_error(exc, "Gagal mencari barang")})
+
+
+def opname_satuan(request):
+    """Satuan-satuan sebuah barang, untuk mengganti satuan baris koreksi.
+
+    Satuan bukan hiasan di sini: `sp_update_stok_akhir` menerima kd_satuan dan
+    mengonversinya, jadi 1 DUS dan 1 PCS menggeser stok dengan besar berbeda.
+    """
+    profile = _active()
+    if not profile:
+        return JsonResponse({"rows": [], "error": CONN_ERROR})
+    try:
+        rows = _satuan_barang(profile, request.GET.get("kd_barang") or "")
+        return JsonResponse({"rows": _harga_dibuang(rows)})
+    except pyodbc.Error as exc:
+        return JsonResponse(
+            {"rows": [], "error": mssql.friendly_error(exc, "Gagal membaca satuan")})
+
+
+@require_POST
+def opname_save(request):
+    if (denied := _bukan_admin(request)):
+        return denied
+    kembali = "/admin-panel/inventory/opname"
+    data = get_data(request)
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect(kembali)
+    try:
+        hasil = opname_tulis.buat_koreksi(
+            profile,
+            # Dari AKUN, tak pernah dari kiriman layar: kd_user menentukan
+            # koreksi ini tercatat atas nama siapa, dan sekali tertulis ia ikut
+            # terkirim ke pusat oleh trigger.
+            kd_user=request.user.kd_user,
+            # Dari layar — dan satu-satunya yang begitu. Diperiksa di
+            # buat_koreksi terhadap m_divisi server ini, karena ia memutuskan
+            # stok divisi mana yang bergeser sekaligus awalan nomornya.
+            kd_divisi=data.get("kd_divisi") or "",
+            items=data.get("items") or [],
+            keterangan=data.get("keterangan") or "",
+        )
+    except ValueError as exc:
+        request.session["flash_error"] = str(exc)
+        return redirect(kembali)
+    except (pyodbc.Error, RuntimeError) as exc:
+        request.session["flash_error"] = (
+            str(exc) if isinstance(exc, RuntimeError)
+            else mssql.friendly_error(exc, "Gagal menyimpan koreksi stok"))
+        return redirect(kembali)
+
+    nomor = ", ".join(hasil["nomor"])
+    log_activity(request, "opname", f"Koreksi stok {hasil['baris']} baris — {nomor}")
+    request.session["flash_success"] = (
+        f"Koreksi stok tersimpan: {hasil['baris']} baris ({nomor}).")
+    return redirect(kembali)
+
 
 # Promo & Voucher
 _PROMO = {

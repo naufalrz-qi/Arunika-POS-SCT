@@ -27,6 +27,13 @@ function bawaanUntuk(key) {
     .map(([role]) => ROLE_LABELS[role] || role);
 }
 
+// Menu ber-`admin_only` tak berlaku untuk kasir/supervisor — menus_for() akan
+// membuangnya berapa pun centang di sini. Kotaknya dimatikan supaya layar ini
+// tidak menjanjikan akses yang takkan pernah terjadi; penjagaan sebenarnya
+// tetap di server (apps/core/menus.py).
+const terkunci = (m) =>
+  Boolean(m.admin_only) && Boolean(selected.value) && selected.value.role !== "admin";
+
 // Menu bawaan peran user yang sedang dipilih.
 const bawaanTerpilih = computed(() =>
   selected.value ? props.role_defaults[selected.value.role] || [] : [],
@@ -233,14 +240,17 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
                 <label
                   v-for="m in s.items"
                   :key="m.key"
+                  :title="terkunci(m) ? `${m.label} hanya untuk admin — mencentangnya di sini tidak berlaku.` : undefined"
                   :class="[
-                    'flex items-center gap-3 rounded-control border px-3 py-2.5 cursor-pointer transition-colors',
+                    'flex items-center gap-3 rounded-control border px-3 py-2.5 transition-colors',
+                    terkunci(m) ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
                     checked[m.key] ? 'border-brand-500/60 bg-brand-bg' : 'border-border-default hover:bg-surface-2',
                   ]"
                 >
-                  <input type="checkbox" v-model="checked[m.key]" class="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500" />
+                  <input type="checkbox" v-model="checked[m.key]" :disabled="terkunci(m)" class="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500" />
                   <Icon :name="m.icon" size="h-4 w-4" class="shrink-0 text-ink-subtle" />
                   <span class="flex-1 text-sm text-ink-muted">{{ m.label }}</span>
+                  <Badge v-if="terkunci(m)" variant="neutral" class="shrink-0 text-[10px]">admin saja</Badge>
                   <!-- Penanda jatah peran: tanpa ini tak ada cara membedakan
                        menu yang memang bawaan kasir/supervisor dari menu admin
                        yang kebetulan sedang diberikan kepada mereka. -->
