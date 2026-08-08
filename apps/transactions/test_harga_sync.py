@@ -187,6 +187,14 @@ class MasterKeTokoTests(SimpleTestCase):
         self.assertNotIn("m_barang_satuan", hub_master.TABEL_TOKO)
         self.assertIn("m_barang", hub_master.TABEL_TOKO)
 
+    def test_supplier_bukan_urusan_toko(self):
+        """Gudang yang membeli, jadi gudang yang menyimpan daftar supplier. Toko
+        hanya memakai segelintir supplier miliknya sendiri; mendorong daftar
+        gudang ke sana pernah terjadi dan harus dipulihkan manual."""
+        from apps.transactions import hub_master
+
+        self.assertNotIn("m_supplier", hub_master.TABEL_TOKO)
+
 
 class IkatanVarcharTests(SimpleTestCase):
     def test_ambil_baris_mengikat_varchar(self):

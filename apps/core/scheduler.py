@@ -350,10 +350,11 @@ def _run_due_hub_pull(now) -> None:
                     m = hub_master.sync_master(s, hub)
                     if m["status"] == "failed":
                         log.warning("hub_master GAGAL: %s", m["error"])
-                # Arah lain, jadwal sama: samakan nama barang/merek/supplier di
-                # toko dengan gudang. Harga TIDAK ikut — itu milik `harga_sync`
-                # yang menyapunya tiap 60 detik, dan menyapunya dua kali cuma
+                # Arah lain, jadwal sama: samakan nama barang & merek di toko
+                # dengan gudang. Harga TIDAK ikut — itu milik `harga_sync` yang
+                # menyapunya tiap 60 detik, dan menyapunya dua kali cuma
                 # menambah tulisan yang menyalakan trigger legacy di toko.
+                # Supplier juga tidak: itu urusan gudang, bukan toko.
                 if _flag("MASTER_TOKO_ENABLED", "0"):
                     from apps.transactions import harga_sync
 
