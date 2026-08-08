@@ -119,6 +119,9 @@ ALL_MENUS = [
     {"key": "logs", "label": "Log Aktivitas", "icon": "list", "href": "/admin-panel/logs", "section": "admin"},
     # Superadmin-only: cannot be granted to a regular admin.
     {"key": "menus", "label": "Kelola Menu", "icon": "key", "href": "/admin-panel/menus", "section": "admin", "superadmin_only": True},
+    # Superadmin saja, sama seperti Kelola Menu: tautan ini menentukan transaksi
+    # tercatat atas nama siapa di server mana, dan salah isi tak bisa ditarik.
+    {"key": "tautan_user", "label": "Kelola Tautan User", "icon": "users", "href": "/admin-panel/tautan-user", "section": "admin", "superadmin_only": True},
 ]
 
 

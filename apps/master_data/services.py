@@ -257,7 +257,7 @@ def update_kepala_nota(profile, kd_divisi, kepala_nota) -> dict:
 
 
 def list_userx(profile) -> list[dict]:
-    """User legacy (m_userx) untuk dropdown penautan di Manajemen User.
+    """User legacy (m_userx) untuk dropdown penautan di Kelola Tautan User.
 
     Transaksi menyimpan `kd_user`, bukan id user Arunika. Tanpa tautan ini nota
     yang ditulis Arunika tak bisa dikenali laporan "Penjualan per User" — baik di

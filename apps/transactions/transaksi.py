@@ -94,9 +94,9 @@ def total(items, diskon_header=(0, 0, 0, 0), pajak=0.0, ppnbm=0.0) -> float:
 def _periksa(items, kd_user: str, kd_divisi: str) -> None:
     if not kd_user or not kd_divisi:
         raise ValueError(
-            "Akun Anda belum ditautkan ke user legacy dan divisi, jadi transaksi "
-            "tak bisa dicatat atas nama Anda. Minta pengelola aplikasi mengisinya "
-            "di Manajemen User."
+            "Akun Anda belum ditautkan ke user legacy dan divisi untuk koneksi "
+            "ini, jadi transaksi tak bisa dicatat atas nama Anda. Minta pengelola "
+            "aplikasi mengisinya di Kelola Tautan User."
         )
     if not items:
         raise ValueError("Belum ada barang — tambahkan minimal satu baris.")

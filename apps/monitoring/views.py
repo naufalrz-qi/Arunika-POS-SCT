@@ -15,7 +15,8 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 from inertia import defer, render
 
-from apps.auth_app.models import DATA_KEY_SET, DATA_KEYS, Role, User
+from apps.auth_app.models import DATA_KEY_SET, DATA_KEYS, Role, TautanUser, User
+from apps.auth_app.tautan import tautan_untuk, tautan_wajib
 from apps.connections.models import ServerProfile
 from apps.core.http import get_data
 from apps.core.middleware import ditolak
@@ -243,9 +244,10 @@ def _user_dict(u):
         "role": u.role,
         "is_active": u.is_active,
         "created_at": _local(u.date_joined, "%Y-%m-%d"),
-        "kd_user": u.kd_user,
-        "kd_divisi": u.kd_divisi,
-        "kd_pegawai": u.kd_pegawai,
+        # Berapa koneksi yang sudah ditautkan — angkanya saja. Kodenya sendiri
+        # milik Kelola Tautan User; menampilkannya di sini akan menyarankan
+        # bahwa ia bisa diubah dari sini juga.
+        "jml_tautan": u.tautan.exclude(kd_user="").count(),
         "server_profile_id": u.server_profile_id,
         "koneksi_terkunci": u.koneksi_terkunci,
     }
@@ -278,23 +280,9 @@ def users_index(request):
     roles = _managed_roles(request.user)
     users = User.objects.filter(role__in=roles).order_by("role", "username")
 
-    def load_legacy():
-        """Pilihan tautan ke user & divisi legacy. Ditunda: dua query MS SQL ini
-        tak boleh menahan tampilnya daftar user, yang datanya ada di SQLite."""
-        profile = _active()
-        if not profile:
-            return {"userx": [], "divisi": [], "pegawai": [], "conn_error": CONN_ERROR}
-        try:
-            return {
-                "userx": master.list_userx(profile),
-                "divisi": inv.list_divisi(profile),
-                "pegawai": _opsi_nota(profile)["pegawai"],
-                "conn_error": None,
-            }
-        except pyodbc.Error as exc:
-            return {"userx": [], "divisi": [], "pegawai": [],
-                    "conn_error": mssql.friendly_error(exc, "Gagal membaca user legacy")}
-
+    # Pilihan user/divisi/pegawai legacy TIDAK dimuat di sini lagi: tautannya
+    # per koneksi, jadi satu daftar dari koneksi yang kebetulan aktif akan
+    # menyesatkan. Lihat tautan_user_index.
     return render(request, "Admin/Users/Index", props={
         "users": [_user_dict(u) for u in users],
         "assignable_roles": roles,
@@ -303,7 +291,6 @@ def users_index(request):
             {"value": p.pk, "label": f"{p.name} ({p.db_type})"}
             for p in ServerProfile.objects.all().order_by("name")
         ],
-        "legacy": defer(load_legacy),
     })
 
 
@@ -353,12 +340,10 @@ def users_save(request):
             return redirect("/admin-panel/users")
         user.set_password(password)
 
-    # Tautan ke akun legacy. Dipangkas ke panjang kolomnya supaya kode yang
-    # kepanjangan ditolak di sini, bukan jadi galat SQLite yang tak berarti apa
-    # pun bagi yang mengisinya.
-    user.kd_user = (data.get("kd_user") or "").strip()[:6]
-    user.kd_divisi = (data.get("kd_divisi") or "").strip()[:6]
-    user.kd_pegawai = (data.get("kd_pegawai") or "").strip()[:6]
+    # Tautan ke akun legacy TIDAK diatur di sini — ia per koneksi, dan tempatnya
+    # di Kelola Tautan User. Satu isian di layar ini dulu memang ada, tapi ia
+    # menjanjikan sesuatu yang tak bisa ditepati: kode legacy berbeda artinya di
+    # tiap server, jadi satu nilai sudah salah begitu pemakainya pindah koneksi.
     # Server yang boleh dipakai. Untuk kasir/supervisor ini mengunci ke mana
     # nota mereka tertulis; salah isi berarti nota masuk ke cabang lain.
     sp = data.get("server_profile_id")
@@ -1596,6 +1581,100 @@ def _deny_non_superadmin(request):
     return None
 
 
+# --- Kelola Tautan User ----------------------------------------------------
+#
+# Halaman sendiri, bukan sederet isian di Manajemen User, karena bentuk datanya
+# memang matriks: N user × sekian koneksi. Presedennya Kelola Menu, yang dipisah
+# karena alasan yang sama.
+#
+# Keuntungan konkretnya: kolom kode bisa jadi PILIHAN yang dibaca dari server
+# yang bersangkutan, bukan isian bebas 6 karakter. `UAA0O2` (huruf O) dulu bisa
+# tersimpan diam-diam dan baru ketahuan saat nota pertama gagal.
+
+def tautan_user_index(request):
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+    users = User.objects.order_by("role", "username")
+    profiles = list(ServerProfile.objects.all().order_by("name"))
+    tersimpan = {}
+    for t in TautanUser.objects.all():
+        tersimpan.setdefault(t.user_id, {})[t.profile_id] = {
+            "kd_user": t.kd_user, "kd_divisi": t.kd_divisi,
+            "kd_pegawai": t.kd_pegawai,
+        }
+
+    return render(request, "Admin/TautanUser/Index", props={
+        "users": [
+            {
+                "id": u.id,
+                "username": u.username,
+                "name": u.get_full_name() or u.username,
+                "role": u.role,
+                # Kasir/supervisor terkunci ke satu server, jadi layar cukup
+                # menawarkan satu koneksi untuk mereka — menampilkan 14 baris
+                # yang 13 di antaranya takkan pernah dipakai cuma mengundang
+                # salah isi.
+                "koneksi_terkunci": u.koneksi_terkunci,
+                "server_profile_id": u.server_profile_id,
+                "tautan": tersimpan.get(u.id, {}),
+            }
+            for u in users
+        ],
+        "profiles": [{"id": p.pk, "name": p.name, "db_type": p.db_type}
+                     for p in profiles],
+    })
+
+
+def tautan_user_opsi(request, profile_id):
+    """Pilihan user/divisi/pegawai legacy DARI SATU koneksi.
+
+    Per koneksi dan diambil saat koneksinya dibuka, bukan sekaligus untuk semua:
+    14 profil berarti 42 query MS SQL lintas Tailscale kalau dimuat di muka, dan
+    kebanyakan takkan pernah dilihat.
+    """
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+    profile = get_object_or_404(ServerProfile, pk=profile_id)
+    try:
+        return JsonResponse({
+            "userx": master.list_userx(profile),
+            "divisi": inv.list_divisi(profile),
+            "pegawai": _opsi_nota(profile)["pegawai"],
+            "error": None,
+        })
+    except pyodbc.Error as exc:
+        return JsonResponse({
+            "userx": [], "divisi": [], "pegawai": [],
+            "error": mssql.friendly_error(exc, f"Gagal membaca data {profile.name}")})
+
+
+@require_POST
+def tautan_user_save(request):
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+    data = get_data(request)
+    user = get_object_or_404(User, pk=data.get("user_id"))
+    profile = get_object_or_404(ServerProfile, pk=data.get("profile_id"))
+    # Dipangkas ke panjang kolom legacy (char(6)) supaya kode kepanjangan
+    # ditolak di sini, bukan jadi galat SQL yang tak berarti bagi pengisinya.
+    nilai = {k: (data.get(k) or "").strip()[:6]
+             for k in ("kd_user", "kd_divisi", "kd_pegawai")}
+
+    if not any(nilai.values()):
+        # Mengosongkan = mencabut tautan. Menyimpan baris kosong akan membuat
+        # layar tampak "sudah ditautkan" padahal jalur tulis tetap menolak.
+        TautanUser.objects.filter(user=user, profile=profile).delete()
+        pesan = f"Tautan {user.username} di {profile.name} dihapus."
+    else:
+        TautanUser.objects.update_or_create(
+            user=user, profile=profile, defaults=nilai)
+        pesan = f"Tautan {user.username} di {profile.name} disimpan."
+
+    log_activity(request, "tautan_user", pesan)
+    request.session["flash_success"] = pesan
+    return redirect("/admin-panel/tautan-user")
+
+
 def menus_index(request):
     if (denied := _deny_non_superadmin(request)):
         return denied
@@ -2506,8 +2585,10 @@ _OPNAME = {
     "filename": "opname",
     # Layar ini juga MENULIS koreksi stok, dan t_opname_stok.kd_user NOT NULL.
     # Dikirim supaya layar bisa mengatakan "akun belum ditautkan" sebelum
-    # operator mengisi sepuluh baris, bukan sesudahnya.
-    "extra_props": lambda request: {"kd_user": request.user.kd_user},
+    # operator mengisi sepuluh baris, bukan sesudahnya. Tautan koneksi AKTIF:
+    # admin berpindah server, dan kode legacy berbeda artinya di tiap server.
+    "extra_props": lambda request: {
+        "kd_user": tautan_untuk(request.user, _active()).kd_user},
     "columns": [{"key": "no_transaksi", "label": "No. Opname"}, {"key": "tanggal", "label": "Tanggal", "format": "date"}, {"key": "divisi", "label": "Divisi"}, {"key": "kd_barang", "label": "Kd. Barang"}, {"key": "barang", "label": "Barang"}, {"key": "koreksi_masuk", "label": "Koreksi Masuk", "format": "number"}, {"key": "koreksi_keluar", "label": "Koreksi Keluar", "format": "number"}, {"key": "diferensi", "label": "Diferensi", "format": "number"}],
 }
 opname = _report_view(_OPNAME)
@@ -2689,12 +2770,17 @@ def opname_save(request):
         request.session["flash_error"] = CONN_ERROR
         return redirect(kembali)
     try:
+        # Menolak kalau akun ini belum ditautkan UNTUK KONEKSI INI — tidak
+        # meminjam tautan koneksi lain. Kode legacy dibuat berurutan oleh tiap
+        # server sendiri, jadi kode pinjaman akan lolos foreign key dan tercatat
+        # atas nama orang yang tak pernah menyentuhnya.
+        tautan = tautan_wajib(request.user, profile)
         hasil = opname_tulis.buat_koreksi(
             profile,
-            # Dari AKUN, tak pernah dari kiriman layar: kd_user menentukan
+            # Dari TAUTAN, tak pernah dari kiriman layar: kd_user menentukan
             # koreksi ini tercatat atas nama siapa, dan sekali tertulis ia ikut
             # terkirim ke pusat oleh trigger.
-            kd_user=request.user.kd_user,
+            kd_user=tautan.kd_user,
             # Dari layar — dan satu-satunya yang begitu. Diperiksa di
             # buat_koreksi terhadap m_divisi server ini, karena ia memutuskan
             # stok divisi mana yang bergeser sekaligus awalan nomornya.

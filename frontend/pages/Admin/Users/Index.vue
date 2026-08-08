@@ -16,23 +16,12 @@ const props = defineProps({
   users: { type: Array, default: () => [] },
   assignable_roles: { type: Array, default: () => ["kasir", "supervisor"] },
   me: { type: Number, default: null },
-  legacy: { type: Object, default: null },
   server_profiles: { type: Array, default: () => [] },
 });
 
-// Pilihan tautan ke akun legacy; datang belakangan lewat deferred prop, jadi
-// dropdown-nya kosong sesaat sementara daftar user sudah tampil.
-const legacyData = computed(() => props.legacy || {});
-const userxOptions = computed(() =>
-  (legacyData.value.userx || []).map((u) => ({
-    value: u.kd_user,
-    label: `${u.nama} (${u.kd_user})${u.aktif ? "" : " — nonaktif"}`,
-  })),
-);
-const pegawaiOptions = computed(() => legacyData.value.pegawai || []);
-const divisiOptions = computed(() =>
-  (legacyData.value.divisi || []).map((d) => ({ value: d.kd_divisi, label: d.nama })),
-);
+// Tautan ke akun legacy tidak diatur di layar ini: ia per koneksi, jadi satu
+// isian di sini akan menjanjikan sesuatu yang tak bisa ditepati. Tempatnya di
+// Kelola Tautan User; di sini cuma ditampilkan sudah berapa koneksi.
 
 const search = ref("");
 const filtered = computed(() => {
@@ -47,6 +36,9 @@ const columns = [
   { key: "username", label: "Username", sortable: true },
   { key: "name", label: "Nama", sortable: true },
   { key: "role", label: "Role", sortable: true },
+  // Angkanya saja — kodenya milik Kelola Tautan User. Nol berarti akun ini
+  // belum bisa membuat transaksi di server mana pun.
+  { key: "jml_tautan", label: "Tautan", align: "center" },
   { key: "is_active", label: "Status", align: "center" },
   { key: "actions", label: "", align: "right" },
 ];
@@ -60,7 +52,7 @@ const roleOptions = computed(() =>
 const showForm = ref(false);
 const form = useForm({
   id: null, username: "", name: "", role: "kasir", password: "",
-  kd_user: "", kd_divisi: "", kd_pegawai: "", server_profile_id: "",
+  server_profile_id: "",
 });
 
 function openCreate() {
@@ -74,9 +66,6 @@ function openEdit(u) {
   form.name = u.name;
   form.role = u.role;
   form.password = "";
-  form.kd_user = u.kd_user || "";
-  form.kd_divisi = u.kd_divisi || "";
-  form.kd_pegawai = u.kd_pegawai || "";
   form.server_profile_id = u.server_profile_id ?? "";
   showForm.value = true;
 }
@@ -133,6 +122,11 @@ function confirmDelete() {
         <template #cell-role="{ value }">
           <Badge :variant="value === 'superadmin' ? 'danger' : value === 'admin' ? 'warning' : value === 'supervisor' ? 'brand' : 'neutral'">{{ ROLE_LABELS[value] || value }}</Badge>
         </template>
+        <template #cell-jml_tautan="{ value }">
+          <Badge :variant="value ? 'neutral' : 'warning'">
+            {{ value ? `${value} koneksi` : "belum" }}
+          </Badge>
+        </template>
         <template #cell-is_active="{ value }">
           <Badge :variant="value ? 'success' : 'danger'">{{ value ? "Aktif" : "Nonaktif" }}</Badge>
         </template>
@@ -163,21 +157,6 @@ function confirmDelete() {
           :placeholder="form.id ? 'Kosongkan jika tidak diubah' : ''"
           :error="form.errors.password"
         />
-        <!-- Tautan ke akun legacy. Bukan salinan akun: sandi tetap milik
-             Arunika. Yang dipinjam cuma kd_user, karena transaksi menyimpan
-             itu dan bukan id user Arunika. -->
-        <Select
-          v-model="form.kd_user"
-          label="Tautan user legacy"
-          :options="userxOptions"
-          placeholder="Belum ditautkan"
-        />
-        <Select
-          v-model="form.kd_pegawai"
-          label="Pegawai (untuk nota)"
-          :options="pegawaiOptions"
-          placeholder="Belum dipilih"
-        />
         <Select
           v-model="form.server_profile_id"
           label="Server (koneksi)"
@@ -188,18 +167,14 @@ function confirmDelete() {
           Kasir &amp; supervisor terkunci ke server ini dan tak bisa berpindah
           koneksi — ia menentukan ke server toko mana nota mereka tertulis.
         </p>
-        <Select
-          v-model="form.kd_divisi"
-          label="Divisi"
-          :options="divisiOptions"
-          placeholder="Belum dipilih"
-        />
-        <p v-if="legacyData.conn_error" class="text-xs text-warning-fg">
-          {{ legacyData.conn_error }}
-        </p>
-        <p v-else class="text-xs text-ink-subtle">
-          Perlu diisi sebelum akun ini bisa membuat transaksi — nota menyimpan kode
-          user legacy, bukan akun Arunika.
+        <!-- Tautan ke user legacy sengaja tidak ada di sini: kode user legacy
+             berbeda artinya di tiap server, jadi satu isian akan salah begitu
+             pemakainya pindah koneksi. -->
+        <p class="text-xs text-ink-subtle">
+          Sebelum akun ini bisa membuat transaksi, tautkan dulu ke user legacy di
+          <a href="/admin-panel/tautan-user" class="text-brand-600 underline">Kelola Tautan User</a>
+          — tautannya dibuat per koneksi, karena kode user legacy berbeda artinya
+          di tiap server.
         </p>
       </div>
       <template #footer>

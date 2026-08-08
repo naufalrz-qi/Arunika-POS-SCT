@@ -12,6 +12,7 @@ from django.shortcuts import redirect
 from django.views.decorators.http import require_POST
 from inertia import defer, render
 
+from apps.auth_app.tautan import tautan_untuk, tautan_wajib
 from apps.core.http import get_data
 from apps.core.models import log_activity
 from apps.inventory import services as inv
@@ -62,6 +63,10 @@ def _layar_penjualan(request, mode: str):
     cari = (request.GET.get("cari") or "").strip()
     order = mode == "order"
 
+    # Tautan koneksi AKTIF, bukan tautan akun: kode legacy berbeda artinya di
+    # tiap server, jadi layar harus menunjukkan yang berlaku di server ini.
+    tautan = tautan_untuk(request.user, _active())
+
     def muat():
         profile = _active()
         if not profile:
@@ -74,9 +79,9 @@ def _layar_penjualan(request, mode: str):
                 "bawaan": pj.bawaan_form(
                     profile, "penjualan_order" if order else "penjualan"),
                 "nama_divisi": _label(inv.list_divisi(profile), "kd_divisi", "nama",
-                                      request.user.kd_divisi),
+                                      tautan.kd_divisi),
                 "nama_pegawai": _label(opsi["pegawai"], "value", "label",
-                                       request.user.kd_pegawai),
+                                       tautan.kd_pegawai),
                 "conn_error": None,
             }
         except pyodbc.Error as exc:
@@ -90,9 +95,9 @@ def _layar_penjualan(request, mode: str):
         "base": "/kasir/penjualan-order" if order else "/kasir/penjualan",
         # Ditampilkan di layar supaya kasir tahu nota akan tercatat atas nama
         # siapa — dan tahu sejak awal kalau akunnya belum ditautkan.
-        "kd_user": request.user.kd_user,
-        "kd_divisi": request.user.kd_divisi,
-        "kd_pegawai": request.user.kd_pegawai,
+        "kd_user": tautan.kd_user,
+        "kd_divisi": tautan.kd_divisi,
+        "kd_pegawai": tautan.kd_pegawai,
         # Hanya layar nota yang boleh MENGAMBIL penanda ini: kalau layar order
         # ikut mem-pop-nya, tombol Cetak di layar nota kehilangan nomornya
         # begitu kasir sempat mampir ke order.
@@ -116,17 +121,21 @@ def penjualan_save(request):
         request.session["flash_error"] = CONN_ERROR
         return redirect("/kasir/penjualan")
     try:
+        # Tautan koneksi aktif. `tautan_wajib` menolak kalau belum ada — TIDAK
+        # meminjam tautan koneksi lain, sebab kode yang sama milik orang lain di
+        # server lain dan notanya akan tersimpan tanpa galat atas nama mereka.
+        tautan = tautan_wajib(request.user, profile)
         hasil = pj.buat_nota(
             profile,
-            kd_user=request.user.kd_user,
-            # kd_divisi dari AKUN, tidak pernah dari kiriman layar: ia menentukan
-            # awalan nomor nota dan milik cabang mana nota itu tercatat.
-            kd_divisi=request.user.kd_divisi,
+            kd_user=tautan.kd_user,
+            # kd_divisi dari TAUTAN, tidak pernah dari kiriman layar: ia
+            # menentukan awalan nomor nota dan milik cabang mana nota tercatat.
+            kd_divisi=tautan.kd_divisi,
             kd_customer=data.get("kd_customer"),
             kd_jenis=data.get("kd_jenis"),
             kd_kas=data.get("kd_kas"),
             kd_voucher=data.get("kd_voucher"),
-            kd_pegawai=data.get("kd_pegawai") or request.user.kd_pegawai,
+            kd_pegawai=data.get("kd_pegawai") or tautan.kd_pegawai,
             items=data.get("items") or [],
             keterangan=data.get("keterangan") or pj.KOSONG,
             no_bukti=data.get("no_bukti") or pj.KOSONG,
@@ -167,17 +176,19 @@ def penjualan_order_save(request):
         request.session["flash_error"] = CONN_ERROR
         return redirect("/kasir/penjualan-order")
     try:
+        tautan = tautan_wajib(request.user, profile)
         hasil = pj.buat_order(
             profile,
-            kd_user=request.user.kd_user,
-            # Dari AKUN, tak pernah dari kiriman layar — alasannya sama dengan
-            # nota: kd_divisi menentukan order ini milik cabang mana.
-            kd_divisi=request.user.kd_divisi,
+            kd_user=tautan.kd_user,
+            # Dari TAUTAN koneksi aktif, tak pernah dari kiriman layar —
+            # alasannya sama dengan nota: kd_divisi menentukan order ini milik
+            # cabang mana.
+            kd_divisi=tautan.kd_divisi,
             kd_customer=data.get("kd_customer"),
             kd_jenis=data.get("kd_jenis"),
             kd_kas=data.get("kd_kas"),
             kd_voucher=data.get("kd_voucher"),
-            kd_pegawai=data.get("kd_pegawai") or request.user.kd_pegawai,
+            kd_pegawai=data.get("kd_pegawai") or tautan.kd_pegawai,
             items=data.get("items") or [],
             keterangan=data.get("keterangan") or pj.KOSONG,
             no_bukti=data.get("no_bukti") or pj.KOSONG,
@@ -239,6 +250,7 @@ def _transaksi_index(request, jenis: str):
     s = tx.spec(jenis)
     cari = (request.GET.get("cari") or "").strip()
     pihak_supplier = s["pihak"] == "kd_supplier"
+    tautan = tautan_untuk(request.user, _active())
 
     def muat():
         profile = _active()
@@ -269,8 +281,8 @@ def _transaksi_index(request, jenis: str):
         "label_pihak": "Supplier" if pihak_supplier else "Pelanggan",
         "aksi_url": f"/kasir/{jenis.replace('_', '-')}",
         "pakai_pegawai": "kd_pegawai" in s["detail"],
-        "kd_user": request.user.kd_user,
-        "kd_divisi": request.user.kd_divisi,
+        "kd_user": tautan.kd_user,
+        "kd_divisi": tautan.kd_divisi,
     })
 
 
@@ -283,12 +295,13 @@ def _transaksi_save(request, jenis: str):
         request.session["flash_error"] = CONN_ERROR
         return redirect(tujuan)
     try:
+        tautan = tautan_wajib(request.user, profile)
         hasil = tx.buat(
             profile, jenis,
-            # Dari AKUN, tak pernah dari kiriman layar: keduanya menentukan atas
-            # nama siapa dan cabang mana transaksi ini tercatat.
-            kd_user=request.user.kd_user,
-            kd_divisi=request.user.kd_divisi,
+            # Dari TAUTAN koneksi aktif, tak pernah dari kiriman layar: keduanya
+            # menentukan atas nama siapa dan cabang mana transaksi ini tercatat.
+            kd_user=tautan.kd_user,
+            kd_divisi=tautan.kd_divisi,
             kd_pihak=data.get("kd_pihak"),
             kd_jenis=data.get("kd_jenis"),
             kd_kas=data.get("kd_kas"),

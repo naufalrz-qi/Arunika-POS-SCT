@@ -113,8 +113,9 @@ def total_nota(items, diskon_header=(0, 0, 0, 0), diskon_uang=0.0, pajak=0.0) ->
 def _periksa(items, kd_user: str) -> None:
     if not kd_user:
         raise ValueError(
-            "Akun Anda belum ditautkan ke user legacy, jadi nota tak bisa dibuat "
-            "atas nama Anda. Minta pengelola aplikasi mengisinya di Manajemen User."
+            "Akun Anda belum ditautkan ke user legacy untuk koneksi ini, jadi nota "
+            "tak bisa dibuat atas nama Anda. Minta pengelola aplikasi mengisinya "
+            "di Kelola Tautan User."
         )
     if not items:
         raise ValueError("Nota kosong — tambahkan minimal satu barang.")

@@ -188,7 +188,7 @@ class ValidasiTests(SimpleTestCase):
     def test_tanpa_tautan_akun_ditolak_dengan_arahan(self):
         with self.assertRaises(ValueError) as ctx:
             op._periksa(ITEMS, "")
-        self.assertIn("Manajemen User", str(ctx.exception))
+        self.assertIn("Kelola Tautan User", str(ctx.exception))
 
     def test_tanpa_baris_ditolak(self):
         with self.assertRaises(ValueError):

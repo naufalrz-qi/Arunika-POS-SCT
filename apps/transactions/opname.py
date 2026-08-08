@@ -75,9 +75,9 @@ def _periksa(items, kd_user: str) -> None:
     """Tolak yang tak bisa ditulis, dengan alasan yang bisa ditindaklanjuti."""
     if not kd_user:
         raise ValueError(
-            "Akun Anda belum ditautkan ke user legacy, jadi koreksi stok tak "
-            "bisa dicatat atas nama Anda. Minta pengelola aplikasi mengisinya "
-            "di Manajemen User."
+            "Akun Anda belum ditautkan ke user legacy untuk koneksi ini, jadi "
+            "koreksi stok tak bisa dicatat atas nama Anda. Minta pengelola "
+            "aplikasi mengisinya di Kelola Tautan User."
         )
     if not items:
         raise ValueError("Belum ada barang — tambahkan minimal satu baris.")

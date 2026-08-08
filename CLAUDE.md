@@ -58,7 +58,7 @@ python manage.py sync_master --dry-run                      # GUDANG names/brand
 ## Architecture
 
 **Two datastores, deliberately split:**
-- **SQLite (Django ORM)** — only app-local state: users/auth, sessions, `ActivityLog`, and `ServerProfile` (MS SQL connection profiles). This is the only thing `migrate` touches.
+- **SQLite (Django ORM)** — only app-local state: users/auth, sessions, `ActivityLog`, `ServerProfile` (MS SQL connection profiles), and `TautanUser` (legacy-user links, **one row per user × connection** — see `context.md` § "Tautan user legacy"; `kd_user` codes are generated independently by each server, so the same code means a different person elsewhere, and `apps/auth_app/tautan.py` never falls back to another connection's link). This is the only thing `migrate` touches.
 - **MS SQL Server (raw `pyodbc`)** — all business data (`m_barang`, `t_penjualan`, `t_pembelian`, opname, mutasi, …). There are **no Django models/migrations for these tables**; access is hand-written SQL in per-app `services.py`. Don't try to model the legacy schema with the ORM.
 
 **Single active connection, multi-server.** All MS SQL access flows through `core/mssql.py` → `get_active_profile()`, which returns the one globally-active `ServerProfile` (switched from the navbar, not per-user/per-request). Profile passwords are **Fernet-encrypted** (`POS_FERNET_KEY`) and only decrypted in-process inside `core/mssql.py`.
