@@ -29,7 +29,12 @@ ALL_MENUS = [
     # Rutenya di bawah /kasir, bukan /admin-panel: penjaga Tailscale menutup
     # seluruh /admin-panel, sedangkan kasir di toko tidak ada di rentang CGNAT.
     {"key": "kasir_stok", "label": "Cek Stok", "icon": "box", "href": "/kasir/stok", "section": "pos", "roles": ("kasir", "supervisor")},
-    {"key": "kasir_penjualan", "label": "Buat Nota", "icon": "cart", "href": "/kasir/penjualan", "section": "pos", "roles": ("kasir", "supervisor")},
+    # Kunci menunya tetap `kasir_penjualan` walau labelnya berganti: kunci itu
+    # tersimpan di allowed_menu_keys tiap user, jadi mengubahnya mencabut layar
+    # ini dari semua orang yang menunya sudah diatur satu per satu.
+    {"key": "kasir_penjualan", "label": "Penjualan", "icon": "cart", "href": "/kasir/penjualan", "section": "pos", "roles": ("kasir", "supervisor")},
+    {"key": "kasir_penjualan_order", "label": "Penjualan Order", "icon": "list", "href": "/kasir/penjualan-order", "section": "pos", "roles": ("kasir", "supervisor")},
+    {"key": "kasir_faktur", "label": "Cetak Faktur", "icon": "clipboard", "href": "/kasir/faktur", "section": "pos", "roles": ("kasir", "supervisor")},
     {"key": "kasir_retur_penjualan", "label": "Retur Penjualan", "icon": "refund", "href": "/kasir/penjualan-retur", "section": "pos", "roles": ("supervisor",)},
     {"key": "kasir_pembelian", "label": "Terima Pembelian", "icon": "truck", "href": "/kasir/pembelian", "section": "pos", "roles": ("supervisor",)},
     {"key": "kasir_retur_pembelian", "label": "Retur Pembelian", "icon": "refund", "href": "/kasir/pembelian-retur", "section": "pos", "roles": ("supervisor",)},

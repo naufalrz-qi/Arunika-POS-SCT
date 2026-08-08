@@ -123,6 +123,53 @@ class GerbangHalamanKasirTests(TestCase):
         self.assertIn("/login", r["Location"])
 
 
+class LayarBaruKasirTests(TestCase):
+    """Penjualan Order & Cetak Faktur: rutenya hidup, dan izinnya per-layar.
+
+    Yang gampang luput: kedua layar meminjam kotak cari milik layar Penjualan.
+    Kalau endpoint itu cuma terpasang di bawah /kasir/penjualan, orang yang
+    diberi Penjualan Order saja akan terpental begitu mengetik di kotaknya —
+    dan yang terlihat cuma "pencarian tak jalan", bukan pesan izin.
+    """
+
+    def setUp(self):
+        self.kasir = User.objects.create_user("kasir7", password="rahasia-kuat-123",
+                                              role=Role.KASIR)
+        self.client.force_login(self.kasir)
+
+    def test_layar_baru_terbuka_untuk_kasir(self):
+        for jalur in ("/kasir/penjualan-order", "/kasir/faktur"):
+            self.assertEqual(self.client.get(jalur).status_code, 200, jalur)
+
+    def test_kotak_cari_terpasang_di_bawah_tiap_layar(self):
+        """Bukan sekali di satu tempat bersama — izin diberikan per-prefix."""
+        from apps.core.menus import menu_key_for_path
+
+        self.assertEqual(menu_key_for_path("/kasir/penjualan-order/cari-barang"),
+                         "kasir_penjualan_order")
+        self.assertEqual(menu_key_for_path("/kasir/penjualan/cari-barang"),
+                         "kasir_penjualan")
+        self.assertEqual(menu_key_for_path("/kasir/pembelian/cari-barang"),
+                         "kasir_pembelian")
+        # Dan tak ada satu pun yang jatuh ke "bebas" — path tanpa menu tak dijaga.
+        for jalur in ("/kasir/penjualan-retur/cari-barang",
+                      "/kasir/pembelian-retur/cari-barang",
+                      "/kasir/penjualan-order/cari-customer",
+                      "/kasir/penjualan/satuan",
+                      "/kasir/penjualan-order/satuan",
+                      "/kasir/penjualan-retur/satuan",
+                      "/kasir/pembelian/satuan",
+                      "/kasir/pembelian-retur/satuan"):
+            self.assertIsNotNone(menu_key_for_path(jalur), jalur)
+
+    def test_order_tak_ikut_terbuka_kalau_menunya_dicabut(self):
+        self.kasir.allowed_menu_keys = ["kasir_penjualan"]
+        self.kasir.save(update_fields=["allowed_menu_keys"])
+        r = self.client.get("/kasir/penjualan-order")
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r["Location"], "/kasir/penjualan")
+
+
 class LayarKelolaMenuTests(TestCase):
     """Layar Kelola Menu harus JUJUR soal apa yang sedang dipegang seseorang."""
 

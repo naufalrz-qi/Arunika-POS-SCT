@@ -1089,7 +1089,7 @@ def snapshot_harga_changes(profile) -> dict:
     return {"changes": len(changes), "seeded": len(new_states), "total": len(current)}
 
 
-# --- Sinkronisasi master data antar-server (m_barang/m_customer/m_supplier) -
+# --- Sinkronisasi master data antar-server (m_barang/m_customer) ------------
 
 # Kolom diverifikasi live via INFORMATION_SCHEMA.COLUMNS (bukan dari dump statis
 # scripts/output/schema.json — dump itu sempat keliru untuk m_supplier).
@@ -1112,13 +1112,15 @@ _SYNC_ENTITIES = {
                  "npwp_no", "nppkp_no", "npwp_nama", "npwp_alamat"],
         "label": "Pelanggan",
     },
-    "m_supplier": {
-        "table": "m_supplier",
-        "pk_cols": ["kd_supplier"],
-        "cols": ["kd_kota", "nama", "alamat", "telepon", "fax", "kontak", "hp", "email",
-                 "kd_bank", "rekening", "jenis", "keterangan"],
-        "label": "Supplier",
-    },
+    # m_supplier SENGAJA TIDAK ADA DI SINI. Supplier urusan GUDANG — gudang yang
+    # membeli, jadi gudang yang menyimpan daftar lengkapnya. Server toko
+    # grosir/ecer cuma memakai segelintir supplier miliknya sendiri (PAGESANGAN:
+    # 3 baris), jadi menyalin daftar gudang ke sana bukan "menyamakan master",
+    # tapi membanjiri layar pembelian toko dengan nama yang tak pernah dipakai.
+    # Sudah terjadi sekali dan harus dipulihkan manual dari PAGESANGAN.
+    # Aturan yang sama dipegang daftar-izin `feed_sync.FEED_TABLE_SPECS` untuk
+    # jalur otomatisnya. Mengelola supplier per server tetap bisa lewat Master
+    # Data (`master_crud`) — yang dilarang menyeberang, bukan mengedit.
 }
 
 

@@ -42,6 +42,33 @@ _DETAIL = [
     "point1", "point2",
 ]
 
+# Baris nota biasa. Aplikasi legacy menulis 1 pada SELURUH 2.990.259 baris
+# t_penjualan_detail; 68 baris ber-`jenis` 0 semuanya tulisan Arunika sendiri
+# saat pengujian. Artinya tak diketahui dari skema, jadi yang benar adalah
+# meniru satu-satunya nilai yang dipakai data sungguhan.
+JENIS_BARIS = 1
+
+# --- Order penjualan --------------------------------------------------------
+# Awalannya TIDAK diambil dari m_divisi.kepala_nota. Di server testing seluruh
+# 7.209 baris t_penjualan_order berawalan `OJ` sementara kepala_nota divisinya
+# `SC`: order punya awalan tetap sendiri di aplikasi legacy. Mengambilnya dari
+# kepala_nota membuat penomoran order bercabang dua dan urutannya patah.
+AWALAN_ORDER = "OJ"
+
+# tanggal_server SENGAJA di luar daftar: ia diisi GETDATE() sebagai ekspresi SQL
+# (lihat _tulis_order). Beda dengan t_penjualan, kolomnya di sini TIDAK punya
+# DEFAULT — dibiarkan berarti NULL, padahal 7.209 baris legacy semuanya terisi.
+_ORDER_HEADER = [
+    "no_order", "kd_customer", "kd_divisi", "kd_jenis", "kd_kas", "kd_voucher",
+    "no_bukti", "tanggal", "tanggal_terima", "status", "diskon1", "diskon2",
+    "diskon3", "diskon4", "diskon_uang", "pajak", "keterangan", "jaminan",
+    "kd_user", "no_transaksi",
+]
+_ORDER_DETAIL = [
+    "no_order", "kd_barang", "kd_satuan", "kd_pegawai", "jenis",
+    "diskon1", "diskon2", "diskon3", "diskon4", "harga_jual", "qty",
+]
+
 
 def ghb(harga: float, diskon, pajak: float = 0.0, ppnbm: float = 0.0) -> float:
     """Harga bersih ala UDF legacy `GetHargaBersih`, dalam Python.
@@ -132,7 +159,8 @@ def buat_nota(profile, *, kd_user, kd_divisi, kd_customer, kd_jenis, kd_kas,
                 cur.execute(
                     f"INSERT INTO t_penjualan_detail ({', '.join(_DETAIL)}) VALUES ({tanya_d})",
                     [no, it["kd_barang"], it["kd_satuan"],
-                     it.get("kd_pegawai") or kd_pegawai, int(it.get("jenis") or 0),
+                     it.get("kd_pegawai") or kd_pegawai,
+                     int(it.get("jenis") or JENIS_BARIS),
                      it.get("diskon1") or 0, it.get("diskon2") or 0,
                      it.get("diskon3") or 0, it.get("diskon4") or 0,
                      float(it["harga_jual"]), float(it["qty"]),
@@ -168,6 +196,68 @@ def buat_nota(profile, *, kd_user, kd_divisi, kd_customer, kd_jenis, kd_kas,
             "no_order": no_order}
 
 
+def buat_order(profile, *, kd_user, kd_divisi, kd_customer, kd_jenis, kd_kas,
+               kd_voucher, kd_pegawai, items, keterangan=KOSONG, no_bukti=KOSONG,
+               diskon_header=(0, 0, 0, 0), diskon_uang=0.0, pajak=0.0,
+               tanggal=None, jaminan=0.0) -> dict:
+    """Tulis satu order penjualan (pesanan yang belum jadi nota).
+
+    Bentuknya kepala + baris seperti nota, tapi TIGA hal berbeda dan ketiganya
+    menentukan apakah ordernya bisa diambil nanti:
+
+    - `no_transaksi` diisi `no_order` SENDIRI, dan `status` 0. Itulah penanda
+      "belum diambil" yang dibaca `daftar_order`/`buat_nota` — bukan `status`
+      saja, sebab 25 baris legacy berstatus 1 padahal belum diambil.
+    - Tak ada tabel total: `t_penjualan_order_total` memang tidak ada. Nilai
+      order dihitung ulang saat dibaca.
+    - Tak ada trigger di kedua tabelnya (sudah diperiksa di server testing),
+      jadi order TIDAK mengurangi stok dan tidak ikut terkirim ke pusat lewat
+      trigger — memang begitu seharusnya: barangnya belum keluar.
+    """
+    _periksa(items, kd_user)
+    tanggal = tanggal or dt.datetime.now()
+    dh = (list(diskon_header) + [0, 0, 0, 0])[:4]
+    total = total_nota(items, dh, diskon_uang, pajak)
+
+    kolom = ", ".join(_ORDER_HEADER)
+    tanya_h = ", ".join("?" for _ in _ORDER_HEADER)
+    tanya_d = ", ".join("?" for _ in _ORDER_DETAIL)
+
+    with mssql.cursor(profile, autocommit=False) as cur:
+        def tulis(no):
+            cur.execute(
+                f"INSERT INTO t_penjualan_order ({kolom}, tanggal_server) "
+                f"VALUES ({tanya_h}, GETDATE())",
+                # tanggal_terima disamakan dengan tanggal: di 7.209 baris legacy
+                # keduanya jam yang sama (selisih 0 hari pada 5.838 baris, dan
+                # yang lain justru MUNDUR) — kolomnya mencatat kapan order
+                # diterima, bukan kapan barang dijanjikan.
+                [no, kd_customer, kd_divisi, kd_jenis, kd_kas, kd_voucher,
+                 no_bukti or KOSONG, tanggal, tanggal, 0,
+                 dh[0], dh[1], dh[2], dh[3], diskon_uang, pajak,
+                 keterangan or KOSONG, jaminan, kd_user, no],
+            )
+            for it in items:
+                cur.execute(
+                    f"INSERT INTO t_penjualan_order_detail ({', '.join(_ORDER_DETAIL)}) "
+                    f"VALUES ({tanya_d})",
+                    [no, it["kd_barang"], it["kd_satuan"],
+                     it.get("kd_pegawai") or kd_pegawai,
+                     int(it.get("jenis") or JENIS_BARIS),
+                     it.get("diskon1") or 0, it.get("diskon2") or 0,
+                     it.get("diskon3") or 0, it.get("diskon4") or 0,
+                     float(it["harga_jual"]), float(it["qty"])],
+                )
+
+        no = simpan_dengan_nomor(
+            cur,
+            lambda: no_berikutnya(cur, "penjualan_order", AWALAN_ORDER, tanggal),
+            tulis)
+        cur.connection.commit()
+
+    return {"no_order": no, "total": total, "baris": len(items)}
+
+
 def cari_barang(profile, cari: str, limit: int = 20) -> list[dict]:
     """Cari barang beserta satuan & harga jualnya, untuk kotak cari di kasir.
 
@@ -196,6 +286,35 @@ def cari_barang(profile, cari: str, limit: int = 20) -> list[dict]:
             }
             for r in cur.fetchall()
         ]
+
+
+def satuan_barang(profile, kd_barang: str) -> list[dict]:
+    """Semua satuan sebuah barang beserta harganya — untuk mengganti satuan
+    pada baris yang sudah masuk keranjang.
+
+    541 barang di server aktif punya lebih dari satu satuan, dan harganya beda
+    per satuan (mis. 1001: PCS 4.800, LUSIN 57.600). Karena itu mengganti
+    satuan HARUS ikut mengganti harga; membiarkan harga lama berarti menjual
+    selusin seharga satu.
+
+    `jumlah` (isi per satuan) ikut dikirim supaya kasir melihat "LUSIN (isi 12)"
+    dan bukan kode satuan yang tak berarti apa-apa. Baris ber-`status` 0 tetap
+    disertakan: kotak cari pun menampilkannya, dan arti status di tabel ini tak
+    terdokumentasi — menyaringnya diam-diam bisa menghilangkan satuan yang
+    sebenarnya masih dipakai.
+    """
+    kd_barang = (kd_barang or "").strip()
+    if not kd_barang:
+        return []
+    with mssql.cursor(profile) as cur:
+        cur.execute(
+            "SELECT bs.kd_satuan, s.nama, bs.jumlah, bs.harga_jual, bs.status "
+            "FROM m_barang_satuan bs LEFT JOIN m_satuan s ON s.kd_satuan = bs.kd_satuan "
+            "WHERE bs.kd_barang = ? ORDER BY bs.jumlah, bs.harga_jual",
+            [kd_barang])
+        return [{"kd_satuan": (r[0] or "").strip(), "satuan": (r[1] or "").strip(),
+                 "jumlah": float(r[2] or 0), "harga_jual": float(r[3] or 0),
+                 "status": int(r[4] or 0)} for r in cur.fetchall()]
 
 
 def opsi_nota(profile) -> dict:
@@ -237,7 +356,7 @@ BAWAAN = {
 }
 
 
-def bawaan_form(profile) -> dict:
+def bawaan_form(profile, jenis: str = "penjualan") -> dict:
     """Nilai bawaan + nomor nota BERIKUTNYA untuk ditampilkan sebelum disimpan.
 
     Nomornya cuma ancar-ancar: nomor yang benar-benar dipakai dihitung ulang di
@@ -254,11 +373,13 @@ def bawaan_form(profile) -> dict:
         _dt.date.today() + _dt.timedelta(days=BAWAAN["jatuh_tempo_hari"])).isoformat()
     try:
         with mssql.cursor(profile) as cur:
-            awalan = awalan_untuk(cur)
-            hasil["no_transaksi"] = no_berikutnya(cur, "penjualan", awalan)
+            # Order punya awalan tetap sendiri; kepala_nota tak dilihat sama
+            # sekali, jadi layar order tetap jalan walau kolomnya belum diisi.
+            awalan = AWALAN_ORDER if jenis == "penjualan_order" else awalan_untuk(cur)
+            hasil["nomor"] = no_berikutnya(cur, jenis, awalan)
     except Exception:
         # Ancar-ancar nomor tak boleh menjatuhkan seluruh layar.
-        hasil["no_transaksi"] = ""
+        hasil["nomor"] = ""
     return hasil
 
 

@@ -30,6 +30,7 @@ from apps.transactions.hub_sync import bind_varchar
 # input. Pola yang sama dipakai _STATUS_TABLES di apps/master_data/services.py.
 JENIS = {
     "penjualan": ("t_penjualan", "no_transaksi"),
+    "penjualan_order": ("t_penjualan_order", "no_order"),
     "penjualan_retur": ("t_penjualan_retur", "no_retur"),
     "pembelian": ("t_pembelian", "no_transaksi"),
     "pembelian_retur": ("t_pembelian_retur", "no_retur"),

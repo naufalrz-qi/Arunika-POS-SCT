@@ -135,3 +135,23 @@ class SimpanTests(SimpleTestCase):
         with self._profile(cur):
             with self.assertRaises(ValueError):
                 mc.simpan_master(object(), "supplier", {"kd_supplier": "ZZZ999", "nama": "x", "kd_kota": "KAA000", "kd_bank": "BAA000"})
+
+
+class SupplierTidakDisinkronTests(SimpleTestCase):
+    """Supplier boleh DIEDIT per server, tidak boleh MENYEBERANG antar server.
+
+    Gudang yang membeli, jadi gudang yang menyimpan daftar supplier lengkap;
+    server toko cuma memakai segelintir supplier miliknya sendiri (PAGESANGAN:
+    3 baris). Menyalin daftar gudang ke toko sudah pernah terjadi lewat halaman
+    Sinkronisasi Master Data dan harus dipulihkan manual.
+    """
+
+    def test_supplier_bukan_entitas_sinkronisasi(self):
+        from apps.master_data import services as master
+
+        self.assertNotIn("m_supplier", master._SYNC_ENTITIES)
+        self.assertIn("m_barang", master._SYNC_ENTITIES)
+
+    def test_supplier_tetap_bisa_diedit(self):
+        """Larangannya soal menyeberang, bukan soal mengelola."""
+        self.assertIn("supplier", mc._MASTER)

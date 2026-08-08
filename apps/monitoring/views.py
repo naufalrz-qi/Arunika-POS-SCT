@@ -1112,9 +1112,13 @@ def sync_harga_apply(request):
     return redirect(f"/admin-panel/master/sync-harga?mode={mode}&src={src.id}&dst={dst.id}")
 
 
-# --- Sinkronisasi Master Data (m_barang/m_customer/m_supplier) -------------
+# --- Sinkronisasi Master Data (m_barang/m_customer) ------------------------
 # Arah tetap: gudang = sumber data master, tujuan = server aktif/dipilih
 # (grosir/retail) — beda dari sync-harga yang punya 2 mode simetris.
+#
+# Supplier tidak ada di daftar entitas, dan itu disengaja — lihat catatan di
+# `master._SYNC_ENTITIES`. Entitas di luar daftar ditolak `sync_master_apply`,
+# jadi form yang dikirim tangan pun tidak bisa menembusnya.
 
 _SYNC_MASTER_ENTITIES = [
     {"value": k, "label": v["label"]} for k, v in master._SYNC_ENTITIES.items()

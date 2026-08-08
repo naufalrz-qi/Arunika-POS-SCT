@@ -52,22 +52,30 @@ def cek_stok(request):
     )
 
 
-def penjualan(request):
-    """Layar buat nota penjualan."""
+def _layar_penjualan(request, mode: str):
+    """Layar buat nota penjualan (mode "nota") atau order (mode "order").
+
+    Satu layar untuk keduanya, bukan dua salinan: bentuk isiannya sama persis —
+    pelanggan, keranjang barang, diskon, pajak. Yang berbeda cuma ke tabel mana
+    ia ditulis dan apakah ada uang yang berpindah, dan itu dikirim sebagai prop.
+    """
     cari = (request.GET.get("cari") or "").strip()
+    order = mode == "order"
 
     def muat():
         profile = _active()
         if not profile:
             return {"opsi": {}, "hasil_cari": [], "conn_error": CONN_ERROR}
         try:
+            opsi = pj.opsi_nota(profile)
             return {
-                "opsi": pj.opsi_nota(profile),
+                "opsi": opsi,
                 "hasil_cari": pj.cari_barang(profile, cari),
-                "bawaan": pj.bawaan_form(profile),
+                "bawaan": pj.bawaan_form(
+                    profile, "penjualan_order" if order else "penjualan"),
                 "nama_divisi": _label(inv.list_divisi(profile), "kd_divisi", "nama",
                                       request.user.kd_divisi),
-                "nama_pegawai": _label(pj.opsi_nota(profile)["pegawai"], "value", "label",
+                "nama_pegawai": _label(opsi["pegawai"], "value", "label",
                                        request.user.kd_pegawai),
                 "conn_error": None,
             }
@@ -78,13 +86,26 @@ def penjualan(request):
     return render(request, "Kasir/Penjualan", props={
         "nota": defer(muat),
         "filters": {"cari": cari},
+        "mode": mode,
+        "base": "/kasir/penjualan-order" if order else "/kasir/penjualan",
         # Ditampilkan di layar supaya kasir tahu nota akan tercatat atas nama
         # siapa — dan tahu sejak awal kalau akunnya belum ditautkan.
         "kd_user": request.user.kd_user,
         "kd_divisi": request.user.kd_divisi,
         "kd_pegawai": request.user.kd_pegawai,
-        "nota_terakhir": request.session.pop("nota_terakhir", ""),
+        # Hanya layar nota yang boleh MENGAMBIL penanda ini: kalau layar order
+        # ikut mem-pop-nya, tombol Cetak di layar nota kehilangan nomornya
+        # begitu kasir sempat mampir ke order.
+        "nota_terakhir": "" if order else request.session.pop("nota_terakhir", ""),
     })
+
+
+def penjualan(request):
+    return _layar_penjualan(request, "nota")
+
+
+def penjualan_order(request):
+    return _layar_penjualan(request, "order")
 
 
 @require_POST
@@ -136,6 +157,81 @@ def penjualan_save(request):
     request.session["flash_success"] = (
         f"Nota {hasil['no_transaksi']} tersimpan. Total Rp {hasil['total']:,.0f}".replace(",", "."))
     return redirect("/kasir/penjualan")
+
+
+@require_POST
+def penjualan_order_save(request):
+    data = get_data(request)
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect("/kasir/penjualan-order")
+    try:
+        hasil = pj.buat_order(
+            profile,
+            kd_user=request.user.kd_user,
+            # Dari AKUN, tak pernah dari kiriman layar — alasannya sama dengan
+            # nota: kd_divisi menentukan order ini milik cabang mana.
+            kd_divisi=request.user.kd_divisi,
+            kd_customer=data.get("kd_customer"),
+            kd_jenis=data.get("kd_jenis"),
+            kd_kas=data.get("kd_kas"),
+            kd_voucher=data.get("kd_voucher"),
+            kd_pegawai=data.get("kd_pegawai") or request.user.kd_pegawai,
+            items=data.get("items") or [],
+            keterangan=data.get("keterangan") or pj.KOSONG,
+            no_bukti=data.get("no_bukti") or pj.KOSONG,
+            tanggal=_waktu(data.get("tanggal")),
+            diskon_uang=float(data.get("diskon_uang") or 0),
+            pajak=float(data.get("pajak") or 0),
+        )
+    except ValueError as exc:
+        request.session["flash_error"] = str(exc)
+        return redirect("/kasir/penjualan-order")
+    except (pyodbc.Error, RuntimeError) as exc:
+        request.session["flash_error"] = (
+            str(exc) if isinstance(exc, RuntimeError)
+            else mssql.friendly_error(exc, "Gagal menyimpan order"))
+        return redirect("/kasir/penjualan-order")
+
+    log_activity(request, "penjualan_order",
+                 f"Order {hasil['no_order']} — {hasil['baris']} baris, "
+                 f"total {hasil['total']:.0f}")
+    request.session["flash_success"] = (
+        f"Order {hasil['no_order']} tersimpan. "
+        f"Total Rp {hasil['total']:,.0f}".replace(",", "."))
+    return redirect("/kasir/penjualan-order")
+
+
+def faktur(request):
+    """Cetak ulang faktur — satu isian: nomor transaksi.
+
+    Fakturnya dirender DI HALAMAN INI, bukan dengan mengarahkan ke
+    /kasir/penjualan/<no>/cetak: rute itu milik menu Penjualan, jadi orang yang
+    hanya diberi menu Cetak Faktur akan terpental dari halaman cetaknya sendiri.
+
+    Kolom uang tidak disaring di sini, sama seperti jalur cetak yang sudah ada —
+    faktur memang lembar harga untuk pembeli. Yang tak boleh melihat harga
+    dicabut menunya, bukan dikosongkan fakturnya.
+    """
+    no = (request.GET.get("no") or "").strip()
+
+    def muat():
+        if not no:
+            return {"nota": None, "pesan": "", "conn_error": None}
+        profile = _active()
+        if not profile:
+            return {"nota": None, "pesan": "", "conn_error": CONN_ERROR}
+        try:
+            nota = pj.baca_nota(profile, no)
+        except pyodbc.Error as exc:
+            return {"nota": None, "pesan": "",
+                    "conn_error": mssql.friendly_error(exc, "Gagal membaca nota")}
+        return {"nota": nota, "conn_error": None,
+                "pesan": "" if nota else f"Nota {no} tidak ditemukan."}
+
+    return render(request, "Kasir/Faktur",
+                  props={"hasil": defer(muat), "filters": {"no": no}})
 
 
 def _transaksi_index(request, jenis: str):
@@ -297,6 +393,25 @@ def cari_barang_json(request):
         return JsonResponse({"rows": _tanpa_harga(request, rows)})
     except pyodbc.Error as exc:
         return JsonResponse({"rows": [], "error": mssql.friendly_error(exc, "Gagal mencari barang")})
+
+
+def satuan_json(request):
+    """Satuan-satuan sebuah barang, untuk mengganti satuan di baris keranjang.
+
+    Dimuat saat kotak satuan disentuh, bukan saat barang ditambahkan: mengambil
+    daftar ini tiap kali barang masuk berarti satu round-trip tambahan PER
+    BARANG, dan di profil WAN round-trip-lah biayanya, bukan besar datanya.
+    Mengganti satuan jarang terjadi; memindainya tidak.
+    """
+    profile = _active()
+    if not profile:
+        return JsonResponse({"rows": [], "error": CONN_ERROR})
+    try:
+        rows = pj.satuan_barang(profile, request.GET.get("kd_barang") or "")
+        return JsonResponse({"rows": _tanpa_harga(request, rows)})
+    except pyodbc.Error as exc:
+        return JsonResponse(
+            {"rows": [], "error": mssql.friendly_error(exc, "Gagal membaca satuan")})
 
 
 def cari_customer_json(request):

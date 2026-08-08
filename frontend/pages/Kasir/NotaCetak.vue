@@ -8,7 +8,13 @@ import { computed, onMounted } from "vue";
 // Windows mengirimnya sebagai GRAFIS — hasilnya lambat, buram, dan boros pita.
 // Karena itu seluruh isi di bawah dibangun sebagai satu blok <pre> selebar 40
 // karakter, dan CSS cetaknya membuang segala hiasan.
-const props = defineProps({ nota: { type: Object, required: true } });
+// `auto` mati saat berkas ini dipakai sebagai komponen di layar Cetak Faktur:
+// di sana kasir mengetik nomor dulu, dan dialog cetak yang menyembul sendiri
+// tiap kali hasil muncul membuat nomor berikutnya tak bisa diketik.
+const props = defineProps({
+  nota: { type: Object, required: true },
+  auto: { type: Boolean, default: true },
+});
 
 const LEBAR = 40;
 const rp = (v) =>
@@ -53,7 +59,9 @@ const teks = computed(() => {
 
 // Langsung buka dialog cetak: halaman ini hanya pernah dibuka untuk dicetak.
 const cetakUlang = () => window.print();
-onMounted(() => setTimeout(cetakUlang, 300));
+onMounted(() => {
+  if (props.auto) setTimeout(cetakUlang, 300);
+});
 </script>
 
 <template>
