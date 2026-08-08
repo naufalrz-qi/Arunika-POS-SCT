@@ -83,6 +83,7 @@ def penjualan(request):
         "kd_user": request.user.kd_user,
         "kd_divisi": request.user.kd_divisi,
         "kd_pegawai": request.user.kd_pegawai,
+        "nota_terakhir": request.session.pop("nota_terakhir", ""),
     })
 
 
@@ -109,6 +110,7 @@ def penjualan_save(request):
             keterangan=data.get("keterangan") or pj.KOSONG,
             no_bukti=data.get("no_bukti") or pj.KOSONG,
             tanggal=_waktu(data.get("tanggal")),
+            no_order=(data.get("no_order") or "").strip(),
             jatuh_tempo=_waktu(data.get("jatuh_tempo")),
             diskon_uang=float(data.get("diskon_uang") or 0),
             pajak=float(data.get("pajak") or 0),
@@ -124,7 +126,13 @@ def penjualan_save(request):
         return redirect("/kasir/penjualan")
 
     log_activity(request, "penjualan",
-                 f"Nota {hasil['no_transaksi']} — {hasil['baris']} baris, total {hasil['total']:.0f}")
+                 f"Nota {hasil['no_transaksi']} — {hasil['baris']} baris, "
+                 f"total {hasil['total']:.0f}"
+                 + (f", dari order {hasil['no_order']}" if hasil.get("no_order") else ""))
+    # Nomor ASLI, bukan ancar-ancar yang tampil sebelum simpan: nomor bisa
+    # bergeser kalau kasir lain (atau POS lama) mendahului, dan tombol Cetak
+    # yang memakai ancar-ancar akan mencetak nota MILIK ORANG LAIN.
+    request.session["nota_terakhir"] = hasil["no_transaksi"]
     request.session["flash_success"] = (
         f"Nota {hasil['no_transaksi']} tersimpan. Total Rp {hasil['total']:,.0f}".replace(",", "."))
     return redirect("/kasir/penjualan")
@@ -303,6 +311,21 @@ def cari_customer_json(request):
     except pyodbc.Error as exc:
         return JsonResponse(
             {"rows": [], "error": mssql.friendly_error(exc, "Gagal mencari pelanggan")})
+
+
+def order_json(request):
+    """Daftar order terbuka, atau isi satu order kalau `no_order` diberikan."""
+    profile = _active()
+    if not profile:
+        return JsonResponse({"rows": [], "error": CONN_ERROR})
+    no_order = (request.GET.get("no_order") or "").strip()
+    try:
+        if no_order:
+            return JsonResponse({"order": pj.baca_order(profile, no_order)})
+        return JsonResponse({"rows": pj.daftar_order(profile)})
+    except pyodbc.Error as exc:
+        return JsonResponse(
+            {"rows": [], "error": mssql.friendly_error(exc, "Gagal membaca order")})
 
 
 def nota_cetak(request, no_transaksi):

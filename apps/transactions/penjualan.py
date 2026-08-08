@@ -101,7 +101,7 @@ def _periksa(items, kd_user: str) -> None:
 def buat_nota(profile, *, kd_user, kd_divisi, kd_customer, kd_jenis, kd_kas,
               kd_voucher, kd_pegawai, items, keterangan=KOSONG, no_bukti=KOSONG,
               diskon_header=(0, 0, 0, 0), diskon_uang=0.0, pajak=0.0,
-              status=1, tanggal=None, jatuh_tempo=None) -> dict:
+              status=1, tanggal=None, jatuh_tempo=None, no_order="") -> dict:
     """Tulis satu nota penjualan. Mengembalikan {no_transaksi, total, baris}."""
     _periksa(items, kd_user)
     # `tanggal` datang dari PC kasir (jam mesin itu sendiri, seperti aplikasi
@@ -141,12 +141,31 @@ def buat_nota(profile, *, kd_user, kd_divisi, kd_customer, kd_jenis, kd_kas,
             cur.execute(
                 "INSERT INTO t_penjualan_total (no_transaksi, total) VALUES (?, ?)",
                 [no, total])
+            if no_order:
+                # Order ditandai TERPAKAI di transaksi yang sama. Kalau ditulis
+                # terpisah, nota bisa jadi sementara ordernya tetap terbuka —
+                # dan order yang sama lalu diambil dua kali.
+                cur.execute(
+                    "UPDATE t_penjualan_order SET no_transaksi = ?, status = 1 "
+                    "WHERE no_order = ? AND (no_transaksi = no_order OR no_transaksi IS NULL)",
+                    [no, no_order])
+                cur.execute(
+                    "SELECT no_transaksi FROM t_penjualan_order WHERE no_order = ?",
+                    [no_order])
+                cek = cur.fetchone()
+                # SELECT eksplisit, bukan rowcount: trigger legacy membuatnya
+                # tak bisa dipercaya (lihat context.md).
+                if not cek or (cek[0] or "").strip() != no:
+                    raise ValueError(
+                        f"Order {no_order} sudah diambil transaksi lain. "
+                        f"Muat ulang daftar order.")
 
         no = simpan_dengan_nomor(
             cur, lambda: no_berikutnya(cur, "penjualan", awalan, tanggal), tulis)
         cur.connection.commit()
 
-    return {"no_transaksi": no, "total": total, "baris": len(items)}
+    return {"no_transaksi": no, "total": total, "baris": len(items),
+            "no_order": no_order}
 
 
 def cari_barang(profile, cari: str, limit: int = 20) -> list[dict]:
@@ -317,4 +336,62 @@ def baca_nota(profile, no_transaksi: str) -> dict | None:
         "diskon_uang": float(h[6] or 0), "pajak": float(h[7] or 0),
         "total": float(h[8] or 0), "baris": baris,
         "toko": (d[0] if d else "") or "",
+    }
+
+
+def daftar_order(profile, limit: int = 50) -> list[dict]:
+    """Order penjualan yang BELUM jadi nota.
+
+    Alur legacy: order dibuat lebih dulu (awalan OJ, penomoran sendiri), lalu
+    saat pembeli datang order itu diambil dan menjadi nota. Yang menandai sudah
+    diambil adalah `no_transaksi` — pada order terbuka isinya masih no_order
+    sendiri, dan berganti jadi nomor nota begitu ditransaksikan.
+    Karena itu saringannya `no_transaksi = no_order`, bukan `status`.
+    """
+    with mssql.cursor(profile) as cur:
+        cur.execute(
+            "SELECT TOP (?) o.no_order, o.tanggal, o.kd_customer, c.nama, o.keterangan "
+            "FROM t_penjualan_order o "
+            "LEFT JOIN m_customer c ON c.kd_customer = o.kd_customer "
+            "WHERE o.no_transaksi = o.no_order OR o.no_transaksi IS NULL "
+            "ORDER BY o.no_order DESC", [limit])
+        return [{"no_order": (r[0] or "").strip(), "tanggal": r[1],
+                 "kd_customer": (r[2] or "").strip(), "customer": (r[3] or "").strip(),
+                 "keterangan": (r[4] or "").strip()} for r in cur.fetchall()]
+
+
+def baca_order(profile, no_order: str) -> dict | None:
+    """Isi satu order, siap dituang ke nota baru."""
+    no_order = (no_order or "").strip()
+    if not no_order:
+        return None
+    with mssql.cursor(profile) as cur:
+        cur.execute(
+            "SELECT o.no_order, o.kd_customer, c.nama, o.kd_jenis, o.kd_kas, "
+            "o.kd_voucher, o.keterangan, o.diskon_uang, o.pajak "
+            "FROM t_penjualan_order o "
+            "LEFT JOIN m_customer c ON c.kd_customer = o.kd_customer "
+            "WHERE o.no_order = ?", [no_order])
+        h = cur.fetchone()
+        if not h:
+            return None
+        cur.execute(
+            "SELECT d.kd_barang, b.nama, d.kd_satuan, s.nama, d.qty, d.harga_jual, "
+            "d.diskon1, d.diskon2, d.diskon3, d.diskon4 "
+            "FROM t_penjualan_order_detail d "
+            "LEFT JOIN m_barang b ON b.kd_barang = d.kd_barang "
+            "LEFT JOIN m_satuan s ON s.kd_satuan = d.kd_satuan "
+            "WHERE d.no_order = ?", [no_order])
+        items = [{"kd_barang": (r[0] or "").strip(), "nama": (r[1] or "").strip(),
+                  "kd_satuan": (r[2] or "").strip(), "satuan": (r[3] or "").strip(),
+                  "qty": float(r[4] or 0), "harga_jual": float(r[5] or 0),
+                  "diskon1": float(r[6] or 0), "diskon2": float(r[7] or 0),
+                  "diskon3": float(r[8] or 0), "diskon4": float(r[9] or 0)}
+                 for r in cur.fetchall()]
+    return {
+        "no_order": (h[0] or "").strip(), "kd_customer": (h[1] or "").strip(),
+        "customer_nama": (h[2] or "").strip(), "kd_jenis": (h[3] or "").strip(),
+        "kd_kas": (h[4] or "").strip(), "kd_voucher": (h[5] or "").strip(),
+        "keterangan": (h[6] or "").strip(), "diskon_uang": float(h[7] or 0),
+        "pajak": float(h[8] or 0), "items": items,
     }
