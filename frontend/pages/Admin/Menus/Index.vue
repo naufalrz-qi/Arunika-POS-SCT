@@ -14,7 +14,26 @@ const props = defineProps({
   menus: { type: Array, default: () => [] }, // assignable menus (punya .section + .icon)
   sections: { type: Array, default: () => [] }, // [{key, label}] urut tampil
   data_keys: { type: Array, default: () => [] }, // [{key, label}] nilai uang
+  role_defaults: { type: Object, default: () => ({}) }, // {peran: [menu_key]}
 });
+
+const ROLE_LABELS = { kasir: "Kasir", supervisor: "Supervisor", admin: "Admin" };
+
+// Peran mana saja yang mendapat menu ini secara bawaan — dipakai untuk penanda
+// di tiap baris, supaya terlihat mana yang memang jatah kasir/supervisor.
+function bawaanUntuk(key) {
+  return Object.entries(props.role_defaults)
+    .filter(([, keys]) => keys.includes(key))
+    .map(([role]) => ROLE_LABELS[role] || role);
+}
+
+// Menu bawaan peran user yang sedang dipilih.
+const bawaanTerpilih = computed(() =>
+  selected.value ? props.role_defaults[selected.value.role] || [] : [],
+);
+const memakaiBawaan = computed(
+  () => Boolean(selected.value) && (selected.value.allowed_menu_keys || []).length === 0,
+);
 
 const selected = ref(null);
 const checked = reactive({});
@@ -49,16 +68,22 @@ function toggleSection(s) {
   const target = !sectionState(s).all;
   s.items.forEach((m) => (checked[m.key] = target));
 }
+// `value` boleh boolean (semua/kosong) atau daftar kunci (mis. bawaan peran).
 function setAll(value) {
-  props.menus.forEach((m) => (checked[m.key] = value));
+  const daftar = Array.isArray(value) ? value : null;
+  props.menus.forEach((m) => (checked[m.key] = daftar ? daftar.includes(m.key) : value));
 }
 
 function select(user) {
   selected.value = user;
   const allowed = user.allowed_menu_keys || [];
-  // Empty == full access by default; show everything checked.
+  // Kosong TIDAK berarti "semua" untuk setiap peran. Admin memang mendapat
+  // semuanya, tapi kasir/supervisor hanya mendapat menu bawaan perannya —
+  // mencentang semua di sini akan menampilkan akses yang tak ia punya, dan
+  // sekali disimpan justru MEMBERIKANNYA.
+  const bawaan = props.role_defaults[user.role] || [];
   props.menus.forEach((m) => {
-    checked[m.key] = allowed.length === 0 ? true : allowed.includes(m.key);
+    checked[m.key] = allowed.length === 0 ? bawaan.includes(m.key) : allowed.includes(m.key);
   });
   // Nilai uang TIDAK memakai konvensi "kosong = semua": server mengirim daftar
   // yang boleh dilihat apa adanya, jadi kosong berarti benar-benar tak boleh.
@@ -135,10 +160,26 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
               <strong class="text-ink">{{ checkedCount }}</strong> / {{ menus.length }} menu dipilih
             </p>
             <div class="flex gap-2">
+              <Button variant="secondary" size="sm" @click="setAll(bawaanTerpilih)">
+                Kembalikan Bawaan
+              </Button>
               <Button variant="secondary" size="sm" @click="setAll(true)">Pilih Semua</Button>
               <Button variant="secondary" size="sm" @click="setAll(false)">Kosongkan</Button>
             </div>
           </div>
+
+          <!-- Yang belum pernah diatur memakai bawaan perannya. Tanpa keterangan
+               ini, centang yang tampil terbaca seperti pilihan yang pernah
+               dibuat seseorang, padahal belum. -->
+          <p
+            v-if="memakaiBawaan"
+            class="mb-4 rounded-control border border-border-default bg-surface-2 px-3 py-2 text-xs text-ink-muted"
+          >
+            Akun ini belum pernah diatur, jadi yang tercentang adalah
+            <strong class="text-ink">menu bawaan {{ ROLE_LABELS[selected.role] || selected.role }}</strong
+            >. Menyimpan akan mengunci pilihan ini, dan sejak itu perubahan menu bawaan
+            tidak lagi ikut terbawa.
+          </p>
 
           <!-- Nilai uang: berdiri sendiri di atas daftar menu, bukan sebagai
                salah satu section, karena cakupannya berbeda — ini menyaring ISI
@@ -199,14 +240,27 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
                 >
                   <input type="checkbox" v-model="checked[m.key]" class="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500" />
                   <Icon :name="m.icon" size="h-4 w-4" class="shrink-0 text-ink-subtle" />
-                  <span class="text-sm text-ink-muted">{{ m.label }}</span>
+                  <span class="flex-1 text-sm text-ink-muted">{{ m.label }}</span>
+                  <!-- Penanda jatah peran: tanpa ini tak ada cara membedakan
+                       menu yang memang bawaan kasir/supervisor dari menu admin
+                       yang kebetulan sedang diberikan kepada mereka. -->
+                  <Badge
+                    v-for="peran in bawaanUntuk(m.key)"
+                    :key="peran"
+                    variant="neutral"
+                    class="shrink-0 text-[10px]"
+                    >{{ peran }}</Badge
+                  >
                 </label>
               </div>
             </section>
           </div>
 
           <div class="mt-5 flex items-center justify-between">
-            <p class="text-xs text-ink-subtle">Semua tercentang = akses penuh.</p>
+            <p class="text-xs text-ink-subtle">
+              Menyimpan tanpa satu centang pun akan mengembalikan akun ini ke menu
+              bawaan perannya — bukan mencabut semuanya.
+            </p>
             <Button :loading="saving" @click="save">Simpan</Button>
           </div>
         </template>

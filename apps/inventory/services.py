@@ -1137,6 +1137,41 @@ def stock_levels_kolumnar(profile, kd_divisi=None, date_to=None) -> dict:
     return _cached(profile, _divisi_kolumnar_key(date_to), build)
 
 
+def cek_stok(profile, cari: str, kd_divisi=None, limit=50) -> list[dict]:
+    """Cari barang, kembalikan barisnya saja — untuk layar Cek Stok kasir.
+
+    Menyaring payload kolumnar yang SUDAH dihitung, dicache, dan dihangatkan
+    scheduler, bukan menghitung ulang. Dua jalan lain sama-sama salah:
+    mengirim seluruh ~55rb baris ke ponsel kasir yang cuma ingin melihat satu
+    barang, atau menjalankan agregasi stok tiap kali seseorang mengetik.
+
+    Tanpa `kd_divisi` angkanya diruntuhkan per barang (stok seluruh divisi);
+    dengan `kd_divisi` ia per divisi — lihat catatan di stock_levels_kolumnar,
+    memilih divisi mengubah angkanya, bukan cuma menyaring baris.
+    """
+    cari = (cari or "").strip().upper()
+    if not cari:
+        return []
+    payload = stock_levels_kolumnar(profile, kd_divisi=kd_divisi)
+    cols, data, types = payload["cols"], payload["data"], payload["types"]
+    kamus = payload.get("dict", {})
+
+    def nilai(c, i):
+        v = data[c][i]
+        # Kolom "dict" dikirim sebagai indeks ke kamusnya; tanpa dibuka di sini
+        # yang tampil di layar adalah angka indeksnya, bukan nama barangnya.
+        return kamus[c][v] if types.get(c) == "dict" else v
+
+    kunci = [c for c in ("kd_barang", "barang", "nama") if c in cols]
+    hasil = []
+    for i in range(payload["n"]):
+        if any(cari in str(nilai(c, i) or "").upper() for c in kunci):
+            hasil.append({c: nilai(c, i) for c in cols})
+            if len(hasil) >= limit:
+                break
+    return hasil
+
+
 def barang_histori(profile, kd_barang=None, kd_divisi=None, date_from=None, date_to=None) -> list[dict]:
     """Movements list matching api_v_barang_histori view schema, plus a running
     base-unit `saldo` per (divisi, barang)."""

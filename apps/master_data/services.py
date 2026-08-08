@@ -35,6 +35,16 @@ def _st(value) -> str:
     return str(value).strip() if value is not None else ""
 
 
+def _k(value) -> str:
+    """Normalisasi kunci `kd_*` untuk dijodohkan di Python.
+
+    Collation MS SQL tak peduli besar-kecil huruf dan mengabaikan spasi ekor;
+    dict Python peduli keduanya. Tanpa ini 'MAA003 ' dan 'maa003' jadi dua kunci
+    berbeda dan barangnya tampil tanpa nama — diam-diam, tanpa satu pun galat.
+    Sejalan dengan _k() di apps/inventory/services.py."""
+    return str(value).strip().upper() if value is not None else ""
+
+
 def _is_retail(profile) -> bool:
     return profile.db_type == "retail"
 
@@ -120,6 +130,21 @@ def list_products(profile, search: str = "", kd_kategori: str = "") -> list[dict
         categories = _cached(
             profile, "categories", lambda: _key_map(cur, "SELECT kd_kategori, nama FROM m_kategori", "kd_kategori", "nama")
         )
+        # Empat lookup sisanya. Dulu hanya kategori yang di-join, jadi layar Master
+        # Produk memberi label manusiawi ("Merk", "Model") tapi mengikat ke kolom
+        # kode — operator melihat MAA003, bukan nama. Bentuknya mengikuti
+        # _barang_meta() di apps/inventory/services.py, yang sudah meresolusi
+        # kelimanya untuk layar Stok Akhir.
+        lookups = {
+            "jenis_bahan": _cached(profile, "jenis_bahan_names_k", lambda: _key_map_k(
+                cur, "SELECT kd_jenis_bahan, nama FROM m_jenis_bahan", "kd_jenis_bahan", "nama")),
+            "departemen": _cached(profile, "model_names_k", lambda: _key_map_k(
+                cur, "SELECT kd_model, nama FROM m_model", "kd_model", "nama")),
+            "divisi_barang": _cached(profile, "merk_names_k", lambda: _key_map_k(
+                cur, "SELECT kd_merk, nama FROM m_merk", "kd_merk", "nama")),
+            "sub_kategori": _cached(profile, "warna_names_k", lambda: _key_map_k(
+                cur, "SELECT kd_warna, nama FROM m_warna", "kd_warna", "nama")),
+        }
         satuan_names = _cached(
             profile, "satuan_names", lambda: _key_map(cur, "SELECT kd_satuan, nama FROM m_satuan", "kd_satuan", "nama")
         )
@@ -155,6 +180,12 @@ def list_products(profile, search: str = "", kd_kategori: str = "") -> list[dict
                 "kd_model": _st(b.get("kd_model")),
                 "kd_merk": _st(b.get("kd_merk")),
                 "kd_warna": _st(b.get("kd_warna")),
+                # Nama, bukan kode. Istilah layar mengikuti sebutan di toko:
+                # m_model = Departemen, m_merk = Divisi Barang, m_warna = Sub Kategori.
+                "jenis_bahan": _st(lookups["jenis_bahan"].get(_k(b.get("kd_jenis_bahan")))),
+                "departemen": _st(lookups["departemen"].get(_k(b.get("kd_model")))),
+                "divisi_barang": _st(lookups["divisi_barang"].get(_k(b.get("kd_merk")))),
+                "sub_kategori": _st(lookups["sub_kategori"].get(_k(b.get("kd_warna")))),
                 "ukuran": _st(b.get("ukuran")),
                 "keterangan": _st(b.get("keterangan")),
                 "pabrik": _st(b.get("pabrik")),
@@ -166,6 +197,86 @@ def list_products(profile, search: str = "", kd_kategori: str = "") -> list[dict
             }
         )
     return products
+
+
+# varchar(5) di m_divisi. Dibatasi huruf/angka karena nilainya jadi AWALAN
+# no_transaksi: spasi atau tanda baca di sana membuat nomor nota tak bisa lagi
+# dicocokkan dengan LIKE, dan itu jalan yang dipakai penomoran maupun laporan.
+_KEPALA_NOTA_RE = re.compile(r"^[A-Z0-9]{1,5}$")
+
+
+def list_kode_nota(profile) -> list[dict]:
+    """Kode nota (m_divisi.kepala_nota) per divisi — layar superadmin."""
+    with mssql.cursor(profile) as cur:
+        cur.execute(
+            "SELECT kd_divisi, nama, kepala_nota, status FROM m_divisi ORDER BY kd_divisi")
+        return [
+            {
+                "kd_divisi": _st(r["kd_divisi"]),
+                "nama": _st(r["nama"]),
+                "kepala_nota": _st(r["kepala_nota"]),
+                "aktif": _active(r["status"]),
+            }
+            for r in _dictify(cur)
+        ]
+
+
+def update_kepala_nota(profile, kd_divisi, kepala_nota) -> dict:
+    """Ubah kode nota satu divisi. Mengembalikan nilai lama & barunya.
+
+    Ini setelan yang menentukan awalan SETIAP nomor nota yang dibuat sesudahnya,
+    jadi nilai lamanya ikut dikembalikan untuk dicatat — kalau suatu hari ada
+    nota berawalan aneh, yang dicari pertama adalah kapan setelan ini berubah.
+
+    Mengubahnya TIDAK menyentuh nota yang sudah ada; urutan harian dihitung
+    dari awalan yang sedang berlaku, jadi mengganti kode di tengah hari memulai
+    urutan baru dari 0001 dan itu memang benar — deretan yang lama tetap utuh.
+    """
+    kd_divisi = _st(kd_divisi)
+    kepala = _st(kepala_nota).upper()
+    if not kd_divisi:
+        raise ValueError("Divisi wajib dipilih.")
+    if not _KEPALA_NOTA_RE.match(kepala):
+        raise ValueError(
+            "Kode nota hanya boleh huruf dan angka, 1-5 karakter, tanpa spasi.")
+
+    with mssql.cursor(profile, autocommit=False) as cur:
+        cur.execute("SELECT kepala_nota FROM m_divisi WHERE kd_divisi = ?", [kd_divisi])
+        baris = cur.fetchone()
+        # SELECT eksplisit, bukan cur.rowcount: trigger legacy membuat rowcount
+        # tak bisa dipercaya untuk menyimpulkan sebuah baris ada.
+        if not baris:
+            raise ValueError(f"Divisi {kd_divisi} tidak ada di server ini.")
+        lama = (baris[0] or "").strip()
+        cur.execute(
+            "UPDATE m_divisi SET kepala_nota = ? WHERE kd_divisi = ?", [kepala, kd_divisi])
+        cur.connection.commit()
+
+    invalidate_master_cache(profile.pk, prefix="divisi")
+    return {"kd_divisi": kd_divisi, "lama": lama, "baru": kepala}
+
+
+def list_userx(profile) -> list[dict]:
+    """User legacy (m_userx) untuk dropdown penautan di Manajemen User.
+
+    Transaksi menyimpan `kd_user`, bukan id user Arunika. Tanpa tautan ini nota
+    yang ditulis Arunika tak bisa dikenali laporan "Penjualan per User" — baik di
+    Arunika maupun di aplikasi POS lama.
+
+    Kolom sandi (`passwd`, `passweb`) SENGAJA tidak diambil. `passwd` menyimpan
+    sandi apa adanya, dan membacanya ke dalam proses ini saja sudah membuatnya
+    bisa bocor lewat log atau pesan galat. Yang dibutuhkan cuma kode dan nama.
+    """
+    with mssql.cursor(profile) as cur:
+        cur.execute("SELECT kd_user, nama, status FROM m_userx ORDER BY nama")
+        return [
+            {
+                "kd_user": _st(r["kd_user"]),
+                "nama": _st(r["nama"]),
+                "aktif": _active(r["status"]),
+            }
+            for r in _dictify(cur)
+        ]
 
 
 def list_categories(profile) -> list[dict]:
@@ -978,7 +1089,7 @@ def snapshot_harga_changes(profile) -> dict:
     return {"changes": len(changes), "seeded": len(new_states), "total": len(current)}
 
 
-# --- Sinkronisasi master data antar-server (m_barang/m_customer/m_supplier) -
+# --- Sinkronisasi master data antar-server (m_barang/m_customer) ------------
 
 # Kolom diverifikasi live via INFORMATION_SCHEMA.COLUMNS (bukan dari dump statis
 # scripts/output/schema.json — dump itu sempat keliru untuk m_supplier).
@@ -1001,13 +1112,15 @@ _SYNC_ENTITIES = {
                  "npwp_no", "nppkp_no", "npwp_nama", "npwp_alamat"],
         "label": "Pelanggan",
     },
-    "m_supplier": {
-        "table": "m_supplier",
-        "pk_cols": ["kd_supplier"],
-        "cols": ["kd_kota", "nama", "alamat", "telepon", "fax", "kontak", "hp", "email",
-                 "kd_bank", "rekening", "jenis", "keterangan"],
-        "label": "Supplier",
-    },
+    # m_supplier SENGAJA TIDAK ADA DI SINI. Supplier urusan GUDANG — gudang yang
+    # membeli, jadi gudang yang menyimpan daftar lengkapnya. Server toko
+    # grosir/ecer cuma memakai segelintir supplier miliknya sendiri (PAGESANGAN:
+    # 3 baris), jadi menyalin daftar gudang ke sana bukan "menyamakan master",
+    # tapi membanjiri layar pembelian toko dengan nama yang tak pernah dipakai.
+    # Sudah terjadi sekali dan harus dipulihkan manual dari PAGESANGAN.
+    # Aturan yang sama dipegang daftar-izin `feed_sync.FEED_TABLE_SPECS` untuk
+    # jalur otomatisnya. Mengelola supplier per server tetap bisa lewat Master
+    # Data (`master_crud`) — yang dilarang menyeberang, bukan mengedit.
 }
 
 
@@ -1015,8 +1128,14 @@ _SYNC_ENTITIES = {
 # (kolomnya banyak yang dipakai bersama antar entitas), hidup di sebelah
 # _SYNC_ENTITIES supaya kolom baru dan labelnya ditambah di tempat yang sama.
 COL_LABELS = {
-    "kd_kategori": "Kategori", "kd_jenis_bahan": "Jenis Bahan", "kd_model": "Model",
-    "kd_merk": "Merk", "kd_warna": "Warna", "ukuran": "Ukuran", "nama": "Nama",
+    # Nama kolom legacy tidak sama dengan sebutan di toko: m_model itu Departemen,
+    # m_merk itu Divisi Barang, m_warna itu Sub Kategori. Yang dilihat operator
+    # adalah sebutan tokonya.
+    "kd_kategori": "Kategori", "kd_jenis_bahan": "Jenis Bahan", "kd_model": "Departemen",
+    "kd_merk": "Divisi Barang", "kd_warna": "Sub Kategori",
+    "kategori": "Kategori", "jenis_bahan": "Jenis Bahan", "departemen": "Departemen",
+    "divisi_barang": "Divisi Barang", "sub_kategori": "Sub Kategori",
+    "ukuran": "Ukuran", "nama": "Nama",
     "keterangan": "Keterangan", "status": "Status", "status_pinjam": "Status Pinjam",
     "pabrik": "Pabrik", "kd_kota": "Kota", "alamat": "Alamat", "telepon": "Telepon",
     "fax": "Faks", "kontak": "Kontak", "hp": "HP", "email": "Email",
@@ -1121,3 +1240,14 @@ def _invalidate_inventory_cache(profile):
 def _key_map(cursor, sql, key, val) -> dict:
     cursor.execute(sql)
     return {r[key]: r[val] for r in _dictify(cursor)}
+
+
+def _key_map_k(cursor, sql, key, val) -> dict:
+    """_key_map dengan kunci ternormalisasi lewat _k(). Cari dengan _k() juga.
+
+    Dipakai lookup barang (model/merk/warna/jenis bahan). Kunci cache-nya sengaja
+    berbeda dari `_key_map`: entri "categories" dipakai dua pemanggil yang masih
+    mencocokkan kunci mentah, dan menormalisasi salah satunya saja membuat yang
+    lain menerima peta yang tak bisa ia cari."""
+    cursor.execute(sql)
+    return {_k(r[key]): r[val] for r in _dictify(cursor)}

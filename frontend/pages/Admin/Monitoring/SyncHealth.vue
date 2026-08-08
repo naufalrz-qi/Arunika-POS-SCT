@@ -51,14 +51,18 @@ const fanColumns = [
   { key: "dead_letter", label: "Dead-letter 24j", sortable: true, align: "right" },
 ];
 
+// Pusat tidak lagi diukur dengan "ketinggalan cursor" — `hub_pull` menyapu
+// rentang tanggal dan tidak punya cursor yang bisa tertinggal. Yang bisa basi
+// hanyalah kapan sapuan terakhir terjadi, dan `hari_beda` (berapa hari yang
+// ternyata tak cocok saat dibandingkan) adalah temuan, bukan derau.
 const hubColumns = [
   { key: "profile", label: "Cabang", sortable: true },
   { key: "kode_sumber", label: "Kode", sortable: true },
   { key: "status_label", label: "Status", sortable: true },
-  { key: "ketinggalan", label: "Ketinggalan", sortable: true, align: "right" },
-  { key: "cursor_id", label: "Posisi kita", sortable: true, align: "right" },
-  { key: "feed_id", label: "Ujung feed", sortable: true, align: "right" },
-  { key: "dead_letter", label: "Dead-letter 24j", sortable: true, align: "right" },
+  { key: "umur_menit", label: "Tarik terakhir", sortable: true, align: "right" },
+  { key: "hari_beda", label: "Hari beda", sortable: true, align: "right" },
+  { key: "arsip_selesai", label: "Arsip", sortable: true },
+  { key: "tutup_buku", label: "Tutup buku", sortable: true },
 ];
 
 /**
@@ -80,6 +84,11 @@ function umur(menit) {
 }
 
 const angka = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString("id-ID"));
+
+// Tanggal saja, tanpa jam: tutup buku selalu jatuh di 23:59:59 dan menampilkan
+// jamnya cuma menambah tujuh karakter yang sama di setiap baris.
+const tanggal = (v) =>
+  !v ? "—" : new Date(v).toLocaleDateString("id-ID", { year: "numeric", month: "short", day: "numeric" });
 
 const ringkas = computed(() => {
   const total = data.value.total || 0;
@@ -182,14 +191,16 @@ function muatUlang() {
           </Card>
         </template>
 
-        <!-- Pusat AMPHOREUS. Ukurannya berbeda dari job legacy: bukan antrean
-             yang menumpuk, tapi seberapa jauh cursor kita tertinggal dari ujung
-             feed cabang. -->
+        <!-- Pusat AMPHOREUS. Ukurannya berbeda dari job legacy DAN dari versi
+             sebelumnya: bukan antrean yang menumpuk, bukan pula ketinggalan
+             cursor feed. `hub_pull` menyapu rentang tanggal, jadi tak ada yang
+             bisa tertinggal — yang bisa basi hanyalah kapan sapuan terakhir
+             terjadi, dan berapa hari yang ternyata tak cocok saat dibandingkan. -->
         <template v-if="data.hub_rows && data.hub_rows.length">
           <div class="flex items-center justify-between gap-3 pt-2">
             <h2 class="text-sm font-semibold">Pusat {{ data.hub_nama }}</h2>
             <Badge :variant="data.hub_bermasalah ? 'warning' : 'success'">
-              {{ data.hub_bermasalah ? `${data.hub_bermasalah} cabang tertinggal` : "semua cabang terkejar" }}
+              {{ data.hub_bermasalah ? `${data.hub_bermasalah} cabang bermasalah` : "semua cabang tersapu" }}
             </Badge>
           </div>
           <Card>
@@ -204,14 +215,18 @@ function muatUlang() {
                 <Badge :variant="VARIAN[row.status] || 'neutral'">{{ row.status_label }}</Badge>
                 <span v-if="row.error" class="ml-2 text-xs text-ink-muted">{{ row.error }}</span>
               </template>
-              <template #cell-ketinggalan="{ row }">{{ angka(row.ketinggalan) }}</template>
-              <template #cell-cursor_id="{ row }">{{ angka(row.cursor_id) }}</template>
-              <template #cell-feed_id="{ row }">{{ angka(row.feed_id) }}</template>
-              <template #cell-dead_letter="{ row }">
-                <span :class="row.dead_letter ? 'text-danger-fg font-medium' : ''">
-                  {{ angka(row.dead_letter) }}
+              <template #cell-umur_menit="{ row }">{{ umur(row.umur_menit) }}</template>
+              <template #cell-hari_beda="{ row }">
+                <span :class="row.hari_beda ? 'text-warning-fg font-medium' : ''">
+                  {{ angka(row.hari_beda) }}
                 </span>
               </template>
+              <template #cell-arsip_selesai="{ row }">
+                <Badge :variant="row.arsip_selesai ? 'success' : 'neutral'">
+                  {{ row.arsip_selesai ? "selesai" : "belum" }}
+                </Badge>
+              </template>
+              <template #cell-tutup_buku="{ row }">{{ tanggal(row.tutup_buku) }}</template>
             </DataTable>
           </Card>
         </template>

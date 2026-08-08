@@ -15,6 +15,11 @@ defineProps({
   // diketik — kunci yang tak mengunci apa pun.
   disabled: { type: Boolean, default: false },
   maxlength: { type: [String, Number], default: undefined },
+  // Alasan yang sama dengan `disabled` di atas: akar komponen ini <label>, jadi
+  // `step`/`min` yang dioper sebagai attribute mendarat di label dan input-nya
+  // tetap step=1 — kotak pajak lalu MENOLAK 0,05 tanpa memberi tahu kenapa.
+  step: { type: [String, Number], default: undefined },
+  min: { type: [String, Number], default: undefined },
 });
 defineEmits(["update:modelValue"]);
 </script>
@@ -33,6 +38,8 @@ defineEmits(["update:modelValue"]);
       :required="required || undefined"
       :disabled="disabled || undefined"
       :maxlength="maxlength"
+      :step="step"
+      :min="min"
       :aria-invalid="error ? 'true' : undefined"
       @input="$emit('update:modelValue', $event.target.value)"
       :class="[

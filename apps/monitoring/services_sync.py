@@ -436,6 +436,69 @@ def hub_health_all(hub, sources) -> list[dict]:
     return baris
 
 
+# --- Kesehatan tarik-langsung (apps/transactions/hub_pull.py) --------------
+#
+# Menggantikan `hub_health_all` di halaman. Ukurannya beda dan itu justru intinya:
+# `hub_sync` diukur dengan KETINGGALAN (jarak cursor ke ujung feed), sementara
+# `hub_pull` tidak punya cursor dan tidak bisa tertinggal — ia menyapu rentang
+# tanggal. Satu-satunya yang bisa basi adalah KAPAN sapuan terakhir terjadi.
+#
+# Membiarkan bagian lama tetap tampil sesudah `hub_sync` dimatikan akan
+# membekukan angkanya di posisi terakhir sambil tetap terlihat hijau — persis
+# kegagalan senyap yang halaman ini dibuat untuk menghapuskan.
+PULL_OK_MENIT = 60
+PULL_LAMBAT_MENIT = 360
+
+
+def hub_pull_health_all(hub, sources) -> list[dict]:
+    """Status tarik-langsung tiap cabang ke pusat. Tanpa menyentuh MS SQL.
+
+    Semua angkanya sudah ada di SQLite (`HubPullState`), jadi bagian ini tidak
+    menambah satu pun round-trip ke sebelas server yang sudah disapu bagian
+    pertama halaman.
+    """
+    from apps.core.models import HubPullState
+
+    state = {
+        s.source_profile_id: s
+        for s in HubPullState.objects.filter(target_profile=hub)
+    }
+    sekarang = timezone.now()
+    baris = []
+    for src in sources:
+        s = state.get(src.pk)
+        r = {
+            "profile_id": src.pk,
+            "profile": src.name,
+            "kode_sumber": src.kode_sumber,
+            "tutup_buku": s.tutup_buku if s else None,
+            "arsip_selesai": bool(s and s.arsip_selesai_at),
+            "cocok_terakhir_at": s.cocok_terakhir_at if s else None,
+            "hari_beda": s.hari_beda if s else 0,
+            "segar_terakhir_at": s.segar_terakhir_at if s else None,
+            "umur_menit": None,
+            "rows_header": s.rows_header if s else 0,
+            "rows_detail": s.rows_detail if s else 0,
+            "rows_deleted": s.rows_deleted if s else 0,
+            "error": (s.error_message if s else "") or "",
+            "status": STATUS_LAMBAT,
+        }
+        if s is None or s.segar_terakhir_at is None:
+            # Belum pernah ditarik. Bukan sehat, bukan mati — belum mulai. Sama
+            # dengan perlakuan `hub_health` untuk cabang tanpa cursor.
+            r["error"] = r["error"] or "belum pernah tarik"
+        elif s.status == "failed":
+            r["status"] = STATUS_MATI
+        else:
+            umur = (sekarang - s.segar_terakhir_at).total_seconds() / 60.0
+            r["umur_menit"] = umur
+            r["status"] = _nilai_status(umur, PULL_OK_MENIT, PULL_LAMBAT_MENIT) or STATUS_OK
+        r["status_label"] = LABEL[r["status"]]
+        baris.append(r)
+    baris.sort(key=lambda x: (-_PERINGKAT[x["status"]], x["profile"]))
+    return baris
+
+
 def fanout_health_all(source, targets) -> list[dict]:
     """Kesehatan fan-out master data `source` -> tiap toko (apps/transactions/feed_sync.py).
 

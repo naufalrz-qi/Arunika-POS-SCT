@@ -109,6 +109,14 @@ class DaftarIzinTests(SimpleTestCase):
         Kalau nanti dibutuhkan, daftarkan dengan `columns` eksplisit — bukan None."""
         self.assertNotIn("m_barang_divisi", fs.FEED_TABLE_SPECS)
 
+    def test_m_supplier_tidak_didaftarkan(self):
+        """Supplier urusan gudang: gudang yang membeli, toko cuma memakai
+        segelintir supplier miliknya sendiri (PAGESANGAN: 3 baris). Kalau ini
+        pernah masuk daftar lagi, ratusan supplier gudang membanjiri layar
+        pembelian tiap toko — sudah terjadi sekali dan harus dipulihkan manual.
+        Ke AMPHOREUS tetap ikut lewat `hub_sync.SEED_TABLES`, itu jalur lain."""
+        self.assertNotIn("m_supplier", fs.FEED_TABLE_SPECS)
+
     def test_setiap_spec_punya_kolom_kunci(self):
         for tabel, spec in fs.FEED_TABLE_SPECS.items():
             self.assertTrue(spec.get("key_columns"), tabel)

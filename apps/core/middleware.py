@@ -11,6 +11,11 @@ from apps.core.menus import landing_for, menu_key_for_path, menus_for
 # Paths reachable without authentication.
 PUBLIC_PREFIXES = ("/login", "/static", "/@vite", "/favicon")
 ADMIN_PREFIX = "/admin-panel"
+# Halaman harian kasir/supervisor. Prefix terpisah supaya penjaga Tailscale tetap
+# menutup rapat /admin-panel tanpa perlu dilonggarkan: kasir di toko tidak berada
+# di rentang CGNAT Tailscale, dan melonggarkan penjaganya demi mereka akan
+# membuka juga layar Manajemen User dan Koneksi Server.
+POS_PREFIX = "/kasir"
 
 # Admin-panel paths every admin-tier user may hit regardless of menu grants:
 # the navbar connection switcher lives on every page, so it must keep working
@@ -46,7 +51,15 @@ def inertia_share(get_response):
         # another user could change. Cleared in finally so the pooled thread never
         # carries a choice into the next request.
         session = getattr(request, "session", None)
-        mssql.set_request_profile_id(session.get("active_profile_id") if session else None)
+        # Kasir/supervisor DIKUNCI ke server yang ditetapkan untuk akunnya dan
+        # tak bisa berpindah lewat sesi. Koneksi menentukan ke server toko MANA
+        # sebuah nota tertulis; nota yang masuk ke cabang salah tak bisa ditarik
+        # karena trigger legacy langsung mengirimkannya ke pusat.
+        if user is not None and getattr(user, "is_authenticated", False) \
+                and getattr(user, "koneksi_terkunci", False):
+            mssql.set_request_profile_id(user.server_profile_id, strict=True)
+        else:
+            mssql.set_request_profile_id(session.get("active_profile_id") if session else None)
 
         def active_connection():
             # Lazy: only hit the DB on Inertia renders, not asset/XHR noise.
@@ -56,6 +69,12 @@ def inertia_share(get_response):
         def connections_list():
             from apps.connections.models import ServerProfile
 
+            if user is not None and getattr(user, "is_authenticated", False)                     and getattr(user, "koneksi_terkunci", False):
+                # Hanya miliknya sendiri: pemilih koneksi di navbar jadi tak
+                # punya apa pun untuk dipindah. Penjagaan sebenarnya tetap di
+                # server (connections_set_default) — ini supaya layarnya jujur.
+                p = user.server_profile
+                return [p.as_dict()] if p else []
             return [p.as_dict() for p in ServerProfile.objects.all()]
 
         share(
@@ -107,22 +126,34 @@ def _ip_allowed(ip: str) -> bool:
 
 
 def admin_network_guard(get_response):
-    """PRD §3.4/§7.6 — /admin-panel/* requires Admin-tier role and (optionally)
-    a Tailscale-range source IP. PRD §4.3 — per-menu grants (allowed_menu_keys)
-    are enforced here too, not just in the sidebar, so a restricted admin can't
-    reach revoked menus by typing the URL."""
+    """PRD §3.4/§7.6 — /admin-panel/* dan /kasir/* butuh menu yang diberikan, dan
+    khusus /admin-panel/* juga alamat IP dari rentang Tailscale.
+
+    Dulu di sini berdiri tembok berbasis peran (`is_admin_tier`). Ia diganti
+    penjagaan berbasis MENU karena keduanya menjawab pertanyaan yang berbeda:
+    peran menentukan bawaan seseorang, menu menentukan apa yang boleh ia buka.
+    Selama tembok peran masih ada, superadmin yang memberikan satu menu laporan
+    kepada supervisor tetap tidak menghasilkan apa-apa — orangnya ditolak
+    sebelum pemeriksaan menu sempat berjalan.
+
+    PRD §4.3 — pemberian per-menu ditegakkan di sini, bukan cuma di sidebar,
+    supaya menu yang dicabut tidak bisa dicapai dengan mengetik URL-nya."""
 
     def middleware(request):
-        if request.path.startswith(ADMIN_PREFIX):
+        path = request.path
+        di_admin = path.startswith(ADMIN_PREFIX)
+        if di_admin or path.startswith(POS_PREFIX):
             user = getattr(request, "user", None)
-            if not (user and user.is_authenticated and user.is_admin_tier):
+            if not (user and user.is_authenticated) or not menus_for(user):
                 return ditolak(
                     request,
                     "Halaman ini bukan untuk akun Anda",
-                    "Akun Anda dipakai di aplikasi kasir, bukan di halaman pengaturan "
-                    "ini. Kalau seharusnya bisa, minta pengelola aplikasi membukanya.",
+                    "Belum ada satu pun halaman yang dibuka untuk akun Anda. "
+                    "Minta pengelola aplikasi membukanya.",
                 )
-            if settings.ENFORCE_TAILSCALE:
+            # Tailscale hanya untuk panel pengaturan. Halaman kasir justru harus
+            # bisa dibuka dari jaringan toko.
+            if di_admin and settings.ENFORCE_TAILSCALE:
                 ip = request.META.get("REMOTE_ADDR", "")
                 if not _ip_allowed(ip):
                     return ditolak(

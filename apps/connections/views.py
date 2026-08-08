@@ -82,6 +82,13 @@ def connections_delete(request, conn_id):
 
 
 def connections_set_default(request, conn_id):
+    # Akun toko dikunci ke satu server. Tanpa penjagaan DI SINI, rute ini tetap
+    # bisa dipanggil langsung — ia sengaja dikecualikan dari pemeriksaan menu
+    # (_MENU_EXEMPT_RE) supaya navbar tetap hidup bagi yang memang boleh pindah.
+    if getattr(request.user, "koneksi_terkunci", False):
+        request.session["flash_error"] = (
+            "Akun Anda terikat pada satu server dan tak bisa berpindah koneksi.")
+        return redirect(request.META.get("HTTP_REFERER") or "/")
     # Per-user: store the pick in THIS user's session only, so switching a
     # connection no longer changes it for everyone. The global is_default remains
     # the fallback for background jobs (scheduler / manage.py) that have no session.

@@ -265,6 +265,32 @@ def _terapkan_header(hub_cur, tabel, spec, kd_sumber, kunci, nilai, kolom_ada) -
     )
 
 
+def bind_varchar(cur, jumlah: int, panjang: int = 50):
+    """Paksa parameter string diikat sebagai VARCHAR, bukan NVARCHAR.
+
+    pyodbc mengikat `str` Python sebagai NVARCHAR, sementara SELURUH kolom kunci
+    legacy bertipe `varchar`/`char`. Perbandingannya jadi konversi implisit, dan
+    konversi implisit di sisi KOLOM membuat index seek tidak terpakai — SQL
+    Server memindai tabel sekali untuk TIAP nilai di daftar `IN`.
+
+    Terukur di ANDARIA (`t_penjualan_detail`, 1.462.929 baris, index ada di
+    `no_transaksi`), ongkosnya linear terhadap jumlah parameter (~0,125 dtk per
+    nilai), yang justru tanda scan berulang dan bukan round-trip jaringan:
+
+        IN(50)  apa adanya          6,23 dtk
+        IN(50)  + bind VARCHAR      0,01 dtk
+        IN(500) + bind VARCHAR      0,18 dtk
+
+    Tanpa ini, satu batch 500 nota melewati `POS_QUERY_TIMEOUT` 60 detik dan
+    seluruh sync cabang itu gagal — dan gagalnya di jalur yang cuma jalan lewat
+    WAN, jadi tak akan pernah terlihat saat menguji ke server lokal.
+
+    Wajib direset (`setinputsizes(None)`) sesudah dipakai: ikatannya menempel di
+    cursor dan execute berikutnya dengan jumlah parameter berbeda akan salah.
+    """
+    cur.setinputsizes([(pyodbc.SQL_VARCHAR, panjang, 0)] * jumlah)
+
+
 def _ambil_ulang_detail(src_cur, hub_cur, tabel, parent_key, kd_sumber, parents, kolom_ada) -> int:
     """Untuk tiap nota yang tersentuh: hapus semua baris pusat, salin ulang dari cabang.
 
@@ -276,18 +302,30 @@ def _ambil_ulang_detail(src_cur, hub_cur, tabel, parent_key, kd_sumber, parents,
         return 0
     boleh = [k for k in kolom_ada if k != KOL_SUMBER]
     daftar = list(parents)
-    for nilai_parent in daftar:
-        hub_cur.execute(
-            f"DELETE FROM [{tabel}] WHERE [{KOL_SUMBER}] = ? AND [{parent_key}] = ?",
-            [kd_sumber, nilai_parent],
-        )
+    # SATU delete untuk seluruh batch, bukan satu per nota. Bentuk lama mengirim
+    # 500 round-trip untuk 500 nota; lewat Tailscale yang me-relay ke Singapura
+    # itu bagian terbesar dari ongkos menyalin riwayat. `bind_varchar` wajib di
+    # sini karena alasan yang sama dengan SELECT di bawah.
     placeholders = ", ".join("?" * len(daftar))
-    src_cur.execute(
-        f"SELECT {', '.join(f'[{k}]' for k in boleh)} FROM [{tabel}] "
-        f"WHERE [{parent_key}] IN ({placeholders})",
-        daftar,
-    )
-    baris = src_cur.fetchall()
+    bind_varchar(hub_cur, len(daftar) + 1)
+    try:
+        hub_cur.execute(
+            f"DELETE FROM [{tabel}] WHERE [{KOL_SUMBER}] = ? AND "
+            f"[{parent_key}] IN ({placeholders})",
+            [kd_sumber] + daftar,
+        )
+    finally:
+        hub_cur.setinputsizes(None)
+    bind_varchar(src_cur, len(daftar))
+    try:
+        src_cur.execute(
+            f"SELECT {', '.join(f'[{k}]' for k in boleh)} FROM [{tabel}] "
+            f"WHERE [{parent_key}] IN ({placeholders})",
+            daftar,
+        )
+        baris = src_cur.fetchall()
+    finally:
+        src_cur.setinputsizes(None)
     if baris:
         sql = (
             f"INSERT INTO [{tabel}] ([{KOL_SUMBER}], " + ", ".join(f"[{k}]" for k in boleh) + ") "
