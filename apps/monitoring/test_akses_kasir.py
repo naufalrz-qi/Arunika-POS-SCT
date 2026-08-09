@@ -88,7 +88,7 @@ class MenuKhususAdminTests(TestCase):
     layar mana pun yang bisa menariknya kembali.
     """
 
-    KUNCI = ("opname", "opname_neraca")
+    KUNCI = ("opname", "koreksi_stok", "opname_neraca")
 
     def setUp(self):
         self.spv = User.objects.create_user("spv7", password="rahasia-kuat-123", role=Role.SUPERVISOR)

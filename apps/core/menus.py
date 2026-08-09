@@ -65,12 +65,14 @@ ALL_MENUS = [
     {"key": "stok_akhir", "label": "Mutasi Stok", "icon": "refresh", "href": "/admin-panel/inventory/mutasi-stok", "section": "stok"},
     {"key": "stok_awal", "label": "Stok Awal Barang", "icon": "box", "href": "/admin-panel/inventory/stok-awal", "section": "stok"},
     {"key": "transaksi_barang", "label": "Transaksi Barang", "icon": "list", "href": "/admin-panel/inventory/transaksi", "section": "stok"},
-    # "admin_only": kedua layar opname khusus admin/superadmin, dan itu bukan
-    # sekadar bawaan yang bisa dilonggarkan lewat Kelola Menu. Halaman Opname
-    # Stok kini juga MENULIS koreksi stok: satu baris di t_opname_stok langsung
-    # menggeser stok lewat trigger dan terkirim ke pusat, dan tak ada layar mana
-    # pun yang bisa menariknya kembali.
+    # "admin_only": ketiga layar opname khusus admin/superadmin, dan itu bukan
+    # sekadar bawaan yang bisa dilonggarkan lewat Kelola Menu. Koreksi Stok
+    # MENULIS: satu baris di t_opname_stok langsung menggeser stok lewat trigger
+    # dan terkirim ke pusat, dan tak ada layar mana pun yang bisa menariknya
+    # kembali. Kedua layar laporannya ikut dikunci karena mereka memperlihatkan
+    # selisih yang jadi dasar koreksi itu.
     {"key": "opname", "label": "Opname Stok", "icon": "clipboard", "href": "/admin-panel/inventory/opname", "section": "stok", "admin_only": True},
+    {"key": "koreksi_stok", "label": "Koreksi Stok", "icon": "pencil", "href": "/admin-panel/inventory/koreksi-stok", "section": "stok", "admin_only": True},
     # Section "stok" sudah cukup: "Operasional" bukan section backend, melainkan
     # tab navbar (useNav.js) yang menggabungkan stok+promo+kas. Rute /export,
     # /detail, dan /save mewarisi menu key ini lewat pencocokan prefix di

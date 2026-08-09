@@ -50,10 +50,11 @@ urlpatterns = [
     path("inventory/transaksi/export", views.transaksi_barang_export, name="transaksi_barang_export"),
     path("inventory/opname", views.opname, name="opname"),
     path("inventory/opname/export", views.opname_export, name="opname_export"),
-    # Koreksi stok — di bawah prefix opname supaya penjagaan menunya ikut.
-    path("inventory/opname/save", views.opname_save, name="opname_save"),
-    path("inventory/opname/cari-barang", views.opname_cari_barang, name="opname_cari_barang"),
-    path("inventory/opname/satuan", views.opname_satuan, name="opname_satuan"),
+    # Koreksi stok — halaman sendiri, satu-satunya jalur tulis ke t_opname_stok.
+    path("inventory/koreksi-stok", views.koreksi_stok_index, name="koreksi_stok"),
+    path("inventory/koreksi-stok/save", views.koreksi_stok_save, name="koreksi_stok_save"),
+    path("inventory/koreksi-stok/cari", views.koreksi_stok_cari, name="koreksi_stok_cari"),
+    path("inventory/koreksi-stok/satuan", views.koreksi_stok_satuan, name="koreksi_stok_satuan"),
     path("inventory/opname-neraca", views.opname_neraca, name="opname_neraca"),
     path("inventory/opname-neraca/export", views.opname_neraca_export, name="opname_neraca_export"),
     path("inventory/opname-neraca/detail", views.opname_neraca_detail, name="opname_neraca_detail"),

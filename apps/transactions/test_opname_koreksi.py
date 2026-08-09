@@ -17,9 +17,9 @@ from django.test import SimpleTestCase
 from apps.transactions import opname as op
 
 ITEMS = [
-    {"kd_barang": "000-06", "kd_satuan": "SAA000", "qty": 2, "arah": "kurang"},
-    {"kd_barang": "1001", "kd_satuan": "SAA001", "qty": 5, "arah": "lebih"},
-    {"kd_barang": "3360C", "kd_satuan": "SAA000", "qty": 1, "arah": "kurang"},
+    {"kd_barang": "000-06", "kd_satuan": "SAA000", "qty": 2, "jenis": "lain_minus"},
+    {"kd_barang": "1001", "kd_satuan": "SAA001", "qty": 5, "jenis": "lain_plus"},
+    {"kd_barang": "3360C", "kd_satuan": "SAA000", "qty": 1, "jenis": "lain_minus"},
 ]
 
 
@@ -118,13 +118,30 @@ class SatuBarisPerInsertTests(SimpleTestCase):
 
 
 class BentukBarisTests(SimpleTestCase):
-    def test_arah_dipetakan_ke_status_yang_dibaca_trigger(self):
-        """status=2 menambah stok; selain itu trigger mengalikan qty dengan -1."""
+    def test_jenis_dipetakan_ke_status_menurut_view_legacy(self):
+        """Angkanya bukan pilihan kita — view `mon_t_opname_stok` yang memberi
+        nama: 0 Hilang, 1 Rusak, 2 Lain-Lain(+), 3 Lain-Lain(−)."""
+        self.assertEqual(op.JENIS, {"hilang": 0, "rusak": 1,
+                                    "lain_plus": 2, "lain_minus": 3})
+
+    def test_hanya_lain_plus_yang_menambah_stok(self):
+        """Trigger: `IF @status <> 2 SET @jumlah = @jumlah * -1`. Jadi Hilang,
+        Rusak, dan Lain-Lain(−) sama-sama mengurangi — arah tak boleh jadi
+        pilihan terpisah, atau "Rusak, stok bertambah" jadi mungkin."""
+        self.assertEqual(op.JENIS[op.MENAMBAH], 2)
+        for jenis in ("hilang", "rusak", "lain_minus"):
+            self.assertNotEqual(op.JENIS[jenis], 2, jenis)
+
+    def test_status_yang_ditulis_ikut_jenis_tiap_baris(self):
         cur = FakeCursor()
         _buat(cur)
         status = [_nilai(p, "status") for _, p in _insert(cur)]
-        self.assertEqual(status, [op.KELUAR, op.MASUK, op.KELUAR])
-        self.assertEqual(op.MASUK, 2)
+        self.assertEqual(status, [op.LAIN_MINUS, op.LAIN_PLUS, op.LAIN_MINUS])
+
+    def test_status_4_tak_pernah_ditulis(self):
+        """Ia ada di data lama (1 baris di PAGESANGAN) tapi tak punya label di
+        view legacy sama sekali — sampah, bukan jenis kelima."""
+        self.assertNotIn(4, op.JENIS.values())
 
     def test_tanggal_server_ikut_ditulis(self):
         """Kolomnya tak punya default; 0 dari 4.917 baris lama bernilai NULL."""
@@ -147,7 +164,7 @@ class BentukBarisTests(SimpleTestCase):
         cur2 = FakeCursor()
         self.assertTrue(_buat(cur2, kd_divisi="DAA001")["nomor"][0].startswith("GP"))
 
-    def test_qty_ditulis_positif_apa_pun_arahnya(self):
+    def test_qty_ditulis_positif_apa_pun_jenisnya(self):
         """Tandanya ada di `status`, bukan di qty — trigger yang membalik."""
         cur = FakeCursor()
         _buat(cur)
@@ -197,14 +214,14 @@ class ValidasiTests(SimpleTestCase):
     def test_qty_nol_ditolak(self):
         with self.assertRaises(ValueError):
             op._periksa([{"kd_barang": "X", "kd_satuan": "SAA000", "qty": 0,
-                          "arah": "lebih"}], "UAA002")
+                          "jenis": "lain_plus"}], "UAA002")
 
     def test_qty_bukan_angka_ditolak_dengan_kalimat_yang_bisa_dibaca(self):
         """`float()` telanjang melempar pesan Python yang tak berarti apa-apa
         bagi orang yang sedang menghitung rak."""
         with self.assertRaises(ValueError) as ctx:
             op._periksa([{"kd_barang": "X", "kd_satuan": "SAA000", "qty": "dua",
-                          "arah": "lebih"}], "UAA002")
+                          "jenis": "lain_plus"}], "UAA002")
         self.assertIn("bukan angka", str(ctx.exception))
         self.assertNotIn("could not convert", str(ctx.exception))
 
@@ -216,11 +233,13 @@ class ValidasiTests(SimpleTestCase):
         """kd_satuan menentukan BESAR pergeseran stok — 1 DUS bukan 1 PCS."""
         with self.assertRaises(ValueError):
             op._periksa([{"kd_barang": "X", "kd_satuan": "", "qty": 1,
-                          "arah": "lebih"}], "UAA002")
+                          "jenis": "lain_plus"}], "UAA002")
 
-    def test_arah_asing_ditolak(self):
+    def test_jenis_asing_ditolak(self):
         """Nilai `status` tak boleh datang mentah dari layar: 2 dan bukan-2
-        adalah selisih antara stok bertambah dan stok berkurang."""
-        with self.assertRaises(ValueError):
-            op._periksa([{"kd_barang": "X", "kd_satuan": "SAA000", "qty": 1,
-                          "arah": "2"}], "UAA002")
+        adalah selisih antara stok bertambah dan stok berkurang. Angka "2"
+        sebagai teks pun ditolak — layar mengirim nama jenis, bukan kodenya."""
+        for jahat in ("2", "", "4", "lain-lain"):
+            with self.assertRaises(ValueError, msg=jahat):
+                op._periksa([{"kd_barang": "X", "kd_satuan": "SAA000", "qty": 1,
+                              "jenis": jahat}], "UAA002")

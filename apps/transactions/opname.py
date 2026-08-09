@@ -41,10 +41,35 @@ import datetime as dt
 from apps.transactions.penomoran import awalan_untuk, no_berikutnya, simpan_dengan_nomor
 from core import mssql
 
-# Arah koreksi seperti yang dibaca trigger. Bukan pilihan gaya: lihat (4).
-MASUK = 2   # stok fisik LEBIH dari sistem — stok ditambah
-KELUAR = 3  # stok fisik KURANG dari sistem — stok dikurangi
-ARAH = {"lebih": MASUK, "kurang": KELUAR}
+# Empat jenis koreksi. Labelnya BUKAN karangan kita — ia terbaca di view
+# `mon_t_opname_stok` milik aplikasi legacy:
+#
+#   status = CASE t_opname_stok.status
+#              WHEN 0 THEN 'Hilang'  WHEN 1 THEN 'Rusak'
+#              WHEN 2 THEN 'Lain-Lain(+)'  WHEN 3 THEN 'Lain-Lain (-)' END
+#
+# Arahnya TIDAK dipilih terpisah, melainkan melekat pada jenisnya, karena
+# trigger yang memutuskan: `IF @status <> 2 SET @jumlah = @jumlah * -1`. Jadi
+# hanya Lain-Lain(+) yang menambah stok; tiga sisanya mengurangi. Menyediakan
+# pilihan arah sendiri berarti mengizinkan "Rusak, stok bertambah".
+#
+# Bahwa jenisnya perlu berlabel jelas bukan dugaan: di gudang ada 30 baris
+# ber-status 3 (Lain-Lain −) yang keterangannya diketik "RUSAK" — operator
+# memilih jenis yang salah lalu menuliskan maksudnya sebagai teks bebas.
+HILANG, RUSAK, LAIN_PLUS, LAIN_MINUS = 0, 1, 2, 3
+JENIS = {
+    "hilang": HILANG,
+    "rusak": RUSAK,
+    "lain_plus": LAIN_PLUS,
+    "lain_minus": LAIN_MINUS,
+}
+# Satu-satunya jenis yang menambah stok. Dipakai layar untuk memilih jenis
+# bawaan dari tanda selisih, dan di sini untuk menyusun ringkasan.
+MENAMBAH = "lain_plus"
+
+# Nilai `status` lain pernah ada di data lama (mis. 4 — satu baris di
+# PAGESANGAN) tapi TIDAK punya label di view legacy sama sekali. Ia sampah,
+# bukan jenis kelima; jangan ditulis lagi.
 
 # `keterangan` bertipe varchar(50). Menyimpan yang lebih panjang ditolak SQL
 # Server dengan galat yang tak berarti apa-apa bagi operator, jadi dipotong di
@@ -90,10 +115,10 @@ def _periksa(items, kd_user: str) -> None:
                 f"berapa unit stok yang bergeser, jadi ia tak boleh ditebak.")
         if _qty(it) <= 0:
             raise ValueError(f"Qty barang {it.get('kd_barang')} harus lebih dari nol.")
-        if str(it.get("arah") or "") not in ARAH:
+        if str(it.get("jenis") or "") not in JENIS:
             raise ValueError(
-                f"Arah koreksi barang {it.get('kd_barang')} belum dipilih "
-                f"(Lebih atau Kurang).")
+                f"Jenis koreksi barang {it.get('kd_barang')} belum dipilih "
+                f"(Hilang, Rusak, Lain-Lain + atau Lain-Lain −).")
 
 
 def _periksa_divisi(cur, kd_divisi: str) -> str:
@@ -158,7 +183,7 @@ def buat_koreksi(profile, *, kd_user, kd_divisi, items, keterangan, tanggal=None
                 "qty": _qty(it),
                 "keterangan": catatan,
                 "kd_user": kd_user,
-                "status": ARAH[it["arah"]],
+                "status": JENIS[it["jenis"]],
                 # Tak ada default constraint di kolom ini, tapi 0 dari 4.917
                 # baris lama bernilai NULL — aplikasi POS lama menulisnya
                 # sendiri. Jebakan yang sama dengan t_penjualan_order.

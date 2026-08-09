@@ -39,7 +39,6 @@ from apps.core.models import (
 from apps.inventory import services as inv
 from apps.master_data import master_crud
 from apps.transactions import opname as opname_tulis
-from apps.transactions.penjualan import cari_barang as _cari_barang
 from apps.transactions.penjualan import opsi_nota as _opsi_nota
 from apps.transactions.penjualan import satuan_barang as _satuan_barang
 from apps.master_data import services as master
@@ -2583,12 +2582,8 @@ _OPNAME = {
     "filter_keys": ["kd_divisi"],
     "options": lambda p: {"divisi": _opt_divisi(p)},
     "filename": "opname",
-    # Layar ini juga MENULIS koreksi stok, dan t_opname_stok.kd_user NOT NULL.
-    # Dikirim supaya layar bisa mengatakan "akun belum ditautkan" sebelum
-    # operator mengisi sepuluh baris, bukan sesudahnya. Tautan koneksi AKTIF:
-    # admin berpindah server, dan kode legacy berbeda artinya di tiap server.
-    "extra_props": lambda request: {
-        "kd_user": tautan_untuk(request.user, _active()).kd_user},
+    # Layar ini murni laporan. Jalur tulisnya pindah ke halaman Koreksi Stok —
+    # satu sesi balancing menyentuh ratusan baris dan tak muat di modal.
     "columns": [{"key": "no_transaksi", "label": "No. Opname"}, {"key": "tanggal", "label": "Tanggal", "format": "date"}, {"key": "divisi", "label": "Divisi"}, {"key": "kd_barang", "label": "Kd. Barang"}, {"key": "barang", "label": "Barang"}, {"key": "koreksi_masuk", "label": "Koreksi Masuk", "format": "number"}, {"key": "koreksi_keluar", "label": "Koreksi Keluar", "format": "number"}, {"key": "diferensi", "label": "Diferensi", "format": "number"}],
 }
 opname = _report_view(_OPNAME)
@@ -2729,20 +2724,90 @@ def _bukan_admin(request):
     )
 
 
-def opname_cari_barang(request):
-    """Cari barang untuk baris koreksi. Memakai ulang pencarian layar kasir."""
+def koreksi_stok_index(request):
+    """Layar koreksi stok — grid ala aplikasi desktop.
+
+    Halaman sendiri, bukan modal di layar Opname: satu sesi balancing menyentuh
+    ratusan baris (terukur di gudang: 410 baris ber-keterangan sama dalam satu
+    sesi), dan itu tak muat di kotak dialog.
+
+    Daftar barangnya TIDAK dikirim di muka. Universe barang×divisi ~55rb baris
+    sudah pernah membunuh halaman Stok Akhir sebagai tabel baca-saja (15,6 MB
+    JSON, tak pernah selesai dimuat di Firefox Android); grid dengan kotak isian
+    di tiap baris jauh lebih berat lagi. Barisnya masuk lewat pencarian.
+    """
+    if (denied := _bukan_admin(request)):
+        return denied
+
+    def muat():
+        profile = _active()
+        if not profile:
+            return {"divisi": [], "conn_error": CONN_ERROR}
+        try:
+            return {"divisi": inv.list_divisi(profile), "conn_error": None}
+        except pyodbc.Error as exc:
+            return {"divisi": [],
+                    "conn_error": mssql.friendly_error(exc, "Gagal membaca divisi")}
+
+    return render(request, "Admin/Inventory/KoreksiStok", props={
+        "awal": defer(muat),
+        # Kosong = akun ini belum ditautkan untuk koneksi aktif. Dikirim supaya
+        # layar mengatakannya sebelum operator mengisi lima puluh baris.
+        "kd_user": tautan_untuk(request.user, _active()).kd_user,
+        "jenis": [
+            # Label dari view legacy `mon_t_opname_stok`, bukan karangan kita.
+            # `menambah` dipakai layar untuk memilih jenis bawaan dari tanda
+            # selisih — arah tak pernah jadi pilihan terpisah.
+            {"value": "lain_plus", "label": "Lain-Lain (+)", "menambah": True},
+            {"value": "lain_minus", "label": "Lain-Lain (−)", "menambah": False},
+            {"value": "rusak", "label": "Rusak", "menambah": False},
+            {"value": "hilang", "label": "Hilang", "menambah": False},
+        ],
+        "batas_muat": _BATAS_MUAT,
+    })
+
+
+# Batas "muat sekaligus". Bukan angka bulat yang dikarang: satu sesi balancing
+# terbesar di data gudang menyentuh ~410 baris sejenis, jadi 300 baris cukup
+# untuk satu rak sekali tarik tanpa mendekati ukuran yang dulu membekukan
+# halaman Stok Akhir. Terpotong? Layar mengatakannya, tidak diam-diam.
+_BATAS_MUAT = 300
+
+
+def koreksi_stok_cari(request):
+    """Barang + STOK SISTEM-nya, untuk masuk ke grid.
+
+    Menyaring payload kolumnar yang sudah dihitung, dicache, dan dihangatkan
+    scheduler (`inv.cek_stok`) — bukan query baru. Karena itu menampilkan stok
+    di tiap baris tak menambah biaya apa pun.
+
+    `limit` membedakan dua pemakaian dari satu endpoint: daftar saran di bawah
+    kotak cari (kecil), dan tombol "muat sekaligus" yang memasukkan seluruh
+    hasil filter ke grid (sampai _BATAS_MUAT).
+    """
     profile = _active()
     if not profile:
         return JsonResponse({"rows": [], "error": CONN_ERROR})
     try:
-        rows = _cari_barang(profile, request.GET.get("cari") or "")
-        return JsonResponse({"rows": _harga_dibuang(rows)})
+        limit = min(int(request.GET.get("limit") or 20), _BATAS_MUAT)
+    except ValueError:
+        limit = 20
+    try:
+        rows = inv.cek_stok(
+            profile,
+            request.GET.get("cari") or "",
+            kd_divisi=(request.GET.get("kd_divisi") or "").strip() or None,
+            # Satu lebih banyak dari yang diminta: itulah cara tahu hasilnya
+            # terpotong tanpa menghitung ulang seluruh universe.
+            limit=limit + 1,
+        )
     except pyodbc.Error as exc:
         return JsonResponse(
             {"rows": [], "error": mssql.friendly_error(exc, "Gagal mencari barang")})
+    return JsonResponse({"rows": rows[:limit], "terpotong": len(rows) > limit})
 
 
-def opname_satuan(request):
+def koreksi_stok_satuan(request):
     """Satuan-satuan sebuah barang, untuk mengganti satuan baris koreksi.
 
     Satuan bukan hiasan di sini: `sp_update_stok_akhir` menerima kd_satuan dan
@@ -2760,10 +2825,10 @@ def opname_satuan(request):
 
 
 @require_POST
-def opname_save(request):
+def koreksi_stok_save(request):
     if (denied := _bukan_admin(request)):
         return denied
-    kembali = "/admin-panel/inventory/opname"
+    kembali = "/admin-panel/inventory/koreksi-stok"
     data = get_data(request)
     profile = _active()
     if not profile:
@@ -2797,10 +2862,15 @@ def opname_save(request):
             else mssql.friendly_error(exc, "Gagal menyimpan koreksi stok"))
         return redirect(kembali)
 
-    nomor = ", ".join(hasil["nomor"])
-    log_activity(request, "opname", f"Koreksi stok {hasil['baris']} baris — {nomor}")
+    # Nomornya bisa ratusan dalam satu sesi balancing — yang dicatat di log
+    # rentangnya, dan pesan di layar cuma jumlahnya. Daftar 410 nomor di toast
+    # tak terbaca oleh siapa pun.
+    nomor = hasil["nomor"]
+    rentang = nomor[0] if len(nomor) == 1 else f"{nomor[0]}–{nomor[-1]}"
+    log_activity(request, "koreksi_stok",
+                 f"Koreksi stok {hasil['baris']} baris — {rentang}")
     request.session["flash_success"] = (
-        f"Koreksi stok tersimpan: {hasil['baris']} baris ({nomor}).")
+        f"Koreksi stok tersimpan: {hasil['baris']} baris ({rentang}).")
     return redirect(kembali)
 
 
