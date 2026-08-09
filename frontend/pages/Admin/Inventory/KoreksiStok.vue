@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, reactive, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { Deferred, useForm } from "@inertiajs/vue3";
 import axios from "axios";
 import AdminLayout from "@/layouts/AdminLayout.vue";
@@ -10,17 +10,24 @@ import Select from "@/components/ui/Select.vue";
 import Banner from "@/components/ui/Banner.vue";
 import LoadingCard from "@/components/ui/LoadingCard.vue";
 import { useGridNav } from "@/composables/useGridNav";
-import { useSatuan } from "@/composables/useSatuan";
 
 // Grid ala aplikasi desktop: seluruh sel dijelajahi dengan panah + Enter, dan
-// baris masuk lewat kotak pindai di bagian bawah tabel — bentuk yang sama
-// dengan layar nota kasir, mesinnya pun sama (useGridNav).
+// baris baru masuk lewat kotak pindai. Mesin navigasinya useGridNav, sama
+// dengan layar nota kasir.
 //
-// Yang diketik operator adalah STOK FISIK, bukan selisih. Itu yang benar-benar
-// ia punya setelah menghitung rak; memaksanya menghitung selisih sendiri
-// menambahkan satu langkah aritmetika yang tak perlu dan bisa salah. Kolom
-// Selisih tetap bisa diketik langsung, karena untuk Rusak/Hilang ia tahu
-// "3 rusak" tanpa menghitung ulang seluruh rak.
+// Dua keputusan tata letak yang dibayar dengan versi sebelumnya yang tak
+// nyaman dipakai:
+//
+// 1. KOTAK PINDAI DI ATAS, dan baris baru disisipkan di ATAS pula. Di layar
+//    nota kotak itu di bawah tabel dan itu benar — barisnya sedikit. Di sini
+//    "Muat semua hasil" bisa menaruh 300 baris sekaligus, dan kotak yang di
+//    bawah berarti menggulir 300 baris tiap kali ingin menambah satu barang,
+//    dengan hasil pencarian muncul lebih jauh lagi di bawahnya.
+// 2. SATUAN DATANG BERSAMA HASIL PENCARIAN (`satuan_list`), tidak diambil saat
+//    dropdown-nya disentuh. `kd_satuan` wajib terisi sebelum baris bisa
+//    disimpan, jadi mengambilnya belakangan membuat 300 baris mustahil
+//    disimpan sampai 300 dropdown dibuka satu per satu. Karena itu layar ini
+//    TIDAK memakai composable useSatuan — datanya sudah ada di baris.
 const props = defineProps({
   awal: { type: Object, default: null },
   kd_user: { type: String, default: "" },
@@ -51,20 +58,20 @@ const baris = computed(() => form.items);
 //
 // Stok sistem dihitung dalam satuan DASAR. Operator boleh bekerja dalam satuan
 // mana pun yang tersedia, jadi angkanya dibagi isi satuan itu: stok dasar 120
-// tampil sebagai 10 kalau LUSIN (isi 12) dipilih. qty yang ditulis ke
-// t_opname_stok memakai satuan pilihannya, dan trigger legacy yang mengalikan
-// kembali (sp_update_stok_akhir → GetKuantitasSatuanTerkecil). Jadi operator
-// tak pernah perlu mengonversi apa pun di kepalanya.
-const satuan = useSatuan(URL);
+// tampil sebagai 10 kalau LUSIN (isi 12) dipilih. qty yang ditulis memakai
+// satuan pilihannya, dan trigger legacy yang mengalikan kembali
+// (sp_update_stok_akhir → GetKuantitasSatuanTerkecil).
 const isiSatuan = (b) => {
-  const s = satuan.opsi(b).find((x) => x.kd_satuan === b.kd_satuan);
+  const s = b.satuan_list.find((x) => x.kd_satuan === b.kd_satuan);
   return s?.jumlah > 0 ? s.jumlah : 1;
 };
 const stokSistem = (b) => b.stok_dasar / isiSatuan(b);
+const labelSatuan = (s) =>
+  `${s.satuan || s.kd_satuan}${s.jumlah > 1 ? ` (isi ${s.jumlah})` : ""}`;
 
 function gantiSatuan(b, kd) {
-  satuan.ganti(b, kd);
-  // Stok fisik yang sudah diketik ikut dibaca ulang dalam satuan baru; kalau
+  b.kd_satuan = kd;
+  // Stok fisik yang sudah diketik dibaca ulang dalam satuan baru; kalau
   // dibiarkan, "10" yang tadinya berarti 10 PCS mendadak berarti 10 LUSIN dan
   // selisihnya melonjak 12 kali lipat tanpa satu pun tanda di layar.
   hitungDariFisik(b);
@@ -72,21 +79,23 @@ function gantiSatuan(b, kd) {
 
 // --- Fisik ↔ selisih, dua arah --------------------------------------------
 function hitungDariFisik(b) {
-  if (b.fisik === "") { b.selisih = ""; return; }
+  if (String(b.fisik).trim() === "") { b.selisih = ""; return; }
   b.selisih = Number((angka(b.fisik) - stokSistem(b)).toFixed(3));
-  ikutiTanda(b);
 }
 function hitungDariSelisih(b) {
-  if (b.selisih === "") { b.fisik = ""; return; }
+  if (String(b.selisih).trim() === "") { b.fisik = ""; return; }
   b.fisik = Number((stokSistem(b) + angka(b.selisih)).toFixed(3));
-  ikutiTanda(b);
 }
 
 // Arah TIDAK pernah jadi pilihan terpisah — ia melekat pada jenis (trigger:
 // `IF @status <> 2 SET @jumlah = @jumlah * -1`). Jenis bawaan mengikuti tanda
-// selisih; operator tinggal mengubahnya ke Rusak/Hilang bila itu sebabnya.
+// selisih, tapi hanya SETELAH selesai mengetik (@change, bukan @input): kalau
+// tiap ketukan tombol ikut mengubahnya, kotak jenis berkedip-kedip sepanjang
+// operator mengetik angka. Ia juga berhenti ikut begitu operator memilih
+// sendiri — pilihan Rusak/Hilang tak boleh ditimpa oleh tanda selisih.
 const menambah = (v) => props.jenis.find((j) => j.value === v)?.menambah;
 function ikutiTanda(b) {
+  if (b.jenis_manual) return;
   const positif = angka(b.selisih) > 0;
   if (menambah(b.jenis) !== positif) b.jenis = positif ? "lain_plus" : "lain_minus";
 }
@@ -122,17 +131,19 @@ watch(entri, (q) => {
 });
 
 function baru(b) {
+  const daftar = b.satuan_list || [];
   return {
     kd_barang: b.kd_barang,
     nama: b.nama,
-    // Satuan dasar sampai operator membuka dropdown-nya; saat itulah daftar
-    // satuan diambil (satu round-trip per barang, hanya kalau memang dipakai).
-    kd_satuan: b.kd_satuan || "",
-    satuan: b.satuan || "",
+    satuan_list: daftar,
+    // Satuan terkecil sebagai bawaan — itu satuan tempat stok dihitung, jadi
+    // baris langsung bisa disimpan tanpa menyentuh dropdown sama sekali.
+    kd_satuan: daftar[0]?.kd_satuan || "",
     stok_dasar: Number(b.stok_akhir ?? 0),
     fisik: "",
     selisih: "",
     jenis: "lain_minus",
+    jenis_manual: false,
   };
 }
 
@@ -143,7 +154,9 @@ function tambah(b) {
     // menimpa niat. Sorot yang sudah ada alih-alih menambah kembar.
     fokusBaris(sudah);
   } else {
-    form.items.push(baru(b));
+    // Di ATAS: baris yang baru dimasukkan itulah yang sedang dikerjakan, jadi
+    // ia harus ada di dekat kotak pindai, bukan di ujung daftar 300 baris.
+    form.items.unshift(baru(b));
   }
   entri.value = "";
   hasil.value = [];
@@ -156,7 +169,8 @@ async function muatSekaligus() {
   try {
     const rows = await cari(q, props.batas_muat);
     const ada = new Set(form.items.map((x) => x.kd_barang));
-    rows.forEach((b) => { if (!ada.has(b.kd_barang)) form.items.push(baru(b)); });
+    // Urutan hasil dipertahankan (unshift terbalik akan mengacaknya).
+    form.items.unshift(...rows.filter((b) => !ada.has(b.kd_barang)).map(baru));
     entri.value = "";
     hasil.value = [];
   } finally {
@@ -168,7 +182,7 @@ function entriKey(e) {
   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
     e.preventDefault();
     if (!hasil.value.length) {
-      if (e.key === "ArrowUp") fokusBaris(form.items.length - 1);
+      if (e.key === "ArrowDown") fokusBaris(0);
       return;
     }
     digeser.value = true;
@@ -186,14 +200,22 @@ function entriKey(e) {
   const b = (digeser.value && hasil.value[sorot.value])
     || hasil.value.find(sama)
     || hasil.value[0];
-  if (b) tambah(b);
-  else pesan.value = `Barang "${q}" tak ditemukan.`;
+  if (b) {
+    tambah(b);
+    // Langsung ke kotak Stok Fisik baris itu: satu-satunya alasan barang
+    // dimasukkan adalah untuk mengisi angkanya.
+    fokusBaris(0);
+  } else {
+    pesan.value = `Barang "${q}" tak ditemukan.`;
+  }
 }
 
 function fokusBaris(i) {
   nextTick(() => {
     const rows = wadahTabel.value?.querySelectorAll("tbody tr[data-baris]");
-    const kotak = rows?.[i]?.querySelector("[data-nav]");
+    // [data-nav] pertama adalah kotak Stok Fisik; dropdown satuan sengaja
+    // dilewati karena bawaannya sudah benar untuk hampir semua baris.
+    const kotak = rows?.[i]?.querySelector("[data-nav-fisik]");
     kotak?.focus();
     kotak?.select?.();
   });
@@ -212,6 +234,11 @@ const ringkas = computed(() => {
   });
   return { tambah, kurang, baris: terisi.value.length };
 });
+
+// Divisi dikunci begitu ada baris: ia menentukan angka stok yang sudah tampil,
+// jadi menggantinya di tengah jalan membuat seluruh selisih yang sudah diketik
+// salah tanpa satu pun tanda di layar.
+const divisiTerkunci = computed(() => form.items.length > 0);
 
 const siap = computed(
   () => Boolean(props.kd_user) && Boolean(form.kd_divisi)
@@ -237,7 +264,15 @@ function simpan() {
     }))
     .post(`${URL}/save`, {
       preserveScroll: true,
-      onSuccess: () => { form.reset(); entri.value = ""; hasil.value = []; },
+      // Hanya barisnya yang dibersihkan. Divisi dan keterangan BERTAHAN: satu
+      // sesi balancing disimpan bertahap, dan mengetik ulang keduanya tiap
+      // batch adalah pekerjaan yang tak menghasilkan apa-apa.
+      onSuccess: () => {
+        form.items = [];
+        entri.value = "";
+        hasil.value = [];
+        fokusEntri();
+      },
     });
 }
 </script>
@@ -257,57 +292,96 @@ function simpan() {
 
       <Banner v-if="data.conn_error" variant="warning" :message="data.conn_error" class="mb-4" />
 
-      <Card class="mb-4">
-        <div class="grid gap-3 sm:grid-cols-3">
-          <!-- Divisi WAJIB dipilih, tanpa nilai bawaan. Toko berisi satu divisi,
-               tapi gudang berisi lima — dan di sana seluruh opname ada di
-               PERGUDANGAN, bukan di UMUM yang kebetulan urutan pertama. Divisi
-               juga menentukan awalan nomor koreksinya. -->
-          <Select
-            v-model="form.kd_divisi"
-            label="Divisi *"
-            placeholder="Pilih divisi…"
-            :options="divisiOptions"
-          />
+      <Card>
+        <!-- Satu baris alat kerja: divisi, keterangan, kotak pindai, tombol
+             simpan. Semuanya di ATAS, sebelum tabel — dengan 300 baris di
+             bawahnya, apa pun yang ada di bawah tabel praktis tak terjangkau. -->
+        <div class="grid gap-3 sm:grid-cols-12">
+          <div class="sm:col-span-3">
+            <Select
+              v-model="form.kd_divisi"
+              label="Divisi *"
+              placeholder="Pilih divisi…"
+              :options="divisiOptions"
+              :disabled="divisiTerkunci"
+            />
+          </div>
           <Input
             v-model="form.keterangan"
-            class="sm:col-span-2"
+            class="sm:col-span-5"
             label="Keterangan *"
             placeholder="sebab koreksi, mis. BALANCE STOK RETUR"
             maxlength="50"
           />
+          <div class="flex items-end sm:col-span-4">
+            <Button class="w-full" :loading="form.processing" :disabled="!siap" @click="simpan">
+              Simpan {{ ringkas.baris || "" }} Koreksi
+            </Button>
+          </div>
         </div>
-        <p class="mt-2 text-xs text-ink-subtle">
-          Keterangan maksimal 50 karakter dan berlaku untuk seluruh baris — ia
-          satu-satunya tempat sebab koreksi tercatat, dan yang dibaca orang saat
-          membalance selisih di Neraca Opname nanti.
+        <p v-if="divisiTerkunci" class="mt-1 text-xs text-ink-subtle">
+          Divisi terkunci selama masih ada baris — ia menentukan angka stok yang
+          sudah tampil. Kosongkan barisnya untuk berganti divisi.
         </p>
+
+        <div class="mt-4">
+          <label class="mb-1 block text-xs font-medium text-ink-muted">
+            Pindai / cari barang
+          </label>
+          <div class="flex gap-2">
+            <input
+              ref="kotakEntri"
+              v-model="entri"
+              :disabled="!form.kd_divisi"
+              class="w-full rounded-control border border-border-strong bg-surface px-3 py-2 font-mono text-lg disabled:opacity-50"
+              :placeholder="form.kd_divisi ? 'Pindai / ketik kode atau nama barang…' : 'Pilih divisi dulu…'"
+              @keydown="entriKey"
+            />
+            <Button
+              variant="secondary"
+              :loading="memuat"
+              :disabled="!entri.trim()"
+              @click="muatSekaligus"
+            >
+              Muat semua hasil
+            </Button>
+          </div>
+          <p class="mt-1 text-xs text-ink-subtle">
+            ↑↓ pilih hasil · Enter masukkan &amp; langsung isi · Ctrl+Del hapus baris
+          </p>
+
+          <!-- Hasil pencarian tepat di bawah kotaknya, bukan di bawah tabel. -->
+          <ul v-if="hasil.length" class="mt-2 max-h-56 overflow-y-auto rounded-control border border-border-default">
+            <li
+              v-for="(b, i) in hasil"
+              :key="b.kd_barang"
+              :class="['flex cursor-pointer items-baseline gap-3 px-3 py-1.5 text-sm',
+                       i === sorot ? 'bg-brand-bg' : 'hover:bg-surface-2']"
+              @click="tambah(b)"
+            >
+              <span class="font-mono text-xs text-ink-subtle">{{ b.kd_barang }}</span>
+              <span class="flex-1 truncate text-ink">{{ b.nama }}</span>
+              <span class="tabular-nums text-xs text-ink-subtle">
+                stok {{ nf.format(b.stok_akhir ?? 0) }}
+              </span>
+            </li>
+          </ul>
+          <p v-if="terpotong" class="mt-2 text-xs text-warning-fg">
+            Hasil dipotong di {{ batas_muat }} baris. Persempit pencarian supaya tak
+            ada barang yang diam-diam tertinggal.
+          </p>
+        </div>
       </Card>
 
-      <Card>
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="text-sm text-ink-muted">
-            <strong class="text-ink">{{ ringkas.baris }}</strong> baris berselisih
-            <span v-if="ringkas.tambah" class="ml-2 text-success-fg">+{{ nf.format(ringkas.tambah) }}</span>
-            <span v-if="ringkas.kurang" class="ml-2 text-danger-fg">−{{ nf.format(ringkas.kurang) }}</span>
-            <span v-if="form.items.length > ringkas.baris" class="ml-2 text-ink-subtle">
-              ({{ form.items.length - ringkas.baris }} baris tanpa selisih — tak akan dikirim)
-            </span>
-          </div>
-          <Button :loading="form.processing" :disabled="!siap" @click="simpan">
-            Simpan Koreksi
-          </Button>
+      <Card class="mt-4">
+        <div class="mb-2 text-sm text-ink-muted">
+          <strong class="text-ink">{{ ringkas.baris }}</strong> dari
+          {{ baris.length }} baris berselisih
+          <span v-if="ringkas.tambah" class="ml-2 text-success-fg">+{{ nf.format(ringkas.tambah) }}</span>
+          <span v-if="ringkas.kurang" class="ml-2 text-danger-fg">−{{ nf.format(ringkas.kurang) }}</span>
         </div>
 
-        <p v-if="terpotong" class="mt-2 text-xs text-warning-fg">
-          Hasil dipotong di {{ batas_muat }} baris. Persempit pencarian atau pilih
-          divisi supaya tak ada barang yang diam-diam tertinggal.
-        </p>
-
-        <!-- Cari & isi DI DALAM tabel: baris terakhir kotak pindai/cari,
-             hasilnya jadi baris di bawahnya, seluruh sel dijelajahi dengan
-             panah + Enter (useGridNav). -->
-        <div ref="wadahTabel" class="mt-4 overflow-x-auto" @keydown="navGrid">
+        <div ref="wadahTabel" class="overflow-x-auto" @keydown="navGrid">
           <table class="w-full text-sm">
             <thead class="text-xs text-ink-subtle">
               <tr class="border-b border-border-default">
@@ -325,25 +399,24 @@ function simpan() {
                 v-for="(b, i) in baris"
                 :key="b.kd_barang"
                 data-baris
-                class="border-b border-border-default"
+                :class="['border-b border-border-default',
+                         angka(b.selisih) !== 0 ? '' : 'text-ink-muted']"
               >
                 <td class="px-2 py-1">
                   <p class="text-ink">{{ b.nama }}</p>
                   <p class="font-mono text-xs text-ink-subtle">{{ b.kd_barang }}</p>
                 </td>
                 <td class="px-2 py-1">
+                  <!-- Terisi sejak baris dibuat: daftarnya ikut hasil pencarian,
+                       bukan diambil saat dropdown disentuh. -->
                   <select
                     data-nav
                     :value="b.kd_satuan"
                     :class="KELAS_PILIH"
-                    @focus="satuan.muat(b)"
                     @change="gantiSatuan(b, $event.target.value)"
                   >
-                    <option v-if="!satuan.opsi(b).length" :value="b.kd_satuan">
-                      {{ b.satuan || b.kd_satuan }}
-                    </option>
-                    <option v-for="s in satuan.opsi(b)" :key="s.kd_satuan" :value="s.kd_satuan">
-                      {{ satuan.label(s) }}
+                    <option v-for="s in b.satuan_list" :key="s.kd_satuan" :value="s.kd_satuan">
+                      {{ labelSatuan(s) }}
                     </option>
                   </select>
                 </td>
@@ -354,9 +427,11 @@ function simpan() {
                   <input
                     v-model="b.fisik"
                     data-nav
+                    data-nav-fisik
                     inputmode="decimal"
                     :class="KELAS_SEL"
                     @input="hitungDariFisik(b)"
+                    @change="ikutiTanda(b)"
                   />
                 </td>
                 <td class="px-2 py-1">
@@ -367,69 +442,33 @@ function simpan() {
                     :class="[KELAS_SEL, angka(b.selisih) > 0 ? 'text-success-fg'
                              : angka(b.selisih) < 0 ? 'text-danger-fg' : '']"
                     @input="hitungDariSelisih(b)"
+                    @change="ikutiTanda(b)"
                   />
                 </td>
                 <td class="px-2 py-1">
-                  <select v-model="b.jenis" data-nav :class="KELAS_PILIH">
+                  <select
+                    v-model="b.jenis"
+                    data-nav
+                    :class="KELAS_PILIH"
+                    @change="b.jenis_manual = true"
+                  >
                     <option v-for="j in jenis" :key="j.value" :value="j.value">
                       {{ j.label }}
                     </option>
                   </select>
                 </td>
                 <td class="px-2 py-1 text-right">
-                  <Button size="sm" variant="secondary" @click="hapus(i)">Hapus</Button>
-                </td>
-              </tr>
-
-              <tr class="border-b-2 border-border-strong bg-surface-2/50">
-                <td class="px-2 py-2" colspan="4">
-                  <input
-                    ref="kotakEntri"
-                    v-model="entri"
-                    class="w-full rounded-control border border-border-strong bg-surface px-3 py-2 font-mono text-lg"
-                    placeholder="Pindai / ketik kode atau nama barang…"
-                    @keydown="entriKey"
-                  />
-                </td>
-                <td class="px-2 py-2 text-right" colspan="3">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    :loading="memuat"
-                    :disabled="!entri.trim()"
-                    @click="muatSekaligus"
-                  >
-                    Muat semua hasil
-                  </Button>
-                  <p class="mt-1 text-xs text-ink-subtle">
-                    ↑↓ pilih · Enter masukkan · Ctrl+Del hapus baris
-                  </p>
-                </td>
-              </tr>
-
-              <tr
-                v-for="(b, i) in hasil"
-                :key="`cari-${b.kd_barang}`"
-                :class="['cursor-pointer border-b border-border-default',
-                         i === sorot ? 'bg-brand-bg' : 'hover:bg-surface-2']"
-                @click="tambah(b)"
-              >
-                <td class="px-2 py-1.5" colspan="2">
-                  <p class="truncate text-ink">{{ b.nama }}</p>
-                  <p class="font-mono text-xs text-ink-subtle">{{ b.kd_barang }}</p>
-                </td>
-                <td class="px-2 py-1.5 text-right tabular-nums text-ink-subtle" colspan="5">
-                  stok {{ nf.format(b.stok_akhir ?? 0) }}
+                  <Button size="sm" variant="ghost" @click="hapus(i)">Hapus</Button>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
 
-        <p v-if="!baris.length" class="mt-3 text-sm text-ink-subtle">
+        <p v-if="!baris.length" class="py-6 text-center text-sm text-ink-subtle">
           Belum ada baris. Pindai atau ketik barang di kotak di atas — daftar
-          barang tidak dimuat seluruhnya karena ada puluhan ribu, dan grid dengan
-          kotak isian di tiap baris tak akan sanggup menampungnya.
+          barang tidak dimuat seluruhnya karena ada puluhan ribu, dan grid
+          dengan kotak isian di tiap baris tak akan sanggup menampungnya.
         </p>
       </Card>
     </Deferred>

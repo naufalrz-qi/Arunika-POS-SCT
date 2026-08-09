@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+from apps.transactions.hub_sync import bind_varchar
 from apps.transactions.penomoran import awalan_untuk, no_berikutnya, simpan_dengan_nomor
 from core import mssql
 
@@ -316,6 +317,48 @@ def satuan_barang(profile, kd_barang: str) -> list[dict]:
         return [{"kd_satuan": (r[0] or "").strip(), "satuan": (r[1] or "").strip(),
                  "jumlah": float(r[2] or 0), "harga_jual": float(r[3] or 0),
                  "status": int(r[4] or 0)} for r in cur.fetchall()]
+
+
+def satuan_banyak(profile, kd_barang: list[str]) -> dict[str, list[dict]]:
+    """Satuan untuk BANYAK barang sekaligus: {kd_barang: [satuan, …]}.
+
+    Ada karena layar Koreksi Stok memuat sampai 300 baris sekali tarik, dan di
+    sana satuan bukan pelengkap: `kd_satuan` wajib terisi sebelum baris bisa
+    disimpan, dan ia yang menentukan besar pergeseran stoknya. Mengambilnya
+    per baris berarti 300 round-trip sebelum operator bisa menekan Simpan
+    sekali pun — lewat Tailscale itu hitungan menit.
+
+    Harga tidak diambil: layar koreksi tak pernah menampilkannya, dan kolom yang
+    tak dikirim tak bisa bocor.
+    """
+    kode = [k for k in {(k or "").strip() for k in kd_barang} if k]
+    if not kode:
+        return {}
+    out: dict[str, list[dict]] = {}
+    with mssql.cursor(profile) as cur:
+        # Kolom kunci legacy bertipe varchar; tanpa ikatan ini pyodbc mengirim
+        # NVARCHAR dan SQL Server memindai tabel sekali untuk TIAP nilai `IN`
+        # (terukur 6,23 dtk → 0,01 dtk untuk 50 nilai). Lihat bind_varchar.
+        bind_varchar(cur, len(kode), max(len(k) for k in kode))
+        try:
+            tanya = ", ".join("?" for _ in kode)
+            cur.execute(  # nosec B608 — hanya placeholder yang diinterpolasi
+                "SELECT bs.kd_barang, bs.kd_satuan, s.nama, bs.jumlah "
+                "FROM m_barang_satuan bs "
+                "LEFT JOIN m_satuan s ON s.kd_satuan = bs.kd_satuan "
+                f"WHERE bs.kd_barang IN ({tanya}) ORDER BY bs.kd_barang, bs.jumlah",
+                kode,
+            )
+            baris = cur.fetchall()
+        finally:
+            cur.setinputsizes(None)
+    for r in baris:
+        out.setdefault((r[0] or "").strip(), []).append({
+            "kd_satuan": (r[1] or "").strip(),
+            "satuan": (r[2] or "").strip(),
+            "jumlah": float(r[3] or 0),
+        })
+    return out
 
 
 def opsi_nota(profile) -> dict:

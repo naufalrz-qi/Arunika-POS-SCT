@@ -40,7 +40,7 @@ from apps.inventory import services as inv
 from apps.master_data import master_crud
 from apps.transactions import opname as opname_tulis
 from apps.transactions.penjualan import opsi_nota as _opsi_nota
-from apps.transactions.penjualan import satuan_barang as _satuan_barang
+from apps.transactions.penjualan import satuan_banyak as _satuan_banyak
 from apps.master_data import services as master
 from apps.transactions import services as tx
 from apps.core import reporting
@@ -2695,16 +2695,6 @@ def opname_neraca_detail(request):
 # berarti penjagaannya ikut: menu `opname` ber-admin_only, jadi kasir/supervisor
 # tak bisa mencapainya walau mengetik URL-nya sendiri.
 
-def _harga_dibuang(rows):
-    """Layar koreksi stok tak pernah menampilkan harga — ia soal jumlah unit.
-
-    Dibuang di server, bukan sekadar tak dirender: mengirimkan harga ke layar
-    yang tak memerlukannya membuat pembatasan `hidden_data_keys` bocor lewat
-    pintu belakang yang paling mudah terlupakan.
-    """
-    return [{k: v for k, v in r.items() if k != "harga_jual"} for r in rows]
-
-
 def _bukan_admin(request):
     """Lapis kedua di atas penjaga menu.
 
@@ -2801,27 +2791,20 @@ def koreksi_stok_cari(request):
             # terpotong tanpa menghitung ulang seluruh universe.
             limit=limit + 1,
         )
+        terpotong = len(rows) > limit
+        rows = rows[:limit]
+        # Satuan ikut dikirim, tidak diambil per baris saat dropdown-nya
+        # disentuh. `kd_satuan` WAJIB terisi sebelum sebuah baris bisa disimpan
+        # (ia menentukan besar pergeseran stoknya), jadi mengambilnya belakangan
+        # berarti operator harus membuka 300 dropdown — masing-masing satu
+        # round-trip — sebelum bisa menekan Simpan sekali pun.
+        peta = _satuan_banyak(profile, [r["kd_barang"] for r in rows])
     except pyodbc.Error as exc:
         return JsonResponse(
             {"rows": [], "error": mssql.friendly_error(exc, "Gagal mencari barang")})
-    return JsonResponse({"rows": rows[:limit], "terpotong": len(rows) > limit})
-
-
-def koreksi_stok_satuan(request):
-    """Satuan-satuan sebuah barang, untuk mengganti satuan baris koreksi.
-
-    Satuan bukan hiasan di sini: `sp_update_stok_akhir` menerima kd_satuan dan
-    mengonversinya, jadi 1 DUS dan 1 PCS menggeser stok dengan besar berbeda.
-    """
-    profile = _active()
-    if not profile:
-        return JsonResponse({"rows": [], "error": CONN_ERROR})
-    try:
-        rows = _satuan_barang(profile, request.GET.get("kd_barang") or "")
-        return JsonResponse({"rows": _harga_dibuang(rows)})
-    except pyodbc.Error as exc:
-        return JsonResponse(
-            {"rows": [], "error": mssql.friendly_error(exc, "Gagal membaca satuan")})
+    for r in rows:
+        r["satuan_list"] = peta.get(r["kd_barang"], [])
+    return JsonResponse({"rows": rows, "terpotong": terpotong})
 
 
 @require_POST

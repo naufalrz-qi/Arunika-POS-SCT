@@ -54,7 +54,6 @@ urlpatterns = [
     path("inventory/koreksi-stok", views.koreksi_stok_index, name="koreksi_stok"),
     path("inventory/koreksi-stok/save", views.koreksi_stok_save, name="koreksi_stok_save"),
     path("inventory/koreksi-stok/cari", views.koreksi_stok_cari, name="koreksi_stok_cari"),
-    path("inventory/koreksi-stok/satuan", views.koreksi_stok_satuan, name="koreksi_stok_satuan"),
     path("inventory/opname-neraca", views.opname_neraca, name="opname_neraca"),
     path("inventory/opname-neraca/export", views.opname_neraca_export, name="opname_neraca_export"),
     path("inventory/opname-neraca/detail", views.opname_neraca_detail, name="opname_neraca_detail"),
