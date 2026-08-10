@@ -92,14 +92,8 @@ _FIELDS_BY_DATA_KEY = {
     # Klasifikasi Pelanggan (baris, ringkasan, DAN kedua sheet export-nya):
     # halaman itu memang berisi belanja per orang, jadi tanpa ini kunci `nominal`
     # jadi hiasan justru di halaman yang paling terang soal uang.
-    # `nilai_*` + dua kunci ringkasannya milik Neraca Opname. Nilainya rupiah
-    # selisih stok — angka yang paling sering tak boleh dilihat kasir, dan
-    # halaman itu punya TIGA rute (tabel, export, detail JSON) yang semuanya
-    # menyajikannya.
     "nominal": {"nominal", "revenue", "nilai", "total_belanja", "rata_nota",
-                "tier_nilai", "total_nilai", "rata_nota_semua",
-                "nilai_lebih", "nilai_kurang", "nilai_neto",
-                "total_nilai_kurang", "total_nilai_neto"} | _UANG_INFO_KASIR,
+                "tier_nilai", "total_nilai", "rata_nota_semua"} | _UANG_INFO_KASIR,
 }
 
 
@@ -2611,109 +2605,6 @@ opname_export = _report_export(_OPNAME)
 
 # Neraca Opname — mencocokkan selisih lintas sesi, yang tak bisa dilihat oleh
 # hitungan parsial. Lima kunci opsional dipakai, masing-masing dengan alasan:
-_OPNAME_NERACA = {
-    "component": "Admin/Inventory/OpnameNeraca",
-    "url": "/admin-panel/inventory/opname-neraca",
-    "inner": rpt.opname_neraca,
-    "sorts": rpt.SORTS_OPNAME_NERACA,
-    "summary": rpt.SUMMARY_OPNAME_NERACA,
-    "filter_keys": ["kd_divisi", "grup"],
-    # Tanpa ini dropdown Grup render kosong padahal nilainya sedang dipakai.
-    "filter_defaults": {"grup": rpt.GRUP_NERACA_DEFAULT},
-    "default_sort": "terpasang",
-    # Yang paling banyak bisa dipasangkan di halaman pertama. Keluarga dengan
-    # terpasang=0 (barang tunggal, murni hilang/lebih) tenggelam sendiri.
-    "default_sort_dir": "desc",
-    # Clamp 92 hari dilepas: memasangkan selisih antar ronde cycle-count justru
-    # BUTUH jendela panjang — di data nyata satu SO global dan koreksi
-    # balance-nya terpaut lebih dari setahun. Clamp membuat tujuan halaman ini
-    # mustahil. Preseden: _KLASIFIKASI_PELANGGAN.
-    "max_range_days": None,
-    "default_from_days": 365,
-    "money_fields": rpt.UANG_OPNAME_NERACA,
-    "options": lambda p: {"divisi": _opt_divisi(p)},
-    "filename": "opname-neraca",
-    "columns": [
-        {"key": "grup", "label": "Keluarga"},
-        {"key": "contoh", "label": "Contoh Barang"},
-        {"key": "anggota", "label": "Jml Barang", "format": "number"},
-        {"key": "lebih", "label": "Koreksi Lebih", "format": "number"},
-        {"key": "kurang", "label": "Koreksi Kurang", "format": "number"},
-        {"key": "terpasang", "label": "Bisa Dipasangkan", "format": "number"},
-        {"key": "neto", "label": "Sisa Neto", "format": "number"},
-        {"key": "nilai_kurang", "label": "Nilai Kurang (Rp)", "format": "number"},
-        {"key": "nilai_neto", "label": "Nilai Neto (Rp)", "format": "number"},
-        {"key": "status_neraca", "label": "Status"},
-        {"key": "tanpa_catatan", "label": "Tanpa Catatan", "format": "number"},
-        {"key": "catatan", "label": "Contoh Catatan"},
-    ],
-}
-opname_neraca = _report_view(_OPNAME_NERACA)
-opname_neraca_export = _report_export(_OPNAME_NERACA)
-
-
-def opname_neraca_detail(request):
-    """JSON: satu keluarga barang — anggotanya + baris opname mentahnya.
-
-    Dibaca lewat report_read_profiles seperti tabel utamanya, BUKAN profil primer
-    langsung: kalau tabel dilayani replica dan detail dilayani primer, replica
-    yang tertinggal membuat panel tak cocok dengan baris yang barusan diklik.
-    """
-    spec = _OPNAME_NERACA
-    nilai_grup = (request.GET.get("grup_nilai") or "").strip()
-    if not nilai_grup:
-        return JsonResponse({"error": "Keluarga tidak disebutkan."}, status=400)
-
-    profile = _active()
-    if not profile:
-        return JsonResponse({"error": CONN_ERROR}, status=503)
-
-    f = _spec_params(request, spec)
-    # Rute ketiga yang menyajikan rupiah yang sama. Tabel dan export sudah
-    # disaring lewat money_fields; tanpa penyaringan di sini pembatasannya
-    # bocor persis di tempat yang paling mudah terlupakan.
-    sembunyikan = _hidden_fields(request) & {"harga_jual", "nilai"}
-
-    def _bersih(rows):
-        if not sembunyikan:
-            return rows
-        return [{k: v for k, v in r.items() if k not in sembunyikan} for r in rows]
-
-    anggota, kejadian, last_exc = [], [], None
-    for read_profile in mssql.report_read_profiles(profile):
-        try:
-            with mssql.report_cursor(read_profile) as cur:
-                sql, prm = rpt.opname_neraca_anggota(f, nilai_grup)
-                cur.execute(sql, prm)
-                anggota = reporting.clean_rows(reporting.dictify(cur))
-
-                sql, prm = rpt.opname_neraca_kejadian(f, nilai_grup)
-                cur.execute(sql, prm)
-                kejadian = reporting.clean_rows(reporting.dictify(cur))
-            last_exc = None
-            break
-        except pyodbc.Error as exc:
-            last_exc = exc
-    if last_exc is not None:
-        return JsonResponse(
-            {"error": mssql.friendly_error(last_exc, "Gagal membaca detail")}, status=502
-        )
-
-    return JsonResponse({
-        "grup": nilai_grup,
-        "anggota": _bersih(anggota),
-        "kejadian": kejadian,
-        "periode": {"dari": f["date_from_s"], "sampai": f["date_to_s"]},
-    })
-
-
-# --- Koreksi stok — satu-satunya jalur TULIS di halaman laporan -------------
-#
-# Ketiga rute di bawah sengaja duduk di bawah prefix /admin-panel/inventory/opname
-# supaya menu_key_for_path memberinya key `opname` lewat pencocokan prefix. Itu
-# berarti penjagaannya ikut: menu `opname` ber-admin_only, jadi kasir/supervisor
-# tak bisa mencapainya walau mengetik URL-nya sendiri.
-
 def _bukan_admin(request):
     """Lapis kedua di atas penjaga menu.
 

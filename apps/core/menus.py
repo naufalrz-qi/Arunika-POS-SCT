@@ -108,7 +108,6 @@ ALL_MENUS = [
     # tab navbar (useNav.js) yang menggabungkan stok+promo+kas. Rute /export,
     # /detail, dan /save mewarisi menu key ini lewat pencocokan prefix di
     # menu_key_for_path — termasuk penjagaannya.
-    {"key": "opname_neraca", "label": "Neraca Opname", "icon": "chart", "href": "/admin-panel/inventory/opname-neraca", "section": "stok", "admin_only": True},
     # Analitik (FMI)
     {"key": "fmi_penjualan", "label": "FMI Penjualan", "icon": "trending", "href": "/admin-panel/analitik/fmi-penjualan", "section": "analitik"},
     {"key": "fmi_stok", "label": "FMI Stok", "icon": "chart", "href": "/admin-panel/analitik/fmi-stok", "section": "analitik"},

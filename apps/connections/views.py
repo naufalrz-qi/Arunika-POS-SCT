@@ -68,8 +68,9 @@ def connections_save(request):
         request.session["flash_error"] = "Replica laporan tidak boleh server itu sendiri."
         return redirect("/admin-panel/connections")
     profile.save()
-    from apps.transactions.indexes import ensure_indexes_async
-    ensure_indexes_async(profile)  # PRD §9 — build registry indexes on registration
+    # Menyimpan profil TIDAK lagi membangun index. Menekan Simpan di form
+    # koneksi bukan permintaan untuk mengubah skema server orang lain —
+    # tombol Cek Index di sebelahnya yang menyatakan niat itu.
     log_activity(request, "konfigurasi", f"Simpan koneksi {profile.name}")
     request.session["flash_success"] = "Profil koneksi disimpan."
     return redirect("/admin-panel/connections")
@@ -132,7 +133,7 @@ def connections_check_indexes(request, conn_id):
     """Manually re-run the index registry on a saved profile, on demand.
 
     Complements the automatic build on activation/registration (PRD §9,
-    `ensure_indexes_async`) — this gives an immediate, visible per-index
+    background) — this gives an immediate, visible per-index
     result instead of waiting on the background thread + ActivityLog.
     """
     profile = get_object_or_404(ServerProfile, pk=conn_id)
