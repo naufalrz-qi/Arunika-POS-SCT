@@ -230,11 +230,15 @@ class MenuRbacEnforcementTests(TestCase):
 
 
 class DashboardAktivitasScopeTests(TestCase):
-    """Kartu Aktivitas Terbaru di dashboard hanya menampilkan jejak pemakainya.
+    """Jejak aktivitas milik akun sendiri — kecuali superadmin.
 
-    Halaman Log Aktivitas (/admin-panel/logs) sengaja TIDAK ikut disaring — itu
-    layar audit, dan aksesnya sudah dijaga lewat menu. Kalau suatu saat ada yang
-    "merapikan" keduanya jadi satu jalur, tes ini yang menahannya.
+    Berlaku untuk KETIGA layar yang menyajikannya: kartu Aktivitas Terbaru di
+    dashboard, kotak notif di navbar, dan halaman Log Aktivitas. Dulu halaman
+    log sengaja dibiarkan tak tersaring dengan alasan "ini layar audit dan
+    aksesnya sudah dijaga menu" — alasan yang tidak berlaku, sebab menu `logs`
+    bukan superadmin_only dan bisa diberikan kepada siapa saja. Aturannya kini
+    satu (`apps.core.models.log_untuk`), dan tes ini menahan ketiganya sekaligus
+    supaya salah satu tak diam-diam tertinggal saat yang lain diubah.
     """
 
     def setUp(self):
@@ -266,13 +270,35 @@ class DashboardAktivitasScopeTests(TestCase):
     def test_superadmin_melihat_semua(self):
         self.assertIn("orang_lain", self._dashboard_users(self.boss))
 
-    def test_halaman_log_tidak_ikut_disaring(self):
+    def _log_users(self, sebagai, params=None):
         import json
 
-        self.client.force_login(self.staf)
-        r = self.client.get("/admin-panel/logs", HTTP_X_INERTIA="true", HTTP_X_INERTIA_VERSION="1.0")
-        users = {a["user"] for a in json.loads(r.content)["props"]["logs"]}
-        self.assertIn("orang_lain", users)
+        self.client.force_login(sebagai)
+        r = self.client.get("/admin-panel/logs", params or {},
+                            HTTP_X_INERTIA="true", HTTP_X_INERTIA_VERSION="1.0")
+        return json.loads(r.content)["props"]
+
+    def test_halaman_log_ikut_disaring(self):
+        props = self._log_users(self.staf)
+        self.assertEqual({a["user"] for a in props["logs"]}, {"staf"})
+        self.assertFalse(props["boleh_semua"])
+        # Daftar user tak dikirim ke yang cuma melihat dirinya sendiri: ia bukan
+        # penyaring yang berguna, dan ia membocorkan daftar akun.
+        self.assertEqual(props["users"], [])
+
+    def test_superadmin_masih_bisa_mengaudit(self):
+        props = self._log_users(self.boss)
+        self.assertIn("orang_lain", {a["user"] for a in props["logs"]})
+        self.assertTrue(props["boleh_semua"])
+        self.assertIn("staf", props["users"])
+
+    def test_penyaring_user_hanya_berlaku_untuk_superadmin(self):
+        """Kalau `?user=` dituruti untuk semua orang, admin bisa membaca jejak
+        siapa pun hanya dengan mengetik namanya di URL."""
+        props = self._log_users(self.staf, {"user": "orang_lain"})
+        self.assertEqual({a["user"] for a in props["logs"]}, {"staf"})
+        props = self._log_users(self.boss, {"user": "orang_lain"})
+        self.assertEqual({a["user"] for a in props["logs"]}, {"orang_lain"})
 
 
 class DashboardStatusServerTests(TestCase):

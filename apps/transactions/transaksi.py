@@ -57,6 +57,43 @@ SPEC = {
         "detail": ["no_transaksi", "kd_barang", "kd_satuan", "jenis", "qty",
                    "harga_beli", "diskon1", "diskon2", "diskon3", "diskon4", "point1"],
     },
+    # Order pembelian. Kembarannya `t_penjualan_order`, tapi TIGA hal berbeda dan
+    # ketiganya diverifikasi langsung dari skema server (INFORMATION_SCHEMA):
+    #
+    # 1. **Kolom pembayarannya `kd_jenis_bayar`, bukan `kd_jenis`** — satu-satunya
+    #    tabel di sini yang begitu. Ia tetap menunjuk `m_jenis_bayar.kd_jenis`
+    #    (dibuktikan view `mon_t_pembelian_order_edit`), jadi pilihannya sama;
+    #    yang beda cuma nama kolomnya. `buat()` mengisi ctx dengan kedua nama.
+    # 2. **Ada `no_pp_order`, `jaminan`, dan `tanggal_terima`** yang tak punya
+    #    padanan di tabel lain. Label manusianya dari view legacy yang sama:
+    #    "No. PP Order", "Jaminan / U.M.", dan "Penerimaan".
+    # 3. **`t_pembelian_order` PUNYA trigger `insert_temp_m_*`**, sedangkan
+    #    `t_penjualan_order` tak punya satu pun. Artinya order pembelian IKUT
+    #    TERKIRIM KE PUSAT begitu disimpan — order penjualan tidak. Jangan
+    #    menyamakan keduanya hanya karena namanya bersaudara.
+    #
+    # Yang TIDAK bisa ditiru dari data: tabelnya KOSONG di setiap server yang
+    # terjangkau (testgudang 0 baris, PUSAT 0 baris padahal `t_pembelian` 12.605).
+    # Jadi awalan nomor dan penanda order terbuka mengikuti konvensi
+    # `t_penjualan_order` yang sudah terbukti di 7.209 baris, bukan tebakan baru.
+    "pembelian_order": {
+        "label": "Order Pembelian",
+        "tabel": "t_pembelian_order",
+        "tabel_detail": "t_pembelian_order_detail",
+        "kunci": "no_order",
+        "pihak": "kd_supplier",
+        "harga": "harga_beli",
+        # Awalan TETAP, tidak dari m_divisi.kepala_nota — alasan yang sama dengan
+        # AWALAN_ORDER ("OJ") di penjualan.py: penomoran order tak boleh bercabang
+        # mengikuti divisi, dan layarnya tetap jalan walau kepala_nota belum diisi.
+        "awalan": "OB",
+        "header": ["no_order", "no_pp_order", "kd_divisi", "kd_supplier", "kd_kas",
+                   "kd_jenis_bayar", "tanggal", "tanggal_terima", "status",
+                   "diskon1", "diskon2", "diskon3", "diskon4", "pajak", "ppnbm",
+                   "no_bukti", "keterangan", "jaminan", "kd_user", "no_transaksi"],
+        "detail": ["no_order", "kd_barang", "kd_satuan", "jenis", "qty",
+                   "harga_beli", "diskon1", "diskon2", "diskon3", "diskon4"],
+    },
     "pembelian_retur": {
         "label": "Retur Pembelian",
         "tabel": "t_pembelian_retur",
@@ -127,8 +164,13 @@ def _nilai(kolom: str, it: dict, ctx: dict):
 def buat(profile, jenis: str, *, kd_user, kd_divisi, kd_pihak, kd_jenis, kd_kas,
          items, kd_pegawai="", keterangan=KOSONG, no_bukti=KOSONG, no_order=KOSONG,
          diskon_header=(0, 0, 0, 0), pajak=0.0, ppnbm=0.0, status=1,
-         tanggal=None, jatuh_tempo=None) -> dict:
-    """Tulis satu transaksi. Mengembalikan {nomor, total, baris}."""
+         tanggal=None, jatuh_tempo=None,
+         no_pp_order=KOSONG, jaminan=0.0, tanggal_terima=None) -> dict:
+    """Tulis satu transaksi. Mengembalikan {nomor, total, baris}.
+
+    Tiga argumen terakhir hanya dirujuk `pembelian_order`; jenis lain tak punya
+    kolomnya, jadi nilainya tak pernah sampai ke SQL.
+    """
     s = spec(jenis)
     _periksa(items, kd_user, kd_divisi)
     tanggal = tanggal or dt.datetime.now()
@@ -137,21 +179,38 @@ def buat(profile, jenis: str, *, kd_user, kd_divisi, kd_pihak, kd_jenis, kd_kas,
 
     ctx = {
         "kd_divisi": kd_divisi, s["pihak"]: kd_pihak, "kd_jenis": kd_jenis,
+        # `t_pembelian_order` menamai kolom yang sama `kd_jenis_bayar`. Diisi di
+        # sini dengan nilai yang sama alih-alih menambah kunci SPEC: keduanya
+        # menunjuk `m_jenis_bayar.kd_jenis`, jadi memang satu nilai — cuma satu
+        # tabel yang mengejanya berbeda.
+        "kd_jenis_bayar": kd_jenis,
         "kd_kas": kd_kas, "kd_user": kd_user, "kd_pegawai": kd_pegawai,
         "tanggal": tanggal, "tanggal_jatuh_tempo": jatuh_tempo or tanggal,
+        "tanggal_terima": tanggal_terima or jatuh_tempo or tanggal,
         "no_bukti": no_bukti or KOSONG, "no_order": no_order or KOSONG,
+        "no_pp_order": no_pp_order or KOSONG, "jaminan": float(jaminan or 0),
         "keterangan": keterangan or KOSONG, "status": int(status),
         "pajak": pajak, "ppnbm": ppnbm,
         "diskon1": dh[0], "diskon2": dh[1], "diskon3": dh[2], "diskon4": dh[3],
     }
     tanya_h = ", ".join("?" for _ in s["header"])
     tanya_d = ", ".join("?" for _ in s["detail"])
+    # Tabel yang kuncinya BUKAN no_transaksi tapi tetap punya kolom itu = order:
+    # kolomnya menampung nomor transaksi yang kelak menutup order ini, dan
+    # selama masih terbuka ia diisi nomor ordernya sendiri. Konvensi yang sama
+    # dipakai `t_penjualan_order` dan terbukti di 7.209 baris; menandainya lewat
+    # `status` justru yang gagal di sana (25 baris berstatus 1 padahal belum
+    # diambil, lenyap dari daftar tanpa galat apa pun). Disimpulkan dari header
+    # supaya tak ada kunci SPEC ketiga yang bisa lupa diisi.
+    order_terbuka = "no_transaksi" in s["header"] and s["kunci"] != "no_transaksi"
 
     with mssql.cursor(profile, autocommit=False) as cur:
-        awalan = awalan_untuk(cur, kd_divisi)
+        awalan = s.get("awalan") or awalan_untuk(cur, kd_divisi)
 
         def tulis(no):
             ctx[s["kunci"]] = no
+            if order_terbuka:
+                ctx["no_transaksi"] = no
             cur.execute(  # nosec B608 — nama tabel/kolom dari SPEC
                 f"INSERT INTO {s['tabel']} ({', '.join(s['header'])}) VALUES ({tanya_h})",
                 [ctx.get(k, "") for k in s["header"]],

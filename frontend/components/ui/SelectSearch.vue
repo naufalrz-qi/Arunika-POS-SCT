@@ -7,6 +7,10 @@ const props = defineProps({
   options: { type: Array, default: () => [] }, // [{value,label}]
   label: { type: String, default: "" },
   placeholder: { type: String, default: "Semua" },
+  // Harus prop, BUKAN attribute fallthrough: akar komponen ini <div>, jadi
+  // `disabled` yang dioper dari luar mendarat di div dan tombolnya tetap bisa
+  // diklik — kunci yang tak mengunci apa pun. Alasan yang sama dengan Input.vue.
+  disabled: { type: Boolean, default: false },
 });
 const emit = defineEmits(["update:modelValue"]);
 const q = ref("");
@@ -32,7 +36,14 @@ const { open, root, close: dismiss } = useDismissable({
 const filtered = computed(() => {
   const t = q.value.toLowerCase().trim();
   if (!t) return props.options;
-  return props.options.filter((o) => String(o.label).toLowerCase().includes(t));
+  // Kode ikut dicari, bukan hanya namanya: layar master menampilkan kode di
+  // kolom pertama (MAB483, KAA862), jadi mengetiknya lalu tak menemukan apa pun
+  // terbaca seperti kotak carinya rusak.
+  return props.options.filter(
+    (o) =>
+      String(o.label).toLowerCase().includes(t) ||
+      String(o.value).toLowerCase().includes(t),
+  );
 });
 const currentLabel = computed(() => {
   const hit = props.options.find((o) => String(o.value) === String(props.modelValue));
@@ -52,13 +63,22 @@ function close({ refocus = false } = {}) {
 // untuk daftar divisi/supplier yang panjang, dan tanpa itu pengguna harus
 // meraih mouse hanya untuk mulai mengetik.
 function toggle() {
+  if (props.disabled) return;
   if (open.value) {
     close();
     return;
   }
   open.value = true;
   activeIndex.value = -1;
-  nextTick(() => search.value?.focus());
+  nextTick(() => {
+    search.value?.focus();
+    // Daftarnya `absolute` di dalam induk yang bisa menggulung — di dalam Modal
+    // (badannya `overflow-y-auto`) ia terpotong tepi bawah, jadi pengguna
+    // membuka daftar dan seolah tak terjadi apa-apa. `block: "nearest"` tak
+    // melakukan apa pun kalau daftarnya sudah terlihat penuh, jadi ini tidak
+    // menggeser halaman pada pemakaian di luar modal.
+    listbox.value?.scrollIntoView({ block: "nearest" });
+  });
 }
 
 // Menyaring ulang bisa membuat sorotan menunjuk ke luar daftar.
@@ -108,11 +128,12 @@ const activeId = computed(() =>
       :aria-expanded="open"
       :aria-controls="listboxId"
       aria-haspopup="listbox"
+      :disabled="disabled"
       @click="toggle"
       @keydown.down.prevent="move(1)"
       @keydown.up.prevent="move(-1)"
       @keydown.escape="close({ refocus: true })"
-      class="flex h-9 w-full items-center justify-between rounded-control border border-border-strong bg-surface px-2.5 text-left text-sm text-ink transition-colors duration-150 focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500"
+      class="flex h-9 w-full items-center justify-between rounded-control border border-border-strong bg-surface px-2.5 text-left text-sm text-ink transition-colors duration-150 focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-50"
     >
       <span :class="modelValue === '' || modelValue === null ? 'text-ink-subtle' : ''">{{ currentLabel }}</span>
       <Icon name="chevron" size="h-4 w-4" class="shrink-0 text-ink-muted" aria-hidden="true" />

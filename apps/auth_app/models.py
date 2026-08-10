@@ -38,6 +38,14 @@ class User(AbstractUser):
     # dan mematikan semua centang mengisi ketiga kunci.
     hidden_data_keys = models.JSONField(default=list, blank=True)
 
+    # Batas baca kotak notif: satu stempel waktu, bukan tabel status baca per
+    # baris. Notif di sini adalah irisan ActivityLog milik akun ini (lihat
+    # apps/core/models.log_untuk), dan yang benar-benar ditanyakan orang cuma
+    # "ada yang baru sejak terakhir saya lihat?" — pertanyaan yang dijawab satu
+    # perbandingan timestamp. NULL berarti belum pernah dibuka, jadi semuanya
+    # terhitung baru; itu pula perilaku yang benar untuk akun yang baru dibuat.
+    notif_dibaca_at = models.DateTimeField(null=True, blank=True)
+
     # Tautan ke user legacy TIDAK ada di sini — ia per koneksi, lihat TautanUser
     # di bawah berkas ini.
 

@@ -5,7 +5,7 @@ from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
 from inertia import render
 
-from apps.core.http import get_data
+from apps.core.http import get_data, redirect_aman
 from apps.core.models import log_activity
 from apps.transactions import indexes
 from core import mssql
@@ -14,7 +14,10 @@ from .models import ConnStatus, DbType, ServerProfile
 
 
 def connections_index(request):
-    profiles = [p.as_dict() for p in ServerProfile.objects.all()]
+    # `as_dict_admin`, bukan `as_dict`: ini satu-satunya layar yang menampilkan
+    # dan menyunting host/port/database/username. Semua tempat lain (prop bersama
+    # navbar, halaman sinkronisasi) memakai bentuk tanpa alamat server.
+    profiles = [p.as_dict_admin() for p in ServerProfile.objects.all()]
     return render(
         request,
         "Admin/Connections/Index",
@@ -108,9 +111,11 @@ def connections_set_default(request, conn_id):
         request.session["flash_error"] = (
             f"Koneksi dialihkan ke {profile.name}, tapi server tidak merespons. {result['message']}"
         )
-    data = get_data(request)
-    redirect_to = data.get("redirect_to") or "/admin-panel/connections"
-    return redirect(redirect_to)
+    # `redirect_to` datang dari layar, jadi ia dilewatkan penyaring yang sama
+    # dengan jalur simpan Update Barang. Sebelum ini ia diteruskan apa adanya —
+    # open redirect di endpoint yang justru sengaja dikecualikan dari pemeriksaan
+    # menu, jadi ia terjangkau setiap akun yang bisa login.
+    return redirect_aman(get_data(request), "/admin-panel/connections")
 
 
 def connections_test(request, conn_id):

@@ -88,7 +88,10 @@ class MenuKhususAdminTests(TestCase):
     layar mana pun yang bisa menariknya kembali.
     """
 
-    KUNCI = ("opname", "koreksi_stok", "opname_neraca")
+    # Tiga layar tulis kas ikut di sini dengan alasan yang sama: uang keluar
+    # dari kas begitu disimpan, dan tak ada layar yang bisa menariknya kembali.
+    KUNCI = ("opname", "koreksi_stok", "opname_neraca",
+             "kas_biaya_input", "kas_penambahan", "kas_mutasi")
 
     def setUp(self):
         self.spv = User.objects.create_user("spv7", password="rahasia-kuat-123", role=Role.SUPERVISOR)
@@ -250,7 +253,7 @@ class LayarKelolaMenuTests(TestCase):
         """Mengubah data induk bukan pekerjaan harian toko: satu salah ketik di
         sini ikut terbawa ke SETIAP nota yang menunjuk ke baris itu."""
         menus = {m["key"]: m for m in assignable_menus()}
-        for kunci in ("products", "customers", "suppliers", "update_barang",
+        for kunci in ("products", "customers", "suppliers", "update_harga",
                       "kelola_pelanggan", "kelola_supplier"):
             self.assertNotIn("roles", menus[kunci], f"{kunci} bocor ke kasir/supervisor")
             self.assertIn(kunci, default_keys_for(Role.ADMIN))

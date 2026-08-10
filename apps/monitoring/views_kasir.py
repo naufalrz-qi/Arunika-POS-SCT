@@ -268,9 +268,15 @@ def _transaksi_index(request, jenis: str):
             else:
                 opsi["pihak"] = opsi["pelanggan"]
             return {"opsi": opsi, "hasil_cari": pj.cari_barang(profile, cari),
+                    # Nilai bawaan + ancar-ancar nomor, sama seperti layar nota.
+                    # Tanpa ini ketiga layar ini membuka dengan Jenis Bayar dan
+                    # Kas KOSONG, padahal keduanya NOT NULL ber-FK: simpan
+                    # pertama selalu gagal dengan galat foreign key, dan
+                    # kesalahannya tak kelihatan sebagai isian yang belum diisi.
+                    "bawaan": pj.bawaan_form(profile, jenis),
                     "conn_error": None}
         except pyodbc.Error as exc:
-            return {"opsi": {}, "hasil_cari": [],
+            return {"opsi": {}, "hasil_cari": [], "bawaan": {},
                     "conn_error": mssql.friendly_error(exc, "Gagal membaca data transaksi")}
 
     return render(request, "Kasir/Transaksi", props={
@@ -281,6 +287,11 @@ def _transaksi_index(request, jenis: str):
         "label_pihak": "Supplier" if pihak_supplier else "Pelanggan",
         "aksi_url": f"/kasir/{jenis.replace('_', '-')}",
         "pakai_pegawai": "kd_pegawai" in s["detail"],
+        # Kolom yang hanya dimiliki t_pembelian_order. Dikirim sebagai daftar
+        # yang disimpulkan dari SPEC, bukan dari `jenis == "pembelian_order"` di
+        # Vue: kalau suatu saat kolomnya berubah, layarnya ikut tanpa disunting.
+        "kolom_order": [k for k in ("no_pp_order", "tanggal_terima", "jaminan")
+                        if k in s["header"]],
         "kd_user": tautan.kd_user,
         "kd_divisi": tautan.kd_divisi,
     })
@@ -310,6 +321,11 @@ def _transaksi_save(request, jenis: str):
             keterangan=data.get("keterangan") or tx.KOSONG,
             pajak=float(data.get("pajak") or 0),
             ppnbm=float(data.get("ppnbm") or 0),
+            # Hanya dirujuk header `pembelian_order`; jenis lain tak punya
+            # kolomnya, jadi nilainya berhenti di ctx dan tak sampai ke SQL.
+            no_pp_order=data.get("no_pp_order") or tx.KOSONG,
+            jaminan=data.get("jaminan") or 0,
+            tanggal_terima=_waktu(data.get("tanggal_terima")),
         )
     except ValueError as exc:
         request.session["flash_error"] = str(exc)
@@ -344,6 +360,15 @@ def pembelian(request):
 @require_POST
 def pembelian_save(request):
     return _transaksi_save(request, "pembelian")
+
+
+def pembelian_order(request):
+    return _transaksi_index(request, "pembelian_order")
+
+
+@require_POST
+def pembelian_order_save(request):
+    return _transaksi_save(request, "pembelian_order")
 
 
 def retur_pembelian(request):
@@ -439,6 +464,61 @@ def cari_customer_json(request):
     except pyodbc.Error as exc:
         return JsonResponse(
             {"rows": [], "error": mssql.friendly_error(exc, "Gagal mencari pelanggan")})
+
+
+def info_customer_json(request):
+    """Panel info pelanggan: identitas + piutang aktif + nota terakhirnya.
+
+    SATU round-trip untuk ketiganya, dipanggil ketika pelanggan dipilih. Tiga
+    endpoint terpisah akan berarti tiga perjalanan WAN untuk satu klik — dan di
+    profil jauh jumlah round-trip-lah biayanya, bukan besar datanya.
+
+    Pelanggan UMUM tidak dijemput sama sekali (dijaga juga di layar): ia bawaan
+    setiap nota tunai, jadi memanggilnya berarti satu perjalanan sia-sia di awal
+    hampir setiap nota.
+    """
+    profile = _active()
+    if not profile:
+        return JsonResponse({"error": CONN_ERROR}, status=200)
+    kd = (request.GET.get("kd_customer") or "").strip()
+    if not kd or kd.upper() == pj.CUSTOMER_UMUM:
+        return JsonResponse({"profil": None, "piutang": [], "histori": []})
+    try:
+        profil = pj.info_customer(profile, kd)
+        return JsonResponse({
+            # Kolom uang dicabut DI SINI, bukan di layar: penyaringan di Vue
+            # cuma kosmetik (lihat useHiddenData.js), dan payload-nya tetap
+            # sampai ke peramban yang tak berhak. `profil` sebuah dict tunggal,
+            # jadi ia dibungkus list dulu — kalau tidak, `limit_kredit` lolos
+            # justru di satu-satunya tempat panel ini menyebut rupiah langsung.
+            "profil": (_tanpa_harga(request, [profil])[0] if profil else None),
+            "piutang": _tanpa_harga(request, pj.piutang_customer(profile, kd)),
+            "histori": _tanpa_harga(request, pj.histori_nota(profile, kd_customer=kd)),
+        })
+    except pyodbc.Error as exc:
+        return JsonResponse(
+            {"error": mssql.friendly_error(exc, "Gagal membaca info pelanggan")})
+
+
+def histori_user_json(request):
+    """Nota terakhir yang dibuat AKUN INI di koneksi ini.
+
+    `kd_user` diambil dari tautan, tidak pernah dari payload layar: kalau layar
+    boleh menyebut kodenya sendiri, siapa pun bisa membaca nota orang lain
+    dengan mengganti satu parameter di URL.
+    """
+    profile = _active()
+    if not profile:
+        return JsonResponse({"rows": [], "error": CONN_ERROR})
+    kd_user = tautan_untuk(request.user, profile).kd_user
+    if not kd_user:
+        return JsonResponse({"rows": []})
+    try:
+        rows = pj.histori_nota(profile, kd_user=kd_user)
+        return JsonResponse({"rows": _tanpa_harga(request, rows)})
+    except pyodbc.Error as exc:
+        return JsonResponse(
+            {"rows": [], "error": mssql.friendly_error(exc, "Gagal membaca histori")})
 
 
 def order_json(request):

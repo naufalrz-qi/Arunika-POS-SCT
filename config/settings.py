@@ -5,6 +5,7 @@ Django + Inertia + Vite over a legacy MS SQL Server dataset. App-local state
 (auth, sessions, logs, connection profiles) lives in SQLite; all business data
 is read from MS SQL via raw pyodbc in each app's services.py.
 """
+import ipaddress
 import os
 from pathlib import Path
 
@@ -107,12 +108,20 @@ PASSWORD_HASHERS = [
 ]
 
 # Minimal hardening for a flat trusted LAN: block trivially guessable passwords.
+#
+# Keempatnya, bukan cuma dua yang pertama. Dengan panjang + bukan-angka saja,
+# `password` dan `admin123` lolos, begitu pula sandi yang sama persis dengan
+# username-nya — dan itu justru pola yang paling mungkin dipakai saat admin
+# membuatkan akun untuk belasan kasir sekaligus. Kedua validator tambahan bawaan
+# Django, nol dependensi baru.
 AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
         "OPTIONS": {"min_length": 8},
     },
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
 ]
 
 # Masa berlaku sesi dihitung SEJAK LOGIN (absolut), BUKAN idle: dengan
@@ -144,6 +153,38 @@ SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=False)
 CSRF_COOKIE_SECURE = _env_bool("CSRF_COOKIE_SECURE", default=False)
 SECURE_HSTS_SECONDS = int(os.environ.get("SECURE_HSTS_SECONDS", "0"))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=False)
+SECURE_SSL_REDIRECT = _env_bool("SECURE_SSL_REDIRECT", default=False)
+# Django 4+ menuntut origin HTTPS didaftarkan sebelum POST-nya diterima. Tanpa
+# ini, memasang HTTPS membuat SETIAP form gagal dengan "CSRF verification failed"
+# — kegagalan yang terbaca seperti bug aplikasi, bukan seperti setelan kurang.
+# Wajib berskema: https://nama.tailnet.ts.net (bukan sekadar hostname).
+CSRF_TRUSTED_ORIGINS = [
+    o.strip() for o in os.environ.get("CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()
+]
+
+# --- Di belakang reverse proxy ---------------------------------------------
+# Proxy yang KITA pasang sendiri, sebagai IP atau CIDR. Kosong = tidak ada proxy,
+# dan `X-Forwarded-For` diabaikan sepenuhnya (lihat apps/core/http.client_ip).
+#
+# Ini SETELAN KEAMANAN, bukan setelan kenyamanan: mengisinya berarti menyatakan
+# "apa pun yang datang dari alamat ini sudah menimpa X-Forwarded-For sendiri".
+# Mengisinya dengan alamat yang bisa dijangkau klien langsung sama dengan
+# mengizinkan siapa pun mengaku datang dari jaringan kantor.
+TRUSTED_PROXIES = [
+    ipaddress.ip_network(c.strip(), strict=False)
+    for c in os.environ.get("TRUSTED_PROXIES", "").split(",") if c.strip()
+]
+
+# TLS diterminasi di proxy, jadi Django perlu diberi tahu — kalau tidak,
+# `request.is_secure()` selalu False, cookie ber-`Secure` tak pernah dikirim, dan
+# SECURE_SSL_REDIRECT=1 menghasilkan pengalihan berputar tanpa henti.
+#
+# Sengaja di balik env dan BUKAN dinyalakan otomatis bersama TRUSTED_PROXIES:
+# Django menerapkan header ini tanpa memeriksa siapa pengirimnya, jadi ia hanya
+# aman bila proxy-nya benar-benar menimpa `X-Forwarded-Proto` pada tiap
+# permintaan. Nyalakan setelah memastikan itu, bukan sebelumnya.
+if _env_bool("TRUST_FORWARDED_PROTO", default=False):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # --- Network access control (PRD §3.4 / §7.6) ------------------------------
 # When enabled, /admin-panel/* is reachable only from the Tailscale CGNAT range.
@@ -151,6 +192,24 @@ ENFORCE_TAILSCALE = _env_bool("ENFORCE_TAILSCALE", default=not DEBUG)
 TAILSCALE_CIDR = os.environ.get("TAILSCALE_CIDR", "100.64.0.0/10")
 # Always-allowed IPs (loopback for local dev).
 ADMIN_IP_ALLOWLIST = ["127.0.0.1", "::1"]
+
+# Rentang LAN yang juga boleh membuka /admin-panel, di luar Tailscale.
+#
+# Ada karena kenyataannya begitu: sebagian perangkat kantor tidak punya Tailscale
+# dan dijembatani ke aplikasi lewat mesin lain. Tanpa jalan resmi menyatakan itu,
+# jembatannya berubah jadi celah — Django hanya melihat IP mesin penjembatan, dan
+# karena mesin itu ADA di Tailscale, penjaganya meloloskan siapa pun yang lewat
+# situ tanpa satu pun tanda. Rentang yang ditulis di sini adalah pernyataan sadar
+# dan bisa diaudit; celah tadi tidak.
+#
+# CATATAN PENTING: ini hanya berarti kalau IP asli penelepon memang sampai ke
+# Django. Penerus TCP mentah (`netsh interface portproxy`) tidak mengirim
+# X-Forwarded-For sama sekali, jadi di belakangnya SEMUA orang beralamat sama dan
+# daftar ini tak bisa membedakan siapa pun. Lihat PRODUCTION.md.
+ADMIN_ALLOWED_NETWORKS = [ipaddress.ip_network(TAILSCALE_CIDR, strict=False)]
+for _cidr in os.environ.get("ADMIN_EXTRA_CIDRS", "").split(","):
+    if _cidr.strip():
+        ADMIN_ALLOWED_NETWORKS.append(ipaddress.ip_network(_cidr.strip(), strict=False))
 
 LANGUAGE_CODE = "id"
 # Zona waktu tampilan. Penyimpanan tetap UTC (USE_TZ=True); ini yang menentukan

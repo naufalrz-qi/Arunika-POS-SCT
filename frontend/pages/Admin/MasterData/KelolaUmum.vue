@@ -11,10 +11,10 @@ import Modal from "@/components/ui/Modal.vue";
 import DataTable from "@/components/ui/DataTable.vue";
 import LoadingCard from "@/components/ui/LoadingCard.vue";
 
-// Satu layar untuk Kelola Pelanggan dan Kelola Supplier. Bentuk keduanya nyaris sama, jadi
-// yang berbeda datang sebagai prop dari _MASTER di apps/master_data/master_crud.py
-// — satu sumber kebenaran untuk kolom apa yang ada, bukan dua daftar yang
-// pelan-pelan berbeda.
+// Satu layar untuk SEMUA entitas master: Kelola Pelanggan, Kelola Supplier, dan
+// kesebelas tabel referensi. Yang berbeda datang sebagai prop dari _MASTER di
+// apps/master_data/master_crud.py — satu sumber kebenaran untuk kolom apa yang
+// ada, bukan beberapa daftar yang pelan-pelan berbeda.
 const props = defineProps({
   data: { type: Object, default: null },
   filters: { type: Object, default: () => ({}) },
@@ -26,6 +26,16 @@ const props = defineProps({
   angka: { type: Array, default: () => [] },
   lookup_fields: { type: Array, default: () => [] },
   wajib: { type: Array, default: () => [] },
+  // Kolom tambahan di tabel daftar, di luar Kode + nama. Tanpa ini layar Merk
+  // merender Alamat/Telepon/HP yang tabelnya memang tak punya.
+  kolom_tabel: { type: Array, default: () => [] },
+  // m_kas tak punya kolom `nama`; yang manusiawi di sana `cabang`.
+  kolom_nama: { type: String, default: "nama" },
+  // field → [{value,label}]. Dirender Select, dan opsi pertama jadi bawaan.
+  pilihan: { type: Object, default: () => ({}) },
+  // Daftar entitas untuk dropdown Kelola Data Referensi. Kosong = layar entitas
+  // tunggal (Pelanggan/Supplier), dropdown-nya tidak dirender sama sekali.
+  pemilih: { type: Array, default: () => [] },
 });
 
 const isi = computed(() => props.data || {});
@@ -39,16 +49,19 @@ const LABEL = {
   parent: "Induk", npwp_no: "No. NPWP", nppkp_no: "No. NPPKP",
   npwp_nama: "Nama NPWP", npwp_alamat: "Alamat NPWP", point: "Poin",
   limit_kredit: "Limit Kredit", disc: "Diskon", status: "Status",
-  jenis: "Jenis",
+  jenis: "Jenis", kd_telp: "Kode Area", kd_negara: "Negara",
+  kd_index: "Kode Akun", no_rekening: "No. Rekening", cabang: "Nama / Cabang",
+  saldo_awal: "Saldo Awal", nominal: "Nominal",
 };
 const labelKolom = (k) => LABEL[k] || k;
 
 const columns = computed(() => [
   { key: props.kunci, label: "Kode", sortable: true },
-  { key: "nama", label: "Nama", sortable: true },
-  { key: "alamat", label: "Alamat" },
-  { key: "telepon", label: "Telepon" },
-  { key: "hp", label: "HP" },
+  { key: props.kolom_nama, label: labelKolom(props.kolom_nama), sortable: true },
+  ...props.kolom_tabel.map((k) => ({ key: k, label: labelKolom(k) })),
+  // Status selalu ikut kalau entitasnya punya: menonaktifkan adalah satu-satunya
+  // pembatalan yang ada di layar ini, jadi hasilnya harus terlihat di daftar.
+  ...(props.pilihan.status ? [{ key: "status", label: "Status", sortable: true }] : []),
   { key: "aksi", label: "", align: "right" },
 ]);
 
@@ -57,12 +70,34 @@ function submitCari() {
     { preserveState: true, preserveScroll: true });
 }
 
+function gantiEntitas(e) {
+  // Rutenya berpindah halaman penuh, bukan preserveState: kolom, form, dan
+  // lookup entitas berikutnya sama sekali berbeda dari yang sedang tampil.
+  router.get(`/admin-panel/master/referensi/${e}`);
+}
+
 // Kolom berkunci-asing dirender sebagai pilihan, bukan isian bebas: database
 // menolak nilai yang bukan kode nyata, jadi mengetiknya sendiri selalu gagal.
 const lookups = computed(() => isi.value.lookups || {});
 const semuaField = computed(() => [...props.teks, ...props.lookup_fields, ...props.angka]);
 const wajibkan = (k) => (props.wajib.includes(k) ? " *" : "");
-const kosong = () => Object.fromEntries(semuaField.value.map((k) => [k, ""]));
+
+// Angka yang punya daftar pilihan (status) dirender Select, bukan kotak angka.
+// "Nonaktifkan" adalah satu-satunya pembatalan yang ada — tak ada tombol hapus,
+// karena DELETE di tabel-tabel ini merambat sampai menghapus barang.
+const angkaBebas = computed(() => props.angka.filter((k) => !(k in props.pilihan)));
+const fieldPilihan = computed(() => props.angka.filter((k) => k in props.pilihan));
+
+// Baris baru mengikuti opsi PERTAMA tiap pilihan, bukan string kosong. Kosong
+// dibaca server sebagai 0 = nonaktif, jadi bawaan yang salah di sini membuat
+// setiap baris baru lahir dalam keadaan mati.
+const kosong = () => Object.fromEntries(semuaField.value.map(
+  (k) => [k, props.pilihan[k] ? props.pilihan[k][0].value : ""]));
+
+const labelPilihan = (k, nilai) => {
+  const opsi = (props.pilihan[k] || []).find((o) => String(o.value) === String(nilai));
+  return opsi ? opsi.label : nilai;
+};
 
 const form = useForm({ ...kosong(), [props.kunci]: "" });
 const buka = ref(false);
@@ -90,9 +125,17 @@ function simpan() {
 
 <template>
   <AdminLayout :title="label">
-    <!-- Form cari di LUAR <Deferred> supaya langsung bisa diketik. -->
+    <!-- Pemilih entitas & form cari di LUAR <Deferred> supaya langsung bisa dipakai. -->
     <Card class="mb-4">
       <div class="flex flex-wrap items-end gap-3">
+        <Select
+          v-if="pemilih.length"
+          :model-value="entitas"
+          label="Data"
+          :options="pemilih"
+          class="min-w-[12rem]"
+          @update:model-value="gantiEntitas"
+        />
         <form class="flex flex-1 items-end gap-3" @submit.prevent="submitCari">
           <Input
             v-model="cari"
@@ -115,6 +158,9 @@ function simpan() {
 
       <Card>
         <DataTable :rows="rows" :columns="columns" :empty-message="`Belum ada ${label.toLowerCase()}.`">
+          <template #cell-status="{ row }">
+            {{ labelPilihan("status", row.status) }}
+          </template>
           <template #cell-aksi="{ row }">
             <Button size="sm" variant="secondary" @click="openEdit(row)">Ubah</Button>
           </template>
@@ -153,14 +199,29 @@ function simpan() {
           :error="form.errors[k]"
         />
         <Input
-          v-for="k in angka"
+          v-for="k in angkaBebas"
           :key="k"
           v-model="form[k]"
           type="number"
           :label="labelKolom(k)"
           :error="form.errors[k]"
         />
+        <!-- Status: Select, bukan kotak angka. Tak ada tombol Hapus di layar ini
+             dan itu disengaja — DELETE di tabel referensi merambat sampai
+             menghapus barang, jadi "Nonaktif" adalah pembatalannya. -->
+        <Select
+          v-for="k in fieldPilihan"
+          :key="k"
+          v-model="form[k]"
+          :label="labelKolom(k)"
+          :options="pilihan[k]"
+          :error="form.errors[k]"
+        />
       </div>
+      <p v-if="pilihan.status" class="mt-3 text-xs text-ink-subtle">
+        Data yang tak dipakai lagi diset <strong>Nonaktif</strong>, tidak dihapus — baris
+        lama yang menunjuk ke sini tetap utuh.
+      </p>
       <template #footer>
         <Button variant="secondary" @click="buka = false">Batal</Button>
         <Button :loading="form.processing" @click="simpan">Simpan</Button>

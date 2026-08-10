@@ -1,4 +1,5 @@
 from django.urls import path
+from django.views.generic import RedirectView
 
 from . import views
 
@@ -22,16 +23,36 @@ urlpatterns = [
     path("master/kelola-pelanggan/save", views.pelanggan_save, name="kelola_pelanggan_save"),
     path("master/kelola-supplier", views.supplier, name="kelola_supplier"),
     path("master/kelola-supplier/save", views.supplier_save, name="kelola_supplier_save"),
+    # Kelola Data Referensi — sebelas entitas lewat satu key menu. Rute telanjang
+    # HARUS ada: ia href menunya, dan `menu_key_for_path` mencocokkan prefix dari
+    # situ sehingga `/referensi/<entitas>` dan `/save` ikut terjaga.
+    path("master/referensi", views.referensi_awal, name="kelola_referensi"),
+    path("master/referensi/<slug:entitas>", views.referensi, name="kelola_referensi_entitas"),
+    path("master/referensi/<slug:entitas>/save", views.referensi_save,
+         name="kelola_referensi_save"),
     path("master/kode-nota", views.kode_nota_index, name="kode_nota"),
     path("master/kode-nota/save", views.kode_nota_save, name="kode_nota_save"),
-    path("master/update-barang", views.update_barang_index, name="update_barang"),
-    path("master/update-barang/harga", views.update_barang_harga, name="update_barang_harga"),
-    path("master/update-barang/harga-massal", views.update_barang_harga_massal, name="update_barang_harga_massal"),
-    path("master/update-barang/status", views.update_barang_status, name="update_barang_status"),
-    path("master/update-barang/identitas", views.update_barang_identitas,
+    # Alamat lama, dipertahankan SEMENTARA untuk masa peralihan. Halaman yang
+    # sudah terbuka di tab orang lain masih memegang URL ini, dan
+    # `query_string=True` menjaga `?search=` mereka ikut terbawa — tanpa itu
+    # pengalihannya membuang apa yang sedang mereka cari. Boleh dihapus setelah
+    # beberapa minggu; ia tak dirujuk kode mana pun (dijaga test_kelola_barang).
+    path("master/update-barang", RedirectView.as_view(
+        url="/admin-panel/master/update-harga", query_string=True)),
+    path("master/barang-baru", RedirectView.as_view(
+        url="/admin-panel/master/kelola-barang", query_string=True)),
+    path("master/kelola-barang", views.barang_baru_index, name="kelola_barang"),
+    path("master/kelola-barang/cari", views.barang_cari, name="kelola_barang_cari"),
+    path("master/kelola-barang/muat", views.barang_muat, name="kelola_barang_muat"),
+    path("master/kelola-barang/save", views.barang_baru_save, name="kelola_barang_save"),
+    path("master/update-harga", views.update_barang_index, name="update_barang"),
+    path("master/update-harga/harga", views.update_barang_harga, name="update_barang_harga"),
+    path("master/update-harga/harga-massal", views.update_barang_harga_massal, name="update_barang_harga_massal"),
+    path("master/update-harga/status", views.update_barang_status, name="update_barang_status"),
+    path("master/update-harga/identitas", views.update_barang_identitas,
          name="update_barang_identitas"),
-    path("master/update-barang/riwayat", views.update_barang_riwayat, name="update_barang_riwayat"),
-    path("master/update-barang/detail", views.update_barang_detail, name="update_barang_detail"),
+    path("master/update-harga/riwayat", views.update_barang_riwayat, name="update_barang_riwayat"),
+    path("master/update-harga/detail", views.update_barang_detail, name="update_barang_detail"),
     path("master/riwayat-update-barang", views.riwayat_update_barang_index, name="riwayat_update_barang"),
     path("master/pergerakan-harga", views.pergerakan_harga_index, name="pergerakan_harga"),
     path("master/sync-harga", views.sync_harga_index, name="sync_harga"),
@@ -102,6 +123,10 @@ urlpatterns = [
     path("kas/harian/export", views.kas_harian_export, name="kas_harian_export"),
     path("kas/shift", views.shift, name="shift"),
     path("kas/shift/export", views.shift_export, name="shift_export"),
+    # Jalur TULIS kas. Href menunya `/kas/input/<jenis>`, jadi tiap jenis punya
+    # key menunya sendiri dan `/save` ikut terjaga lewat pencocokan prefix.
+    path("kas/input/<slug:jenis>", views.kas_input_index, name="kas_input"),
+    path("kas/input/<slug:jenis>/save", views.kas_input_save, name="kas_input_save"),
     path("laporan/biaya-operasional", views.biaya_operasional, name="biaya_operasional"),
     path("laporan/biaya-operasional/export", views.biaya_operasional_export, name="biaya_operasional_export"),
     path("laporan/biaya-kategori", views.biaya_kategori, name="biaya_kategori"),

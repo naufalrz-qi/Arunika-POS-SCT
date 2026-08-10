@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from django.test import TestCase
 
-from apps.auth_app.models import Role, User
+from apps.auth_app.models import Role, TautanUser, User
 from apps.connections.models import ServerProfile
 
 BARANG = [
@@ -33,9 +33,13 @@ class HasilCariMembawaSatuanTests(TestCase):
         self.boss = User.objects.create_user(
             "boss6", password="rahasia-kuat-123", role=Role.SUPERADMIN)
         self.client.force_login(self.boss)
-        ServerProfile.objects.create(
+        profile = ServerProfile.objects.create(
             name="TOKO A", host="h", db_name="SOLID_SIM", username="sa",
             password_encrypted="x", is_default=True)
+        # Koreksi Stok ber-`butuh_tautan`: tanpa baris ini seluruh layarnya
+        # (termasuk /cari lewat pencocokan prefix) dijawab 403 oleh penjaga.
+        TautanUser.objects.create(
+            user=self.boss, profile=profile, kd_user="UAA002", kd_divisi="DAA001")
 
     def _cari(self, **params):
         with patch("apps.monitoring.views.inv.cek_stok", return_value=list(BARANG)), \

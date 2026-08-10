@@ -21,7 +21,7 @@ const props = defineProps({
   bolehEditIdentitas: { type: Boolean, default: false },
   // Halaman tujuan redirect setelah simpan (endpoint update-barang menerima
   // `redirect_to` supaya tidak terlempar balik ke Update Barang).
-  redirectTo: { type: String, default: "/admin-panel/master/update-barang" },
+  redirectTo: { type: String, default: "/admin-panel/master/update-harga" },
 });
 const emit = defineEmits(["close"]);
 
@@ -144,7 +144,7 @@ function simpanIdentitas() {
   identitasConfirmOpen.value = false;
   identitasForm
     .transform((d) => ({ ...d, nama: (d.nama || "").trim(), keterangan: (d.keterangan || "").trim() }))
-    .post("/admin-panel/master/update-barang/identitas", {
+    .post("/admin-panel/master/update-harga/identitas", {
       preserveScroll: true,
       onSuccess: () => emit("close"),
     });
@@ -156,7 +156,7 @@ function confirmSave() {
 }
 
 function saveHarga() {
-  priceForm.post("/admin-panel/master/update-barang/harga", {
+  priceForm.post("/admin-panel/master/update-harga/harga", {
     preserveScroll: true,
     onSuccess: () => {
       emit("close");
@@ -167,7 +167,7 @@ function saveHarga() {
 
 function saveStatus(table) {
   router.post(
-    "/admin-panel/master/update-barang/status",
+    "/admin-panel/master/update-harga/status",
     {
       kd_barang: props.item.kd_barang,
       nama: props.item.nama,

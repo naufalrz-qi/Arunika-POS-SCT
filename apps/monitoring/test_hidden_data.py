@@ -8,7 +8,12 @@ barang sekaligus. Karena itu yang diuji di sini isi RESPONS, bukan layarnya.
 from django.test import SimpleTestCase, TestCase
 
 from apps.auth_app.models import DATA_KEY_SET, Role, User
-from apps.monitoring.views import _KLASIFIKASI_UANG, _hidden_fields, _tanpa_kolom
+from apps.monitoring.views import (
+    _KLASIFIKASI_UANG,
+    _UANG_INFO_KASIR,
+    _hidden_fields,
+    _tanpa_kolom,
+)
 from apps.transactions.reports import UANG_OPNAME_NERACA
 
 # Kolom uang milik Klasifikasi Pelanggan. Diambil dari sumbernya, bukan ditulis
@@ -86,8 +91,16 @@ class HiddenFields(TestCase):
         u = User.objects.create_user("u2", role=Role.ADMIN, hidden_data_keys=["nominal"])
         self.assertEqual(
             _hidden_fields(_Req(u)),
-            {"nominal", "revenue", "nilai"} | _UANG_KLASIFIKASI | _UANG_NERACA,
+            {"nominal", "revenue", "nilai"}
+            | _UANG_KLASIFIKASI | _UANG_NERACA | _UANG_INFO_KASIR,
         )
+
+    def test_nominal_menutup_kolom_uang_panel_info_kasir(self):
+        # Panel info kasir berdiri di luar /admin-panel, jadi ia tak lewat satu
+        # pun spec laporan: kalau namanya tak ada di sini, piutang dan batas
+        # kredit tetap terkirim ke akun yang rupiahnya sudah dicabut.
+        u = User.objects.create_user("u5", role=Role.ADMIN, hidden_data_keys=["nominal"])
+        self.assertTrue(_UANG_INFO_KASIR <= _hidden_fields(_Req(u)))
 
     def test_nominal_menutup_seluruh_kolom_uang_klasifikasi_pelanggan(self):
         # Diuji terpisah dari daftar di atas supaya jelas apa yang dijaga: halaman

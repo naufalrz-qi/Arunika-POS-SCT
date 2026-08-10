@@ -2,9 +2,12 @@
 from inertia import render
 from django.contrib.auth import authenticate, login, logout
 from django.core.cache import cache
+from django.http import JsonResponse
 from django.shortcuts import redirect
+from django.utils import timezone
+from django.views.decorators.http import require_POST
 
-from apps.core.http import get_data
+from apps.core.http import client_ip, get_data
 from apps.core.menus import landing_for
 from apps.auth_app.models import User
 from apps.core.models import log_activity
@@ -35,7 +38,10 @@ def login_view(request):
         data = get_data(request)
         username = (data.get("username") or "").strip()
         password = data.get("password") or ""
-        ip = request.META.get("REMOTE_ADDR")
+        # Lewat helper: di belakang proxy, REMOTE_ADDR sama untuk semua orang,
+        # jadi kuncinya menyatu dan satu kasir yang salah ketik lima kali
+        # mengunci seluruh toko selama 15 menit.
+        ip = client_ip(request)
         fail_key = _login_fail_key(username, ip)
 
         if cache.get(fail_key, 0) >= LOGIN_MAX_FAILS:
@@ -91,3 +97,20 @@ def logout_view(request):
     log_activity(request, "logout", "Logout")
     logout(request)
     return redirect("/login")
+
+
+@require_POST
+def notif_baca(request):
+    """Tandai kotak notif sudah dibaca sampai detik ini.
+
+    Rutenya di AKAR, bukan di bawah /admin-panel, dan itu bukan kebetulan:
+    `admin_network_guard` menutup seluruh /admin-panel dengan penjaga Tailscale,
+    sedangkan kasir di toko tidak ada di rentang CGNAT. Lonceng ada di navbar
+    setiap halaman termasuk layar kasir, jadi menaruh rutenya di sana membuatnya
+    mati persis untuk orang yang paling sering melihatnya. Notif itu milik
+    AKUN — ia tidak bergantung koneksi maupun menu.
+    """
+    if not request.user.is_authenticated:  # dijaga auth_required, ini lapis kedua
+        return JsonResponse({"ok": False}, status=403)
+    User.objects.filter(pk=request.user.pk).update(notif_dibaca_at=timezone.now())
+    return JsonResponse({"ok": True, "belum": 0})

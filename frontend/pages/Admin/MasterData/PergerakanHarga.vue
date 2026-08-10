@@ -101,7 +101,7 @@ const editLoadingKd = ref(null);
 async function openEdit(kd_barang) {
   editLoadingKd.value = kd_barang;
   try {
-    const { data: res } = await axios.get("/admin-panel/master/update-barang/detail", {
+    const { data: res } = await axios.get("/admin-panel/master/update-harga/detail", {
       params: { kd_barang },
     });
     if (res.item) editItem.value = res.item;

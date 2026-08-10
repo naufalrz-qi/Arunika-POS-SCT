@@ -21,9 +21,9 @@ const formatRupiah = (v) => rp.format(angka(v));
 // desimal benar-benar bisa terketik — dan Number("1,5") adalah NaN.
 const angka = (v) => Number(String(v ?? "").replace(",", ".")) || 0;
 
-// Satu layar untuk Retur Penjualan, Terima Pembelian, dan Retur Pembelian.
-// Bentuknya sama; yang berbeda datang sebagai prop dari SPEC di
-// apps/transactions/transaksi.py — satu sumber kebenaran, bukan tiga salinan
+// Satu layar untuk Retur Penjualan, Pembelian, Order Pembelian, dan Retur
+// Pembelian. Bentuknya sama; yang berbeda datang sebagai prop dari SPEC di
+// apps/transactions/transaksi.py — satu sumber kebenaran, bukan empat salinan
 // yang pelan-pelan berbeda.
 const props = defineProps({
   nota: { type: Object, default: null },
@@ -33,9 +33,13 @@ const props = defineProps({
   label_pihak: { type: String, default: "Pelanggan" },
   aksi_url: { type: String, required: true },
   pakai_pegawai: { type: Boolean, default: false },
+  // Kolom yang hanya dimiliki t_pembelian_order, disimpulkan dari SPEC di
+  // server — bukan dari `jenis === "pembelian_order"` di sini.
+  kolom_order: { type: Array, default: () => [] },
   kd_user: { type: String, default: "" },
   kd_divisi: { type: String, default: "" },
 });
+const punyaKolom = (k) => props.kolom_order.includes(k);
 
 const isi = computed(() => props.nota || {});
 const opsi = computed(() => isi.value.opsi || {});
@@ -183,7 +187,27 @@ const total = computed(() => {
 const form = useForm({
   kd_pihak: "", kd_jenis: "", kd_kas: "", kd_pegawai: "",
   keterangan: "", pajak: 0, ppnbm: 0, items: [],
+  // Hanya dipakai Order Pembelian; jenis lain tak punya kolomnya di database
+  // dan nilainya berhenti di server.
+  no_pp_order: "", tanggal_terima: "", jaminan: 0,
 });
+
+// Nilai bawaan dari server (pj.bawaan_form). Sebelum ini ketiga layar ini
+// membuka dengan Jenis Bayar dan Kas KOSONG padahal keduanya NOT NULL ber-FK,
+// jadi simpan pertama selalu gagal dengan galat foreign key — dan galat itu
+// tak terbaca sebagai "ada isian yang belum dipilih".
+//
+// Hanya mengisi yang MASIH kosong: prop deferred datang setelah cat pertama,
+// jadi menimpa apa adanya akan menghapus pilihan orang yang sudah keburu
+// mengetik sebelum datanya sampai.
+const bawaan = computed(() => isi.value.bawaan || {});
+watch(bawaan, (b) => {
+  if (!b || !Object.keys(b).length) return;
+  for (const k of ["kd_jenis", "kd_kas"]) {
+    if (!form[k] && b[k]) form[k] = b[k];
+  }
+  if (!form.tanggal_terima) form.tanggal_terima = b.jatuh_tempo || "";
+}, { immediate: true });
 const KELAS_SEL =
   "w-full rounded-control border border-border-default bg-surface px-2 py-1 text-right tabular-nums";
 const KELAS_PILIH =
@@ -223,7 +247,7 @@ function simpan() {
       v-if="!kd_user || !kd_divisi"
       variant="warning"
       class="mb-4"
-      message="Akun Anda belum ditautkan ke user legacy dan divisi, jadi transaksi belum bisa dicatat. Minta pengelola aplikasi mengisinya di Manajemen User."
+      message="Akun Anda belum ditautkan ke user legacy dan divisi, jadi transaksi belum bisa dicatat. Minta pengelola aplikasi mengisinya di Kelola Tautan User."
     />
 
     <Deferred data="nota">
@@ -235,11 +259,26 @@ function simpan() {
 
       <div class="grid gap-4">
         <Card :title="label">
+          <!-- Ancar-ancar saja: nomor yang benar-benar dipakai dihitung ulang
+               di dalam transaksi saat menyimpan, karena aplikasi POS lama bisa
+               memakainya lebih dulu. Ditampilkan karena begitulah layar legacy
+               bekerja — dipakai untuk mencocokkan lembar fisik. -->
+          <p v-if="bawaan.nomor" class="mb-3 text-sm text-ink-subtle">
+            No. {{ label }} (ancar-ancar):
+            <strong class="font-mono text-ink">{{ bawaan.nomor }}</strong>
+          </p>
+
           <div class="grid gap-3 sm:grid-cols-2">
             <Select v-model="form.kd_pihak" :label="`${label_pihak} *`" :options="opsi.pihak || []" placeholder="Pilih…" />
             <Select v-model="form.kd_jenis" label="Jenis Bayar *" :options="opsi.jenis_bayar || []" placeholder="Pilih…" />
             <Select v-model="form.kd_kas" label="Kas *" :options="opsi.kas || []" placeholder="Pilih…" />
             <Select v-if="pakai_pegawai" v-model="form.kd_pegawai" label="Pegawai *" :options="opsi.pegawai || []" placeholder="Pilih…" />
+            <!-- Ketiganya hanya ada di t_pembelian_order. Labelnya diambil dari
+                 view legacy mon_t_pembelian_order_edit, bukan dikarang:
+                 "No. PP Order", "Penerimaan", "Jaminan / U.M.". -->
+            <Input v-if="punyaKolom('no_pp_order')" v-model="form.no_pp_order" label="No. PP Order" placeholder="-" />
+            <Input v-if="punyaKolom('tanggal_terima')" v-model="form.tanggal_terima" type="date" label="Tgl. Penerimaan" />
+            <Input v-if="punyaKolom('jaminan')" v-model="form.jaminan" type="number" label="Jaminan / U.M. (Rp)" />
             <Input v-model="form.keterangan" label="Keterangan" placeholder="-" />
           </div>
 

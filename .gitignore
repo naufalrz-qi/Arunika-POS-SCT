@@ -18,6 +18,12 @@ frontend/dist/
 
 # Env
 .env
+# Salinan .env apa pun — cadangan sebelum menyunting, varian per-mesin, dsb.
+# Semuanya memuat POS_FERNET_KEY dan password sa; sekali ter-commit, menghapusnya
+# belakangan tidak menolong karena ia tetap ada di riwayat.
+# `.env.example` dikecualikan: ia memang dilacak dan isinya kosong semua.
+.env.*
+!.env.example
 
 prd.md
 DESIGN.md

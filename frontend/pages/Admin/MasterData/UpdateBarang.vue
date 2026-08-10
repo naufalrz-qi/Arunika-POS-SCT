@@ -83,7 +83,7 @@ const pick = reactive({
 });
 
 function reload() {
-  router.get("/admin-panel/master/update-barang", { search: pick.search }, { preserveState: true, preserveScroll: true });
+  router.get("/admin-panel/master/update-harga", { search: pick.search }, { preserveState: true, preserveScroll: true });
 }
 
 const num = (n) => (n ?? 0).toLocaleString("id-ID");
@@ -187,7 +187,7 @@ async function openEditByCode(kd_barang) {
   showPecahan.value = false;
   editLoadingKd.value = kd_barang;
   try {
-    const { data: res } = await axios.get("/admin-panel/master/update-barang/detail", {
+    const { data: res } = await axios.get("/admin-panel/master/update-harga/detail", {
       params: { kd_barang },
     });
     if (res.item) editing.value = res.item;
@@ -245,8 +245,8 @@ function applySelected() {
   if (!payload.length) return;
   applying.value = true;
   router.post(
-    "/admin-panel/master/update-barang/harga-massal",
-    { items: payload, redirect_to: "/admin-panel/master/update-barang" },
+    "/admin-panel/master/update-harga/harga-massal",
+    { items: payload, redirect_to: "/admin-panel/master/update-harga" },
     {
       preserveScroll: true,
       onFinish: () => {
@@ -318,7 +318,7 @@ async function openRiwayat(item) {
   riwayatLoading.value = true;
   riwayatRows.value = [];
   try {
-    const { data: res } = await axios.get("/admin-panel/master/update-barang/riwayat", {
+    const { data: res } = await axios.get("/admin-panel/master/update-harga/riwayat", {
       params: { kd_barang: item.kd_barang },
     });
     riwayatRows.value = res.rows || [];

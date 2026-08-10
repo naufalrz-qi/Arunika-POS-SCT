@@ -34,25 +34,53 @@ def tautan_untuk(user, profile):
             or KOSONG)
 
 
-def tautan_wajib(user, profile):
-    """Tautan yang lengkap, atau `ValueError` berisi apa yang harus dilakukan.
+def yang_kurang(t):
+    """Bagian tautan yang belum diisi. Kosong berarti lengkap.
 
     `kd_user` DAN `kd_divisi` sama-sama wajib: yang pertama menentukan transaksi
     tercatat atas nama siapa, yang kedua menentukan awalan nomornya dan divisi
     mana yang stoknya bergeser. `kd_pegawai` tidak wajib — ia cuma nilai bawaan
     di form nota dan bisa dipilih di layar.
     """
+    return [nama for nama, nilai in
+            (("user legacy", t.kd_user), ("divisi", t.kd_divisi)) if not nilai]
+
+
+def lengkap(user, profile) -> bool:
+    """Apakah akun ini siap MENULIS di `profile`. Tanpa melempar.
+
+    Tanpa koneksi aktif jawabannya `True`, dan itu disengaja: gerbang menu ini
+    menjawab "sudah ditautkan atau belum", bukan "servernya ada atau tidak".
+    Menyembunyikan layar saat koneksi belum dipilih akan menuduh orang belum
+    ditautkan padahal masalahnya lain — sementara ketiadaan koneksi sudah punya
+    suaranya sendiri di layar (banner galat koneksi) dan di `tautan_wajib`.
+    """
+    return not profile or not yang_kurang(tautan_untuk(user, profile))
+
+
+def pesan_belum_tertaut(profile, kurang) -> str:
+    """Satu kalimat penolakan, dipakai DUA tembok.
+
+    Tembok menu (`apps/core/menus.py` + `admin_network_guard`) menutup layarnya
+    sebelum dibuka; `tautan_wajib` di bawah menutup simpanannya. Keduanya harus
+    mengucapkan hal yang sama — kalau kata-katanya bercabang, orang yang
+    tertahan di satu tembok akan mencari perbaikan di tempat yang salah.
+    """
     if not profile:
-        raise ValueError(
-            "Tidak ada koneksi aktif. Pilih koneksi di navbar sebelum menyimpan.")
+        return "Tidak ada koneksi aktif. Pilih koneksi di navbar sebelum menyimpan."
+    return (
+        f"Akun Anda belum ditautkan ({' dan '.join(kurang)} belum diisi) untuk "
+        f"koneksi {profile.name}. Tautan dibuat per koneksi karena kode user "
+        f"legacy berbeda artinya di tiap server. Minta pengelola aplikasi "
+        f"mengisinya di Kelola Tautan User."
+    )
+
+
+def tautan_wajib(user, profile):
+    """Tautan yang lengkap, atau `ValueError` berisi apa yang harus dilakukan."""
+    if not profile:
+        raise ValueError(pesan_belum_tertaut(None, []))
     t = tautan_untuk(user, profile)
-    kurang = [nama for nama, nilai in
-              (("user legacy", t.kd_user), ("divisi", t.kd_divisi)) if not nilai]
-    if kurang:
-        raise ValueError(
-            f"Akun Anda belum ditautkan ({' dan '.join(kurang)} belum diisi) untuk "
-            f"koneksi {profile.name}. Tautan dibuat per koneksi karena kode user "
-            f"legacy berbeda artinya di tiap server. Minta pengelola aplikasi "
-            f"mengisinya di Kelola Tautan User."
-        )
+    if (kurang := yang_kurang(t)):
+        raise ValueError(pesan_belum_tertaut(profile, kurang))
     return t

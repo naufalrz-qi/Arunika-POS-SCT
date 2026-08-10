@@ -56,6 +56,13 @@ JENIS_BARIS = 1
 # kepala_nota membuat penomoran order bercabang dua dan urutannya patah.
 AWALAN_ORDER = "OJ"
 
+# Order pembelian mengikuti pola yang sama, dengan satu perbedaan penting: di
+# sana TIDAK ada data lama untuk ditiru — `t_pembelian_order` kosong di setiap
+# server yang terjangkau (testgudang 0, PUSAT 0 padahal `t_pembelian` 12.605
+# baris). Jadi `OB` adalah keputusan, bukan temuan, dan nomor yang sudah terbit
+# tak bisa ditarik. Lihat SPEC["pembelian_order"] di transaksi.py.
+AWALAN_TETAP = {"penjualan_order": AWALAN_ORDER, "pembelian_order": "OB"}
+
 # tanggal_server SENGAJA di luar daftar: ia diisi GETDATE() sebagai ekspresi SQL
 # (lihat _tulis_order). Beda dengan t_penjualan, kolomnya di sini TIDAK punya
 # DEFAULT — dibiarkan berarti NULL, padahal 7.209 baris legacy semuanya terisi.
@@ -411,15 +418,23 @@ def bawaan_form(profile, jenis: str = "penjualan") -> dict:
     import datetime as _dt
 
     hasil = dict(BAWAAN)
-    hasil["customer_nama"] = "UMUM"
     hasil["tanggal"] = _dt.date.today().isoformat()
     hasil["jatuh_tempo"] = (
         _dt.date.today() + _dt.timedelta(days=BAWAAN["jatuh_tempo_hari"])).isoformat()
+    if jenis.startswith("penjualan"):
+        hasil["customer_nama"] = "UMUM"
+    else:
+        # Sisi beli tak punya pelanggan maupun voucher, dan tak ada "supplier
+        # umum": memilih pemasoknya memang keputusan, bukan sesuatu yang boleh
+        # ditebak. Kuncinya dibuang, bukan dikosongkan — kunci kosong di layar
+        # supplier terbaca seperti pilihan yang gagal dimuat.
+        for k in ("kd_customer", "kd_voucher"):
+            hasil.pop(k, None)
     try:
         with mssql.cursor(profile) as cur:
-            # Order punya awalan tetap sendiri; kepala_nota tak dilihat sama
-            # sekali, jadi layar order tetap jalan walau kolomnya belum diisi.
-            awalan = AWALAN_ORDER if jenis == "penjualan_order" else awalan_untuk(cur)
+            # Kedua order punya awalan tetap sendiri; kepala_nota tak dilihat
+            # sama sekali, jadi layarnya tetap jalan walau kolomnya belum diisi.
+            awalan = AWALAN_TETAP.get(jenis) or awalan_untuk(cur)
             hasil["nomor"] = no_berikutnya(cur, jenis, awalan)
     except Exception:
         # Ancar-ancar nomor tak boleh menjatuhkan seluruh layar.
@@ -444,6 +459,147 @@ def cari_customer(profile, cari: str, limit: int = 20) -> list[dict]:
             [limit, f"%{cari}%", f"%{cari}%"])
         return [{"kd_customer": (r[0] or "").strip(), "nama": (r[1] or "").strip(),
                  "alamat": (r[2] or "").strip()} for r in cur.fetchall()]
+
+
+# --- Panel info di layar kasir --------------------------------------------
+#
+# Tiga potong keterangan yang selama ini hanya ada di /admin-panel: siapa yang
+# sedang dilayani, berapa piutangnya yang belum lunas, dan apa yang barusan
+# dijual oleh kasir ini sendiri. Panel admin tertutup penjaga Tailscale, jadi
+# dari jaringan toko ketiganya memang tak terjangkau — kasir menanyakannya lewat
+# telepon, atau tidak menanyakannya sama sekali.
+#
+# Rumus uangnya TIDAK ditulis ulang di sini: keduanya memanggil `_nota_net` yang
+# sama dengan seluruh laporan penjualan. Menyalin rumusnya berarti dua definisi
+# "total nota" yang akan berbeda diam-diam pada nota berdiskon header.
+
+# Pelanggan lewat. Tak ada member info yang berarti untuknya, dan memanggil
+# panel untuk setiap nota tunai berarti satu round-trip WAN di awal tiap nota.
+CUSTOMER_UMUM = "CAA000"
+
+
+def info_customer(profile, kd_customer: str) -> dict | None:
+    """Identitas pelanggan untuk panel info. None kalau kodenya tak ada.
+
+    `point`, `limit_kredit`, dan `disc` ikut dibawa: ketiganya sudah lama ada di
+    m_customer dan sudah diisi lewat layar master, tapi tak satu pun layar kasir
+    pernah membacanya — jadi diskon langganan dan batas kreditnya cuma diketahui
+    orang yang kebetulan hafal.
+    """
+    kd = (kd_customer or "").strip()
+    if not kd:
+        return None
+    with mssql.cursor(profile) as cur:
+        cur.execute(
+            "SELECT kd_customer, nama, alamat, hp, telepon, point, limit_kredit, "
+            "disc, status FROM m_customer WHERE kd_customer = ?", [kd])
+        r = cur.fetchone()
+    if not r:
+        return None
+    teks = lambda v: (v or "").strip() if isinstance(v, str) else (v or "")  # noqa: E731
+    return {
+        "kd_customer": teks(r[0]), "nama": teks(r[1]), "alamat": teks(r[2]),
+        "hp": teks(r[3]), "telepon": teks(r[4]),
+        "point": float(r[5] or 0), "limit_kredit": float(r[6] or 0),
+        "disc": float(r[7] or 0), "status": int(r[8] or 0),
+    }
+
+
+def _tanpa_rentang_tanggal(where_extra, params):
+    """WHERE untuk `_nota_net` tanpa penyaring tanggal sama sekali.
+
+    Piutang dan histori di panel ini memang bertanya tentang RIWAYAT, bukan satu
+    periode: piutang yang jatuh tempo delapan bulan lalu justru yang paling
+    perlu terlihat saat orangnya berdiri di depan kasir, dan ia akan hilang dari
+    rentang bawaan mana pun.
+    """
+    from apps.transactions.reports import _base_where
+
+    where, p = _base_where({"skip_date_predicate": True})
+    return " AND ".join(where + where_extra), p + params
+
+
+def piutang_customer(profile, kd_customer: str, limit: int = 10) -> list[dict]:
+    """Nota yang belum lunas milik satu pelanggan, terlama dulu.
+
+    Bentuk hitungannya sama dengan laporan Piutang Pelanggan (`reports.piutang`):
+    `status = 0`, dikurangi cicilan, sisa > 0. Voucher sengaja tidak dikurangi —
+    konsisten dengan seluruh laporan penjualan, lihat catatan di reports.py.
+    """
+    from apps.transactions.reports import _nota_net
+
+    kd = (kd_customer or "").strip()
+    if not kd:
+        return []
+    where, params = _tanpa_rentang_tanggal(
+        ["h.status = 0", "h.kd_customer = ?"], [kd])
+    sql = (
+        f"SELECT TOP {int(limit)} n.no_transaksi, n.tanggal, n.tanggal_jatuh_tempo, "
+        "n.total_bersih, COALESCE(cic.total_cicilan, 0) AS total_cicilan, "
+        "n.total_bersih - COALESCE(cic.total_cicilan, 0) AS sisa_piutang, "
+        "CASE WHEN DATEDIFF(day, n.tanggal_jatuh_tempo, GETDATE()) > 0 "
+        "THEN DATEDIFF(day, n.tanggal_jatuh_tempo, GETDATE()) ELSE 0 END AS hari_terlambat "
+        f"FROM ({_nota_net(where)}) n "
+        "LEFT JOIN (SELECT no_transaksi, SUM(nominal) AS total_cicilan "
+        "FROM t_piutang_cicilan GROUP BY no_transaksi) cic "
+        "ON cic.no_transaksi = n.no_transaksi "
+        "WHERE n.total_bersih - COALESCE(cic.total_cicilan, 0) > 0 "
+        # Terlama dulu, bukan terbaru: yang menunggak paling lama itu yang perlu
+        # ditagih, dan daftar ini dipotong di baris ke-10.
+        "ORDER BY n.tanggal"
+    )
+    with mssql.cursor(profile) as cur:
+        cur.execute(sql, params)
+        return [{
+            "no_transaksi": (r[0] or "").strip(),
+            "tanggal": r[1].strftime("%Y-%m-%d") if r[1] else "",
+            "jatuh_tempo": r[2].strftime("%Y-%m-%d") if r[2] else "",
+            "total_penjualan": float(r[3] or 0),
+            "total_cicilan": float(r[4] or 0),
+            "sisa_piutang": float(r[5] or 0),
+            "hari_terlambat": int(r[6] or 0),
+        } for r in cur.fetchall()]
+
+
+def histori_nota(profile, kd_customer: str = "", kd_user: str = "",
+                 limit: int = 10) -> list[dict]:
+    """Nota terakhir milik satu pelanggan ATAU satu user legacy.
+
+    Satu fungsi untuk dua panel karena bedanya cuma satu kolom di WHERE, dan
+    keduanya punya index penampung sendiri: `(kd_customer, tanggal)` dan
+    `IX_tpenjualan_user_tanggal (kd_user, tanggal)`. Penyaringnya didorong ke
+    DALAM `_nota_net` supaya index dipakai untuk MENYARING, bukan untuk memindai
+    seluruh tabel lalu membuang hasilnya.
+    """
+    from apps.transactions.reports import _nota_net
+
+    extra, params = [], []
+    if (kd := (kd_customer or "").strip()):
+        extra.append("h.kd_customer = ?")
+        params.append(kd)
+    if (ku := (kd_user or "").strip()):
+        extra.append("h.kd_user = ?")
+        params.append(ku)
+    if not extra:  # tanpa penyaring ini akan memindai seluruh t_penjualan
+        return []
+    where, params = _tanpa_rentang_tanggal(extra, params)
+    sql = (
+        f"SELECT TOP {int(limit)} n.no_transaksi, n.tanggal, n.status_raw, "
+        "n.total_bersih, COALESCE(c.nama, '') AS customer "
+        f"FROM ({_nota_net(where)}) n "
+        "LEFT JOIN m_customer c ON n.kd_customer = c.kd_customer "
+        "ORDER BY n.tanggal DESC"
+    )
+    status = {0: "Kredit", 1: "Tunai", 2: "Lunas"}
+    with mssql.cursor(profile) as cur:
+        cur.execute(sql, params)
+        return [{
+            "no_transaksi": (r[0] or "").strip(),
+            "tanggal": r[1].strftime("%Y-%m-%d %H:%M") if r[1] else "",
+            "status": status.get(int(r[2] or 0), ""),
+            "nominal": float(r[3] or 0),
+            "customer": (r[4] or "").strip(),
+        } for r in cur.fetchall()]
 
 
 def barang_persis(profile, kode: str) -> dict | None:
