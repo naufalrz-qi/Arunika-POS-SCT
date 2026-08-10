@@ -14,15 +14,11 @@ from apps.monitoring.views import (
     _hidden_fields,
     _tanpa_kolom,
 )
-from apps.transactions.reports import UANG_OPNAME_NERACA
 
 # Kolom uang milik Klasifikasi Pelanggan. Diambil dari sumbernya, bukan ditulis
 # ulang: daftar yang dijiplak akan tetap hijau justru ketika seseorang menambah
 # kolom uang baru dan lupa mendaftarkannya.
 _UANG_KLASIFIKASI = set(_KLASIFIKASI_UANG)
-# Idem untuk Neraca Opname: rupiah selisih stok, disajikan di tiga rute
-# (tabel, export, detail JSON).
-_UANG_NERACA = set(UANG_OPNAME_NERACA)
 
 
 def _payload():
@@ -92,7 +88,7 @@ class HiddenFields(TestCase):
         self.assertEqual(
             _hidden_fields(_Req(u)),
             {"nominal", "revenue", "nilai"}
-            | _UANG_KLASIFIKASI | _UANG_NERACA | _UANG_INFO_KASIR,
+            | _UANG_KLASIFIKASI | _UANG_INFO_KASIR,
         )
 
     def test_nominal_menutup_kolom_uang_panel_info_kasir(self):

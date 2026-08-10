@@ -6,8 +6,6 @@ never block a request on it). `manage.py ensure_indexes` reuses the same list
 for manual/off-hours runs.
 """
 import logging
-import os
-import threading
 
 import pyodbc
 
@@ -197,46 +195,3 @@ def ensure_indexes(profile, out=None):
                 failed.append((name, ddl))
                 results.append({"name": name, "status": "failed", "detail": msg})
     return failed, results
-
-
-# Profiles already ensured this process — don't re-check on every request.
-_ensured: set = set()
-_lock = threading.Lock()
-
-
-def ensure_indexes_async(profile) -> None:
-    """Fire-and-forget index build for a newly active/registered connection.
-
-    Disabled entirely when POS_AUTO_INDEX=0 (DBA wants manual off-hours runs
-    via `manage.py ensure_indexes`, PRD §9)."""
-    if os.environ.get("POS_AUTO_INDEX", "1").lower() in ("0", "false", "no", "off"):
-        return
-    key = (profile.host, profile.port, profile.db_name)
-    with _lock:
-        if key in _ensured:
-            return
-        _ensured.add(key)
-    threading.Thread(target=_safe_ensure, args=(profile,), daemon=True).start()
-
-
-def _safe_ensure(profile):
-    try:
-        failed, _results = ensure_indexes(profile)
-        if failed:
-            detail = f"Index {profile.name}: gagal {', '.join(n for n, _ in failed)}"
-        else:
-            detail = f"Index {profile.name}: registry lengkap"
-        _log_result(detail)
-    except Exception:  # never let index upkeep break anything
-        log.exception("ensure_indexes gagal untuk %s", profile.name)
-        _log_result(f"Index {profile.name}: exception (lihat log server)")
-
-
-def _log_result(detail: str) -> None:
-    """Audit-trail the background build (no request object in this thread)."""
-    try:
-        from apps.core.models import ActivityLog
-
-        ActivityLog.objects.create(username="system", action="index", detail=detail[:255])
-    except Exception:
-        log.exception("Gagal mencatat hasil index ke ActivityLog")

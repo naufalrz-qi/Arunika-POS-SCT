@@ -75,9 +75,6 @@ urlpatterns = [
     path("inventory/koreksi-stok", views.koreksi_stok_index, name="koreksi_stok"),
     path("inventory/koreksi-stok/save", views.koreksi_stok_save, name="koreksi_stok_save"),
     path("inventory/koreksi-stok/cari", views.koreksi_stok_cari, name="koreksi_stok_cari"),
-    path("inventory/opname-neraca", views.opname_neraca, name="opname_neraca"),
-    path("inventory/opname-neraca/export", views.opname_neraca_export, name="opname_neraca_export"),
-    path("inventory/opname-neraca/detail", views.opname_neraca_detail, name="opname_neraca_detail"),
     # Laporan penjualan / pembelian
     path("laporan/penjualan", views.penjualan_all, name="penjualan_all"),
     path("laporan/penjualan/export", views.penjualan_all_export, name="penjualan_all_export"),

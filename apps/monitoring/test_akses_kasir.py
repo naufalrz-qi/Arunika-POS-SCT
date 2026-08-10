@@ -90,7 +90,7 @@ class MenuKhususAdminTests(TestCase):
 
     # Tiga layar tulis kas ikut di sini dengan alasan yang sama: uang keluar
     # dari kas begitu disimpan, dan tak ada layar yang bisa menariknya kembali.
-    KUNCI = ("opname", "koreksi_stok", "opname_neraca",
+    KUNCI = ("opname", "koreksi_stok",
              "kas_biaya_input", "kas_penambahan", "kas_mutasi")
 
     def setUp(self):

@@ -6,7 +6,6 @@ menahan penulisan adalah pemeriksaan di services. Kalau pemeriksaan itu hilang,
 tak ada gejala apa pun di layar — sampai satu cabang menamai ulang barang dan
 namanya menyebar ke semua cabang lewat Sinkronisasi Master Data.
 """
-import os
 from unittest import mock
 
 from django.test import TestCase
@@ -150,18 +149,18 @@ class RutePenulisan(TestCase):
     def _post(self, tipe):
         """POST ke rute identitas dengan koneksi aktif bertipe `tipe`.
 
-        POS_AUTO_INDEX dimatikan karena make_default() memicu pembangunan index
-        di thread latar yang memakai cursor yang sama — tanpa ini panggilan index
-        itu tercampur ke rekaman mock dan menyamarkan apa yang sedang diuji.
+        Dulu di sini ada `POS_AUTO_INDEX=0`: `make_default()` menyalakan thread
+        pembangun index yang memakai cursor yang sama, dan panggilannya tercampur
+        ke rekaman mock. Pembangunan otomatis itu sudah dihapus, jadi tak ada
+        lagi yang perlu diredam.
         """
         p = _profil(f"P-{tipe}", tipe)
-        with mock.patch.dict(os.environ, {"POS_AUTO_INDEX": "0"}):
-            p.make_default()
-            with mock.patch.object(master.mssql, "cursor") as m_cursor:
-                resp = self.client.post(
-                    self.url,
-                    {"kd_barang": "B1", "nama": "Nama Sisipan", "keterangan": "K"},
-                )
+        p.make_default()
+        with mock.patch.object(master.mssql, "cursor") as m_cursor:
+            resp = self.client.post(
+                self.url,
+                {"kd_barang": "B1", "nama": "Nama Sisipan", "keterangan": "K"},
+            )
         # Yang diperiksa: tak ada UPDATE yang terkirim. Lebih tepat daripada
         # "cursor tak pernah dipanggil" — jalur lain (mis. upkeep index) boleh
         # memakai cursor tanpa membuat tes ini berarti apa-apa.

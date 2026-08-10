@@ -263,12 +263,13 @@ def get_active_profile(db_type: str | None = None):
             return None
         qs = ServerProfile.objects.filter(db_type=db_type) if db_type else ServerProfile.objects.all()
         profile = qs.filter(is_default=True).first() or qs.first()
-    if profile:
-        # Auto-build the report/stock indexes once per profile per process, in
-        # the background — new connections get them without a manual command.
-        from apps.transactions.indexes import ensure_indexes_async
-
-        ensure_indexes_async(profile)
+    # SENGAJA tidak membangun index di sini. Dulu fungsi ini menyalakan thread
+    # `ensure_indexes_async` setiap kali profil aktif diresolusi — artinya
+    # sekadar MEMBACA koneksi aktif menulis DDL ke database legacy milik
+    # bersama, tanpa ada yang memintanya, dan gagalnya cuma muncul di log
+    # server ("ensure_indexes gagal untuk RTL PUSAT"). Pembangunan index kini
+    # manual sepenuhnya: tombol Cek Index per koneksi di layar Koneksi Server,
+    # atau `manage.py ensure_indexes`.
     return profile
 
 
