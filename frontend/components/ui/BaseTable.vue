@@ -46,10 +46,9 @@ const { open: columnMenuOpen, root: columnMenuRoot, toggle: toggleColumnMenu } =
 // Pilihan kolom disimpan per halaman. Tanpa ini pilihannya hilang tiap kali
 // pengguna berpindah menu, dan di tabel 25 kolom seperti Penjualan Detail itu
 // berarti mengulang pekerjaan yang sama berkali-kali sehari.
-const storageKey = computed(() => {
-  const path = usePage().url.split(/[?#]/)[0].replace(/\/+$/, "");
-  return `sct.cols.${path}`;
-});
+const halaman = computed(() => usePage().url.split(/[?#]/)[0].replace(/\/+$/, ""));
+const storageKey = computed(() => `sct.cols.${halaman.value}`);
+const lebarKey = computed(() => `sct.lebar.${halaman.value}`);
 
 function loadHidden() {
   try {
@@ -102,6 +101,118 @@ function toggleSort(col) {
   if (!col.sortable) return;
   const dir = props.sortKey === col.key && props.sortDir === "asc" ? "desc" : "asc";
   emit("sort-change", { key: col.key, dir });
+}
+
+// --- Lebar kolom yang bisa ditarik pengguna --------------------------------
+//
+// Disimpan per halaman dengan cara yang sama persis dengan pilihan kolom di
+// atas: laporan di sini punya sampai 25 kolom, dan mengulang penyetelan yang
+// sama tiap kali berpindah menu itu pekerjaan yang tak berujung.
+//
+// Tabelnya tetap `table-layout: auto` SELAMA belum ada yang ditarik. Beralih ke
+// `fixed` sejak awal akan membagi lebar rata untuk semua kolom dan mengubah
+// tampilan setiap tabel di aplikasi ini, padahal tak seorang pun memintanya.
+const LEBAR_MIN = 56;
+
+function muatLebar() {
+  try {
+    const raw = localStorage.getItem(lebarKey.value);
+    if (!raw) return {};
+    const simpanan = JSON.parse(raw);
+    if (!simpanan || typeof simpanan !== "object") return {};
+    // Disaring terhadap kolom yang benar-benar ada — alasan yang sama dengan
+    // `loadHidden`: definisi kolom berubah antar rilis, dan lebar basi akan
+    // menempel di kolom yang salah.
+    const dikenal = new Set(props.columns.map((c) => c.key));
+    return Object.fromEntries(
+      Object.entries(simpanan).filter(
+        ([k, v]) => dikenal.has(k) && Number.isFinite(v) && v >= LEBAR_MIN),
+    );
+  } catch {
+    return {};
+  }
+}
+
+const lebar = ref(muatLebar());
+const adaLebar = computed(() => Object.keys(lebar.value).length > 0);
+const barisJudul = ref(null);
+
+// Lebar tabel disebut eksplisit, bukan `w-full`. Dengan `table-fixed` dan lebar
+// 100%, peramban membagi ulang sisa ruang ke seluruh kolom — menyempitkan satu
+// kolom justru MELEBARKAN kolom lain, dan tarikan pengguna seperti tak
+// berpengaruh. Menyebut jumlahnya membuat setiap piksel jadi milik kolomnya.
+const totalLebar = computed(() =>
+  visibleColumns.value.reduce((n, c) => n + (lebar.value[c.key] || LEBAR_MIN), 0));
+
+watch(lebarKey, () => {
+  lebar.value = muatLebar();
+});
+
+function simpanLebar() {
+  try {
+    if (adaLebar.value) localStorage.setItem(lebarKey.value, JSON.stringify(lebar.value));
+    else localStorage.removeItem(lebarKey.value);
+  } catch {
+    /* mode privat / kuota penuh: lebar tetap berlaku untuk sesi ini */
+  }
+}
+
+/** Bekukan lebar SEMUA kolom pada nilai yang sedang tampak di layar.
+ *
+ * Dipanggil sekali, tepat sebelum tarikan pertama. Tanpa ini peralihan ke
+ * `table-fixed` membagi lebar rata dan seluruh tabel melompat di bawah kursor
+ * pengguna — ia menarik satu kolom, dua puluh empat kolom lain ikut bergeser.
+ */
+function bekukanLebar() {
+  const th = barisJudul.value?.querySelectorAll("th") || [];
+  const awal = {};
+  visibleColumns.value.forEach((col, i) => {
+    const w = th[i]?.getBoundingClientRect().width;
+    if (w) awal[col.key] = Math.max(LEBAR_MIN, Math.round(w));
+  });
+  lebar.value = awal;
+}
+
+function mulaiTarik(col, ev) {
+  // Pegangan ada DI DALAM <th> yang juga tombol pengurut. Tanpa keduanya,
+  // setiap tarikan ikut mengurut ulang tabelnya.
+  ev.preventDefault();
+  ev.stopPropagation();
+  if (!adaLebar.value) bekukanLebar();
+
+  const pegangan = ev.currentTarget;
+  const mulaiX = ev.clientX;
+  const mulaiLebar = lebar.value[col.key] || LEBAR_MIN;
+  // Pointer event, bukan mouse: satu jalur yang sama untuk tetikus, layar
+  // sentuh, dan pena — dan `setPointerCapture` membuat tarikan tetap terkirim
+  // ke pegangan ini walau kursor keluar dari tabel, jadi tak ada penyimak yang
+  // menempel di document dan bisa tertinggal.
+  pegangan.setPointerCapture(ev.pointerId);
+
+  const geser = (e) => {
+    lebar.value = {
+      ...lebar.value,
+      [col.key]: Math.max(LEBAR_MIN, Math.round(mulaiLebar + e.clientX - mulaiX)),
+    };
+  };
+  const selesai = () => {
+    pegangan.removeEventListener("pointermove", geser);
+    pegangan.removeEventListener("pointerup", selesai);
+    pegangan.removeEventListener("pointercancel", selesai);
+    simpanLebar();
+  };
+  pegangan.addEventListener("pointermove", geser);
+  pegangan.addEventListener("pointerup", selesai);
+  pegangan.addEventListener("pointercancel", selesai);
+}
+
+function resetLebar() {
+  lebar.value = {};
+  try {
+    localStorage.removeItem(lebarKey.value);
+  } catch {
+    /* abaikan */
+  }
 }
 
 const nf = new Intl.NumberFormat("id-ID");
@@ -170,6 +281,18 @@ function isNumeric(col) {
             >
               Tampilkan semua kolom
             </button>
+            <!-- Lebar juga tersimpan antar-kunjungan, jadi ia butuh jalan
+                 pulang yang sama jelasnya. Tanpa ini kolom yang telanjur
+                 disempitkan hanya bisa dikembalikan dengan menarik ulang satu
+                 per satu. -->
+            <button
+              v-if="adaLebar"
+              type="button"
+              class="mt-1 w-full border-t border-border-default px-2 pt-2 text-left text-xs text-brand-fg hover:underline"
+              @click="resetLebar"
+            >
+              Kembalikan lebar kolom
+            </button>
           </div>
         </div>
       </div>
@@ -177,13 +300,25 @@ function isNumeric(col) {
       <!-- Tinggi dibatasi supaya tabel tidak memanjang sampai bawah laman:
            badan tabel yang di-scroll, header sticky di dalam kontainer ini. -->
       <div class="max-h-[65vh] overflow-auto scroll-slim">
-        <table class="w-full text-xs tabular-nums">
+        <!-- `table-fixed` HANYA setelah ada kolom yang ditarik. Selama belum,
+             tabelnya melebar mengikuti isinya persis seperti sebelum ini. -->
+        <table
+          :class="['text-xs tabular-nums', adaLebar ? 'table-fixed' : 'w-full']"
+          :style="adaLebar ? { width: `${totalLebar}px` } : undefined"
+        >
+          <colgroup>
+            <col
+              v-for="col in visibleColumns"
+              :key="col.key"
+              :style="lebar[col.key] ? { width: `${lebar[col.key]}px` } : undefined"
+            />
+          </colgroup>
           <!-- Kolom yang sedang mengurut memakai satu-satunya warna yang muncul
                di dalam tabel: garis brand 2px di tepi bawah judulnya. Itu
                menjawab "tabel ini urut berdasarkan apa?" tanpa harus mencari
                tanda panah kecil di antara 25 judul kolom. -->
           <thead class="sticky top-0 z-10 bg-surface-3">
-            <tr>
+            <tr ref="barisJudul">
               <th
                 v-for="col in visibleColumns"
                 :key="col.key"
@@ -200,7 +335,8 @@ function isNumeric(col) {
                     : undefined
                 "
                 :class="[
-                  'whitespace-nowrap border-b border-border-strong px-2 py-1.5 text-[11px] font-semibold',
+                  'relative whitespace-nowrap border-b border-border-strong px-2 py-1.5 text-[11px] font-semibold',
+                  adaLebar ? 'overflow-hidden' : '',
                   alignClass(col),
                   sortKey === col.key ? 'text-ink shadow-[inset_0_-2px_0_var(--color-brand-500)]' : 'text-ink-muted',
                   col.sortable
@@ -216,6 +352,28 @@ function isNumeric(col) {
                   <span v-if="col.sortable && sortKey === col.key" class="text-brand-fg">
                     {{ sortDir === "asc" ? "▲" : "▼" }}
                   </span>
+                </span>
+                <!-- Pegangan lebar kolom. Lebar sentuhnya 8px sementara garisnya
+                     1px: sasaran 1px mustahil dikenai di layar sentuh, dan di
+                     tetikus pun ia menyiksa. `touch-none` mencegah peramban
+                     menafsirkan tarikan sebagai gulir halaman. -->
+                <span
+                  class="group absolute right-0 top-0 h-full w-2 cursor-col-resize touch-none select-none"
+                  role="separator"
+                  aria-orientation="vertical"
+                  :aria-label="`Ubah lebar kolom ${col.label}`"
+                  :title="`Tarik untuk mengubah lebar kolom ${col.label}`"
+                  @pointerdown="mulaiTarik(col, $event)"
+                  @click.stop
+                  @dblclick.stop
+                >
+                  <!-- Seluruhnya DI DALAM <th>, tanpa menjorok ke kolom sebelah:
+                       pegangan yang menyeberang tepi kanan kolom terakhir
+                       memunculkan gulir horizontal beberapa piksel di setiap
+                       tabel, walau tak ada yang melebar. -->
+                  <span
+                    class="pointer-events-none absolute right-0 top-1 h-[calc(100%-0.5rem)] w-px bg-border-strong group-hover:bg-brand-500"
+                  />
                 </span>
               </th>
             </tr>
@@ -239,16 +397,38 @@ function isNumeric(col) {
               <td
                 v-for="col in visibleColumns"
                 :key="col.key"
-                :class="['px-2 py-1 leading-snug text-ink', alignClass(col)]"
+                :class="[
+                  'px-2 py-1 leading-snug text-ink',
+                  adaLebar ? 'overflow-hidden' : '',
+                  alignClass(col),
+                ]"
               >
                 <!-- Nilai panjang (nama barang/supplier) dipotong dengan elipsis:
                      tanpa ini satu baris saja bisa memaksa tabel melebar dan
                      memunculkan scroll horizontal di layar 1366px. Teks utuh
                      tetap terbaca lewat tooltip. Isi slot tak disentuh — di situ
-                     ada badge/tombol yang tak boleh dipotong. -->
+                     ada badge/tombol yang tak boleh dipotong.
+
+                     Batas 26ch dilepas begitu kolomnya punya lebar sendiri:
+                     lebar yang ditarik pengguna-lah yang memotong, bukan angka
+                     tetap yang tak tahu-menahu soal itu. -->
                 <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
-                  <span v-if="isNumeric(col)" class="block whitespace-nowrap">{{ fmt(row[col.key], col) }}</span>
-                  <span v-else class="block max-w-[26ch] truncate" :title="String(row[col.key] ?? '')">
+                  <!-- Angka ikut dipotong saat kolomnya disempitkan, dan itu
+                       kompromi yang disengaja: melimpah ke kolom sebelah membuat
+                       laporan tak terbaca sama sekali. Supaya tak ada digit yang
+                       hilang diam-diam — kesalahan paling mahal di layar ini —
+                       nilai utuhnya selalu ada di tooltip begitu pemotongan
+                       mungkin terjadi. -->
+                  <span
+                    v-if="isNumeric(col)"
+                    class="block truncate whitespace-nowrap"
+                    :title="adaLebar ? String(fmt(row[col.key], col)) : undefined"
+                  >{{ fmt(row[col.key], col) }}</span>
+                  <span
+                    v-else
+                    :class="['block truncate', adaLebar ? 'max-w-full' : 'max-w-[26ch]']"
+                    :title="String(row[col.key] ?? '')"
+                  >
                     {{ fmt(row[col.key], col) }}
                   </span>
                 </slot>

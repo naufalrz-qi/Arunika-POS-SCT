@@ -19,7 +19,9 @@ Ringkasan arsitektur + status untuk planning lanjutan. Django + Inertia.js + Vue
 
 Route prefix `/admin-panel/`. View di `apps/monitoring/views.py` (kecuali connections di `apps/connections/views.py`). Menu def: `apps/core/menus.py`.
 
-**SEMUA 42 menu sudah REAL** (migrasi Fase 3-7 selesai) — `frontend/mock/*.js` sudah dihapus total, tidak ada lagi import `@/mock` di `frontend/pages`. Laporan penjualan/pembelian pakai `apps/transactions/reports.py` (SQL builder per laporan + pagination server-side + export XLSX via `openpyxl`).
+Jumlahnya **58 per 2026-08-09** (`len(ALL_MENUS)`), naik dari 42 saat audit kesiapan ditulis — hitung ulang dari `ALL_MENUS`, jangan dari angka di paragraf ini atau di `KESIAPAN-FITUR.md`.
+
+**SEMUA menu sudah REAL** (migrasi Fase 3-7 selesai) — `frontend/mock/*.js` sudah dihapus total, tidak ada lagi import `@/mock` di `frontend/pages`. Laporan penjualan/pembelian pakai `apps/transactions/reports.py` (SQL builder per laporan + pagination server-side + export XLSX via `openpyxl`).
 
 ## Service backend (reusable)
 
@@ -172,22 +174,208 @@ Tiga layar transaksi berbagi satu berkas Vue dan satu mesin penomoran. Yang perl
 - **Ganti satuan di baris keranjang** (`pj.satuan_barang` → `<layar>/satuan` → `frontend/composables/useSatuan.js`): mengganti satuan WAJIB ikut mengganti harga — 541 barang punya >1 satuan dengan harga berbeda per satuan (1001: PCS 4.800, LSN isi 12 57.600), jadi mempertahankan harga lama berarti menjual selusin seharga satu tanpa satu pun tanda di layar. Daftarnya diambil saat kotak satuan **disentuh**, bukan saat barang ditambahkan: memindai barang tak boleh menambah round-trip (di profil WAN itulah biayanya), sedangkan ganti satuan jarang. Hasil di-cache per `kd_barang`. Baris `m_barang_satuan` ber-`status` 0 tetap ditampilkan — kotak cari pun begitu, dan arti status di tabel itu tak terdokumentasi.
 - **Navigasi sel tabel** (`frontend/composables/useGridNav.js`, dipakai `Penjualan.vue` + `Transaksi.vue`): ↑↓ pindah baris pada kolom yang sama, ←→ pindah kolom **hanya bila kursor sudah di ujung teks**, Enter maju ke sel berikutnya lalu pulang ke kotak entri, Ctrl+Del hapus baris. Karena itu sel angka di tabel `type="text" inputmode="decimal"`, bukan `type="number"`: pada `type=number` `selectionStart` selalu null, jadi "ujung teks" tak bisa diketahui dan angka jadi mustahil disunting. Konsekuensinya koma desimal ala Indonesia benar-benar bisa terketik — semua pembacaan angka di kedua layar lewat helper `angka()`, sebab `Number("1,5")` adalah NaN yang diam-diam menghilangkan satu baris dari total.
 
+## Tautan user legacy: PER KONEKSI (`apps/auth_app/tautan.py`)
+
+`kd_user`/`kd_divisi`/`kd_pegawai` **tidak ada di model `User`** — ia baris di `TautanUser`, satu per (user × koneksi).
+
+- **Kenapa**: `kd_user` dibuat berurutan (`UAA000`, `UAA001`, …) oleh tiap server SENDIRI-SENDIRI, jadi kode yang sama menunjuk orang berbeda di server berbeda. Terukur antara dua server: dari 11 kode yang ada di keduanya, **10 milik orang lain** — `UAA002` adalah KASIR01 di satu server dan YIQ di server lain. Satu `kd_user` di akun admin sudah salah begitu ia berpindah koneksi, dan admin memang berpindah (14 profil).
+- **Tak ada fallback.** `tautan_wajib(user, profile)` menolak kalau tautan koneksi itu belum ada; ia TIDAK meminjam tautan koneksi lain. Peminjaman tak menimbulkan galat apa pun — kodenya valid di server tujuan, lolos FK, langsung terkirim ke pusat oleh trigger — cuma atas nama orang yang tak menyentuhnya. Untuk layar yang sekadar MENAMPILKAN, pakai `tautan_untuk()` yang memulangkan `KOSONG`.
+- **Resolusinya eksplisit**, profil dioper sebagai argumen. Properti yang diam-diam membaca profil aktif dari thread-local akan jatuh ke `is_default` di perintah `manage.py` dan thread penjadwal — persis peminjaman yang dilarang di atas, cuma lebih sulit dilihat.
+- **Kasir/supervisor bukan kasus khusus**: mereka terkunci ke satu server, jadi tautannya kebetulan cuma satu baris. Satu mekanisme, bukan dua.
+- **Menu yang MENULIS hilang sebelum dibuka, bukan menolak sesudah terisi.** Flag `butuh_tautan` di `apps/core/menus.py` menandai **tujuh** layar (`kasir_penjualan`, `kasir_penjualan_order`, `kasir_retur_penjualan`, `kasir_pembelian`, `kasir_pembelian_order`, `kasir_retur_pembelian`, `koreksi_stok`) — daftar ini pernah tertulis "enam" selama Order Pembelian sudah lama ada, jadi baca `KEYS_BUTUH_TAUTAN` alih-alih memercayai angka di kalimat ini; `menus_for()` membuangnya kalau `tautan.lengkap(user, profil_aktif)` palsu. Karena `admin_network_guard._menu_allowed` membaca fungsi yang sama, URL yang diketik langsung ikut tertutup — termasuk `/save` dan `/cari-barang` lewat pencocokan prefix. Empat hal yang sengaja begitu:
+  - **Superadmin ikut digerbangi.** Penyaringnya berjalan SESUDAH cabang peran, bukan sebelum. Ia juga tak bisa menyimpan tanpa `kd_user` di koneksi itu; membiarkan menunya terlihat hanya menunda penolakan sampai keranjang terisi.
+  - **Cek Stok & Cetak Faktur TIDAK ditandai.** Keduanya cuma membaca. Mencabutnya membuat kasir tanpa tautan tak punya satu pun halaman kasir, dan `landing_for()` lalu mengantarnya ke Bantuan — yang ada di `/admin-panel` dan tertutup penjaga Tailscale dari jaringan toko. Jalan buntu.
+  - **Pesannya beda dari "menu belum dibuka".** `middleware._pesan_tautan()` memulangkan kalimat `tautan.pesan_belum_tertaut()` yang sama persis dengan yang dipakai `tautan_wajib`, dan `ditolak()` merendernya tanpa redirect. Pesan generik akan mengirim orangnya ke Kelola Menu padahal yang kurang ada di Kelola Tautan User. Kalau menunya memang tak diberikan, pesan menu yang berlaku (dicek lewat `menus_for(user, abaikan_tautan=True)`).
+  - **`assignable_menus()` tidak disentuh.** Kelola Menu adalah matriks pemberian yang tak bergantung koneksi; menyembunyikan barisnya di sana justru membuat superadmin tak bisa memberikan layar itu sebelum tautannya sempat dibuat.
+  - **Tanpa koneksi aktif = tidak digerbangi.** Ketiadaan server masalah lain dan sudah punya suaranya sendiri (banner galat koneksi); menyembunyikan menu di situ akan menuduh orang belum ditautkan padahal yang kurang servernya.
+  - Hasil `tautan_lengkap()` di-memo pada instance user berkunci id profil — `menus_for()` dipanggil tiga kali per permintaan (penjaga, prop bersama, `landing_for`). Dijaga `apps/monitoring/test_menu_tautan.py`.
+- **`kd_pegawai` bukan syarat simpan**, di server maupun di layar. `Penjualan.vue` dulu mewajibkannya sehingga akun bertautan lengkap-tanpa-pegawai melihat tombol Simpan mati selamanya tanpa penjelasan; kini gerbangnya `kd_user && kd_divisi`, sama dengan `tautan_wajib`, dan bannernya membedakan kedua keadaan itu.
+- **Layarnya `/admin-panel/tautan-user`** (superadmin saja, seperti Kelola Menu). Pilihan kode dibaca dari server yang bersangkutan saat barisnya dibuka — per koneksi, karena memuat 14 profil di muka berarti 42 query MS SQL lintas Tailscale yang kebanyakan takkan dilihat. Isian bebas 6 karakter dihapus: `UAA0O2` (huruf O) dulu bisa tersimpan diam-diam.
+- Migrasi `auth_app/0006` memindahkan tautan lama ke `user.server_profile` (atau profil `is_default` untuk admin yang tak punya server).
+
+## Notif per akun (`apps/core/models.log_untuk` + `nav/NotifMenu.vue`)
+
+Tidak ada model notifikasi tersendiri: isinya irisan `ActivityLog`, yang sudah mencatat 19 jenis aksi. Yang benar-benar ditanyakan orang cuma "ada yang baru sejak terakhir saya lihat?", dan itu dijawab satu kolom `User.notif_dibaca_at` — bukan tabel status-baca per baris.
+
+- **Satu aturan untuk TIGA layar.** `log_untuk(user)` memulangkan queryset yang disaring `username=user.username` kecuali superadmin, dan dipakai kartu Aktivitas Terbaru di dashboard, kotak notif di navbar, DAN halaman Log Aktivitas. Sebelumnya hanya dashboard yang menyaring; `/admin-panel/logs` memperlihatkan jejak semua orang kepada admin mana pun dengan alasan "ini layar audit, aksesnya sudah dijaga menu". Alasan itu tidak berlaku — menu `logs` bukan `superadmin_only`, jadi ia bisa diberikan kepada siapa saja. Pengauditannya tetap utuh, di tangan superadmin.
+- **Disaring lewat `username`, bukan FK.** Kolom itu didenormalisasi supaya jejak tetap terbaca setelah akunnya dihapus; menyaring lewat relasi akan menyembunyikan baris-baris itu dari superadmin juga.
+- **Rute tandai-dibaca `POST /notif/baca` ada di AKAR, bukan `/admin-panel`.** `admin_network_guard` menutup seluruh `/admin-panel` dengan penjaga Tailscale sedangkan kasir di toko tidak ada di rentang CGNAT — lonceng menempel di navbar setiap halaman termasuk layar kasir, jadi menaruh rutenya di sana akan mematikannya persis untuk orang yang paling sering melihatnya, dan gejalanya cuma "lencana tak pernah hilang". Notif milik AKUN: ia tak bergantung koneksi maupun menu. Dijaga `apps/monitoring/test_notif.py`.
+- **Penyaring `?user=` hanya dituruti untuk superadmin.** Kalau tidak, admin bisa membaca jejak siapa pun hanya dengan mengetik namanya di URL. Penyaringnya juga didorong ke SQL: menyaring 300 baris yang sudah terpotong akan menjawab "tak ada" untuk orang yang jejaknya nyata tapi lebih tua dari baris ke-300. Daftar user-nya pun dibangun dari tabel `User`, bukan dari 300 baris yang terkirim (yang menyempit diam-diam saat log bertambah).
+- **Lencananya dinol-kan secara optimistis** saat lonceng ditekan, tapi angka baru dari server SELALU menang (`watch(belumServer)`). Tanpa itu, notif yang datang sesudah lonceng dibuka tertutup topeng lokal dan lencananya tak menyala lagi sampai halaman dimuat ulang penuh.
+- **`ToastContainer` kini juga dipasang di `Auth/Login.vue` dan `Ditolak.vue`.** Keduanya tak memakai `AdminLayout`, jadi `flash_error` yang ditulis tepat sebelum redirect ke `/login` di-`pop()` oleh `inertia_share` pada render Login lalu hilang tanpa jejak — persis pesan "sesi Anda berakhir" yang paling perlu terbaca.
+- `frontend/utils/labels.js` sempat basi setahun: memuat `transaksi`/`tutup_buku`/`batal` yang tak dipancarkan kode mana pun dan tak memuat tujuh slug yang sungguh ditulis. Slug tak terpetakan tampil apa adanya, jadi kegagalannya tak pernah terlihat sebagai galat. Cek ulang dengan `grep -rn 'log_activity(request, ' apps/ --include=*.py`.
+
+## Panel info layar kasir (`penjualan.info_customer/piutang_customer/histori_nota`)
+
+Tiga keterangan yang selama ini hanya ada di `/admin-panel` — dan panel itu tertutup penjaga Tailscale, jadi dari jaringan toko memang tak terjangkau. Sebelumnya memilih member hanya menampilkan nama + kode; `alamat` sudah ikut terambil API lalu dibuang, sedangkan `point`/`limit_kredit`/`disc` tak pernah diminta sama sekali walau sudah lama diisi lewat layar master.
+
+- **Rumus uangnya TIDAK ditulis ulang.** `piutang_customer` dan `histori_nota` memanggil `reports._nota_net()` yang sama dengan seluruh laporan penjualan. Menyalin rumusnya berarti dua definisi "total nota" yang akan berbeda diam-diam pada nota berdiskon header (`h.diskon1-4` fraksi, bukan rupiah — lihat docstring `_nota_net`).
+- **Tanpa penyaring tanggal sama sekali** (`_base_where({"skip_date_predicate": True})`). Piutang yang jatuh tempo delapan bulan lalu justru yang paling perlu terlihat saat orangnya berdiri di depan kasir, dan ia akan hilang dari rentang bawaan mana pun.
+- **Penyaringnya didorong ke DALAM `_nota_net`**, mengikuti `reports.nota_pelanggan`: index `(kd_customer, tanggal)` dan `IX_tpenjualan_user_tanggal (kd_user, tanggal)` lalu dipakai untuk MENYARING, bukan memindai lalu membuang. Index kedua sudah ada di `indexes.py` sejak lama dan sebelum ini tak satu pun query memakainya sebagai predikat.
+- **Satu round-trip untuk tiga blok.** `{layar}/info-customer` memulangkan profil + piutang + nota terakhir sekaligus; tiga endpoint berarti tiga perjalanan WAN untuk satu klik, dan di profil jauh jumlah round-trip-lah biayanya.
+- **`CAA000` (UMUM) tidak dijemput**, dijaga di server DAN di layar. Ia bawaan hampir setiap nota tunai, jadi memanggilnya berarti satu perjalanan sia-sia di awal hampir tiap nota.
+- **Histori kasir dijemput sekali saat bloknya pertama DIBUKA**, bukan saat halaman dimuat — dan menutup-membuka lagi tidak mengulang perjalanannya.
+- **`kd_user` diambil dari tautan, tak pernah dari payload layar.** Kalau layar boleh menyebut kodenya sendiri, siapa pun membaca nota orang lain dengan mengganti satu parameter di URL.
+- **Endpoint didaftarkan ULANG per layar** (`penjualan`, `penjualan-order`) seperti `cari-barang`/`cari-customer`, dan di sini bocorannya lebih besar: ia membawa piutang, batas kredit, dan nota terakhir seseorang, sedangkan path yang tak cocok menu mana pun dianggap BEBAS.
+- **Kolom uangnya dicabut di SERVER** lewat `_tanpa_harga` + `_UANG_INFO_KASIR` di `views.py`. Panel ini berdiri di luar `/admin-panel`, jadi ia melewatkan seluruh penyaringan berbasis spec laporan — nama field di daftar itu satu-satunya yang menahannya. `profil` sebuah dict tunggal, jadi ia dibungkus list dulu; kalau tidak, `limit_kredit` lolos justru di satu-satunya tempat panel ini menyebut rupiah langsung.
+- **Limit kredit memperingatkan, tidak memblokir.** Kapan batas kredit boleh dilewati adalah keputusan orang di depan kasir, bukan keputusan layar.
+- **Bentuknya TAB, di bawah tabel keranjang — bukan tumpukan kartu di bawah form.** Lima tab (Member / Piutang / Nota Pelanggan / Nota Saya / Pintasan) di kolom kiri yang lebar, tinggi petaknya TETAP (`h-44`) supaya isi tab yang panjang tak menggeser apa pun. Versi pertama menumpuk tiga kartu di bawah kartu Input Data, artinya piutang berada di bawah lima belas isian dan baru terlihat kalau seseorang menggulung layar — padahal yang perlu melihatnya sedang berdiri melayani orangnya. Kartu Pintasan yang dulu berdiri sendiri jadi salah satu tab, jadi panel ini menggantikan sesuatu alih-alih menambah.
+- **Jumlahnya tercetak di label tab** (`3` di sebelah "Piutang", merah kalau melewati limit), jadi "ada nota belum lunas" terbaca tanpa membuka tabnya. **Tab tidak berpindah sendiri** saat pelanggan dipilih: memindahkan panel di bawah tangan orang yang sedang mengetik lebih mengganggu daripada menolong — cukup angkanya yang menarik perhatian.
+- Blok keterangan member sengaja TIDAK ikut ditaruh di dalam kotak Customer: kotak itu berdiri di tengah lima belas isian, dan blok yang tingginya berubah-ubah di sana membuat isian di bawahnya melompat tiap kali pelanggan berganti.
+
+## Koreksi Stok (`apps/transactions/opname.py` + `Admin/Inventory/KoreksiStok.vue`)
+
+Halaman sendiri (`/admin-panel/inventory/koreksi-stok`), bukan modal di layar Opname: satu sesi balancing menyentuh ratusan baris — terukur di gudang, 410 baris ber-keterangan sama dalam satu sesi. Opname Stok tetap murni laporan.
+
+Bentuknya beda dari setiap jalur tulis lain, dan bedanya dipaksa database lama — semuanya diukur langsung di server (PAGESANGAN 4.917 baris, PUSAT, testgudang 6.699 baris):
+
+- **`trig_update_stok_opname_stok` tidak aman multi-baris.** Isinya `SELECT @barang = inserted.kd_barang … FROM inserted` — assignment skalar dari sebuah tabel. Satu `INSERT` berisi banyak baris hanya diproses untuk SATU baris, tanpa galat. **Karena itu `buat_koreksi` menulis satu baris per `execute`, dan jangan pernah digabung "supaya efisien".** Trigger `DELETE` sama skalarnya, jadi pembatalan pun harus satu per satu. Catatan mekanisme yang perlu diluruskan: yang digeser trigger ini **bukan** stok yang dibaca Arunika, melainkan `m_barang_stok_akhir` dengan `kd_divisi` di-hardcode `'-'` — cache legacy yang sudah rusak. Angka stok kita datang dari mesin movement yang membaca `t_opname_stok` langsung, jadi 3 baris tetap terhitung 3 dengan cara penulisan mana pun. Aturan satu-baris-per-`execute` tetap berlaku (lihat § "Database legacy" — ia berlaku untuk semua tabel bertrigger skalar, bukan cuma tabel ini), tapi alasannya kehati-hatian terhadap sisi legacy, bukan stok kita sendiri yang hilang.
+- **Tabelnya datar**: satu `no_transaksi` = satu baris = satu barang. Tak ada tabel detail. Koreksi lima barang berarti lima nomor.
+- **EMPAT jenis koreksi, dan namanya bukan karangan kita.** View legacy `mon_t_opname_stok` yang memberi label: `0 Hilang`, `1 Rusak`, `2 Lain-Lain(+)`, `3 Lain-Lain (-)`. Nilai `4` pernah ada di data lama (1 baris di PAGESANGAN) tapi tak punya label sama sekali — sampah, bukan jenis kelima.
+- **Arah tidak pernah jadi pilihan terpisah** — ia melekat pada jenisnya, karena trigger yang memutuskan: `IF @status <> 2 SET @jumlah = @jumlah * -1`. Jadi hanya Lain-Lain(+) yang menambah; Hilang, Rusak, dan Lain-Lain(−) sama-sama mengurangi. Menyediakan pilihan arah sendiri berarti mengizinkan "Rusak, stok bertambah". Bahwa jenisnya perlu berlabel jelas juga bukan dugaan: di gudang ada 30 baris ber-status 3 (Lain-Lain −) yang keterangannya diketik **"RUSAK"** — operator memilih jenis yang salah lalu menuliskan maksudnya sebagai teks bebas.
+- **`kd_divisi` DIPILIH operator, bukan ditebak — dan ini kebalikan dari kesan pertama.** Toko memang berisi satu divisi (`DAA000` di RTL PUSAT/PUSAT/PAGESANGAN), tapi **gudang berisi lima**, dan di sana seluruh 6.698 baris opname ada di `DAA001` (PERGUDANGAN) sementara `DAA000` (UMUM) tak punya satu pun. Mengambil "divisi aktif pertama" berarti mencatat koreksi gudang ke divisi yang tak pernah dipakai. Ia satu-satunya nilai yang datang dari layar, jadi ia diperiksa terhadap `m_divisi` sebelum dipakai.
+- **`kepala_nota` disimpan per DIVISI, bukan per server.** Di gudang: `UM`/`GP`/`GO`/`KN`/`FR`. Nomor opname di sana memang berawalan `GP` (6.698) dan `GO` (1) — mengikuti divisi barisnya. Jadi awalannya diambil `awalan_untuk(cur, kd_divisi)` dengan divisi yang DIPILIH, bukan `awalan_untuk(cur)`.
+- **`tanggal_server` tak punya DEFAULT** tapi 0 dari 4.917 baris lama bernilai NULL — aplikasi lama menulisnya sendiri, jadi kita juga. Jebakan yang sama dengan `t_penjualan_order`.
+- **`keterangan` wajib, `varchar(50)`, dipotong bukan ditolak.** Itu catatan sebab koreksi yang sungguh dibaca orang saat membalance di Neraca Opname ("BALANCE STOK RETUR", "pernah tdk aktif"); 3.474 dari 4.917 baris lama membiarkannya kosong, dan justru itu yang membuat Neraca Opname sulit dipakai.
+- **Aksesnya `admin_only`** (flag baru di `apps/core/menus.py`, dipakai `opname` + `opname_neraca`): dicentang di Kelola Menu pun tak berlaku bagi kasir/supervisor. Beda dari menu admin biasa yang memang boleh diberikan ke supervisor. Ditegakkan di `menus_for()` — dibaca juga oleh `admin_network_guard`, jadi URL yang diketik langsung ikut tertutup, termasuk `/opname/save` lewat pencocokan prefix.
+- **`kd_user` `char(6) NOT NULL`**, sedangkan akun admin/superadmin umumnya belum ditautkan ke user legacy. Layar mengatakannya di awal (prop `kd_user`) alih-alih menolak setelah lima puluh baris terisi. Tautannya diisi di Kelola Tautan User — memalsukan kd_user berarti koreksi tercatat atas nama orang lain. Ada pula FK `FK_t_opname_stok_m_barang`, jadi kd_barang karangan ditolak database.
+
+Layarnya (grid ala aplikasi desktop, mesin navigasinya `useGridNav.js` yang sama dengan layar nota):
+
+- **Yang diketik STOK FISIK, bukan selisih.** Itu yang benar-benar dipunyai operator setelah menghitung rak; menyuruhnya menghitung selisih sendiri menambah satu langkah aritmetika yang bisa salah. Kolom Selisih tetap bisa diketik langsung — untuk Rusak/Hilang ia tahu "3 rusak" tanpa menghitung ulang rak. Keduanya saling mengisi dua arah, dan jenis bawaan mengikuti tanda selisih.
+- **Daftar barang TIDAK dikirim di muka.** Universe barang×divisi ~55rb baris sudah pernah membunuh Stok Akhir sebagai tabel baca-saja (15,6 MB JSON); grid berisi kotak isian di tiap baris jauh lebih berat. Barisnya masuk lewat kotak pindai, plus tombol "Muat semua hasil" yang dibatasi `_BATAS_MUAT` (300) dan mengatakan kalau terpotong.
+- **Stok sistemnya gratis**: diambil dari payload kolumnar yang sudah dicache & dihangatkan scheduler lewat `inv.cek_stok()` — bukan query baru.
+- **Satuan WAJIB ikut hasil pencarian** (`pj.satuan_banyak`, dijaga `test_koreksi_cari.py`). `inv.cek_stok()` hanya mengembalikan kd_barang/nama/stok_akhir/stok_min — tak ada kd_satuan. Versi pertama layar ini mengambil satuan saat dropdown-nya disentuh, dan itu membuatnya buntu: `kd_satuan` wajib terisi sebelum baris bisa disimpan, jadi 300 baris berarti 300 dropdown × 1 round-trip sebelum Simpan bisa ditekan sekali pun. Satu query `IN` dengan `bind_varchar` melayani 300 barang dalam 0,060 dtk. Jangan kembalikan ke pengambilan per baris.
+- **Tata letak: kotak pindai + hasil cari DI ATAS tabel, baris baru disisipkan di atas.** Kebalikan dari layar nota — dan sengaja. Di layar nota barisnya sedikit sehingga kotak di bawah tabel wajar; di sini 300 baris membuat apa pun yang di bawah tabel praktis tak terjangkau.
+- **Divisi dikunci begitu ada baris.** Ia menentukan angka stok yang sudah tampil, jadi menggantinya di tengah jalan membuat seluruh selisih yang sudah diketik salah tanpa satu pun tanda di layar.
+- **Setelah simpan hanya barisnya yang dibersihkan** — divisi & keterangan bertahan, karena satu sesi balancing disimpan bertahap.
+- **Jenis mengikuti tanda selisih di `@change`, bukan `@input`**, dan berhenti mengikuti begitu operator memilih sendiri: mengikutinya tiap ketukan tombol membuat kotak jenis berkedip sepanjang pengetikan, dan menimpa pilihan Rusak/Hilang yang sudah dibuat.
+- **Ganti satuan ikut membaca ulang stok fisik yang sudah diketik.** Stok sistem dibagi `m_barang_satuan.jumlah`, dan qty ditulis dalam satuan pilihan (trigger yang mengalikan balik lewat `GetKuantitasSatuanTerkecil`). Tanpa pembacaan ulang itu, "10" yang tadinya 10 PCS mendadak berarti 10 LUSIN dan selisihnya melonjak 12 kali lipat tanpa satu pun tanda di layar.
+- Baris berselisih nol tidak dikirim — ia cuma menambah nomor dan baris laporan tanpa menggeser apa pun.
+
+## CRUD master & kas (`master_crud.py`, `barang.py`, `kas.py`)
+
+Tiga jalur tulis baru, semuanya diukur di server sebelum ditulis.
+
+**Kode master itu `{huruf}{blok}{NNN}`, dan BLOKNYA BERGULIR.** `MAA000` … `MAA999` lalu `MAB000`. Bukan teori: `m_merk` sudah di `MAB483` dan `m_model` di `MAB296` di testgudang. Awalan tetap seperti `("SAA", None, 3)` yang dipakai supplier karena itu punya langit-langit yang pasti tercapai — ia sekarang memakai `penomoran.kode_master_berikutnya`. Polanya disaring `LIKE 'X[A-Z][A-Z][0-9][0-9][0-9]'`, **bukan** `LIKE 'X%'`: `m_kategori` memuat satu baris `KAATES` dan `m_voucher` satu baris `1`, dan `MAX()` tanpa saringan mengembalikan `KAATES` (huruf > angka secara leksikal) sehingga penomorannya diam-diam mengulang dari 001.
+
+**Tidak ada `DELETE`, dan itu bukan kehati-hatian berlebih.** `m_merk`/`m_kategori`/`m_model`/`m_warna`/`m_jenis_bahan` punya FK `ON DELETE CASCADE` ke `m_barang`, sedangkan `m_barang` → `m_barang_satuan` justru `NO_ACTION`. Menghapus satu merk MENGHAPUS barang-barang "kosong" di bawahnya lalu gagal begitu ketemu barang bersatuan — penghapusan separuh jadi. Pembatalan memakai kolom `status`.
+
+**Arti `status` dibaca dari data.** 0 = nonaktif di mana-mana, tapi "aktif" tidak selalu 1: seluruh 38 baris `m_biaya` bernilai **2**. Karena itu opsinya ada di spec (`pilihan`), bukan di-hardcode. Efek sampingnya memperbaiki bug lama: isian kosong dulu jatuh ke 0, jadi **setiap pelanggan baru lahir nonaktif** — ikut bucket 286 baris `m_customer` berstatus 0.
+
+**`m_supplier` tak punya kolom `status` sama sekali** (13 kolom). Jadi supplier tak bisa dinonaktifkan, dan karena DELETE tak boleh, ia memang tak bisa dibatalkan. Jangan "perbaiki" dengan menambah kolom — skema ini dipakai bersama aplikasi POS lama.
+
+**`t_mutasi_kas.kd_kas_tujuan` itu KAS, walau tipenya berkata lain.** Ia `varchar(10)` bertipe `JR_KODE_ACCOUNT` (sama dengan `m_jurnal.kd_index`) sedangkan `kd_kas_sumber` `char(6)` — semuanya mengarah ke "tujuannya sebuah akun", dan itu keliru. Tiga VIEW legacy (`v_t_mutasi_kas`, `mon_t_mutasi_kas`, `v_g_kas_histori_detail`) sama-sama join `= m_kas.kd_kas`. **Pelajaran yang sama dengan empat jenis koreksi opname: arti kolom legacy ada di `sys.sql_modules`, bukan di skema tabelnya.**
+
+**Bukti nyata cuma ada untuk biaya operasional.** `t_biaya_operasional` punya 9.563 baris di grosirPusat (`SC2603200006` = `{kepala_nota}{YYMMDD}{NNNN}`, `no_bukti` yang kosong ditulis `-`). `t_penambahan_kas` dan `t_mutasi_kas` **nol baris di setiap server yang bisa dijangkau** — bentuk nomornya mengikuti konvensi tetangga, sama seperti Order Pembelian dulu.
+
+**Kelola Barang khusus gudang** (dulu "Tambah Barang"; layar Update Barang berganti nama jadi **Update Harga**, key menunya ikut berganti sehingga ada migrasi `auth_app/0008` yang menulis ulang `User.allowed_menu_keys` — tanpa itu menunya lenyap diam-diam dari akun yang hak aksesnya diatur satu per satu). Struktur di Kelola Barang, harga di Update Harga: `ubah_barang` **tak pernah** menulis `harga_jual` baris yang sudah ada, karena itu akan melewati `update_harga` beserta validasi harga bulat, hitung ulang margin, pembatalan cache, riwayat, dan sebar ke 8 toko. **Tambah barang khusus gudang**, memakai gerbang `services._is_gudang`/`BukanServerGudang` yang sudah ada. `kd_barang` **diketik operator**, tak ada polanya untuk ditebak (`OCT6555`, `6941057402239B`, `JM14062-MU`, `000-06`, `049`) — yang dilakukan modul memeriksa bentroknya. Baris `m_barang_divisi` **opsional**: 22.927 dari 53.865 barang tak punya satu pun, dan mesin stok membaca pergerakan, bukan tabel itu. `status_pinjam` nol di SELURUH 53.865 baris jadi ia tak pernah jadi kotak isian; `tanggal_daftar` terisi di seluruh baris dan tak punya default constraint, jadi wajib ditulis. `_sebar_harga` sengaja TIDAK dipanggil — toko belum punya baris barangnya, dan fan-out `m_barang`/`m_barang_satuan` sudah dikerjakan trigger feed.
+
 ## Tabel legacy tersedia (sudah dicek di server aktif)
 
 `m_barang`, `m_barang_satuan`, `m_barang_promo`(+`_detail`), `m_barang_divisi_diskon`, `m_voucher`, `m_kas`, `m_customer`, `m_supplier`, `m_divisi`, `m_kategori`, `m_pegawai`.
-`t_penjualan`(+`_detail`,`_retur`,`_retur_detail`,`_order`,`_order_detail`), `t_pembelian`(+`_detail`,`_retur`,`_retur_detail`), `t_opname_stok`, `t_mutasi_stok`, `t_mutasi_kas`, `t_penambahan_kas`, `t_pegawai_ganti_shift`(+`_detail`), `t_absensi`, `g_tutup_buku`.
+`t_penjualan`(+`_detail`,`_retur`,`_retur_detail`,`_order`,`_order_detail`), `t_pembelian`(+`_detail`,`_order`,`_order_detail`,`_order_spare_part`(+`_detail`),`_retur`,`_retur_detail`), `t_opname_stok`, `t_mutasi_stok`, `t_mutasi_kas`, `t_penambahan_kas`, `t_pegawai_ganti_shift`(+`_detail`), `t_absensi`, `g_tutup_buku`.
 Kolom asli WAJIB dicek via INFORMATION_SCHEMA sebelum tulis SQL (nama kolom legacy tak standar).
+**Daftar ini pernah tidak lengkap**: `t_pembelian_order` sudah ada sejak awal tapi tak tercatat di sini, dan ketiadaannya sempat dibaca sebagai "tabelnya memang tak ada". Sebelum menyimpulkan sebuah tabel tak ada, tanyakan `INFORMATION_SCHEMA.TABLES` — jangan tanyakan berkas ini.
+
+## Order Pembelian (`SPEC["pembelian_order"]` di `apps/transactions/transaksi.py`)
+
+Layar tulis pertama yang tabelnya **tidak punya satu pun baris lama untuk ditiru**: `t_pembelian_order` kosong di setiap server yang terjangkau (testgudang 0, PUSAT 0 padahal `t_pembelian` 12.605 baris). Semua jalur tulis lain bisa dicocokkan dengan data sungguhan; yang ini tidak. Jadi keputusannya bersandar pada skema, view legacy, dan konvensi tabel kembarannya — dan itu perlu diingat kalau suatu saat angkanya tak cocok dengan aplikasi lama.
+
+- **Ia PUNYA trigger `insert_temp_m_*`, sedangkan `t_penjualan_order` tak punya satu pun.** Artinya order pembelian **ikut terkirim ke pusat** begitu disimpan, order penjualan tidak. Jangan menyamakan keduanya hanya karena namanya bersaudara.
+- **Kolom pembayarannya `kd_jenis_bayar`**, satu-satunya di seluruh SPEC yang begitu. Ia tetap menunjuk `m_jenis_bayar.kd_jenis` — dibuktikan view `mon_t_pembelian_order_edit` — jadi pilihannya dipakai ulang; `buat()` mengisi ctx dengan kedua nama alih-alih menambah kunci SPEC.
+- **Tiga kolom yang tak punya padanan di tabel lain**: `no_pp_order`, `jaminan`, `tanggal_terima`. Labelnya diambil dari view legacy yang sama ("No. PP Order", "Jaminan / U.M.", "Penerimaan"), bukan dikarang. Layar menampilkannya lewat prop `kolom_order` yang disimpulkan dari `s["header"]`, bukan dari `jenis === "pembelian_order"` di Vue.
+- **Awalan `OB`, TETAP**, mengikuti alasan `AWALAN_ORDER` (`OJ`): penomoran order tak boleh bercabang mengikuti divisi, dan layarnya tetap jalan walau `kepala_nota` belum diisi. Ini KEPUTUSAN, bukan temuan — tak ada data untuk membuktikannya, dan nomor yang sudah terbit tak bisa ditarik.
+- **Order terbuka ditandai `no_transaksi = no_order`**, bukan `status`. Konvensi `t_penjualan_order` yang terbukti di 7.209 baris; di sana `status` justru yang gagal (25 baris berstatus 1 padahal belum diambil, lenyap dari daftar tanpa galat). Penandanya disimpulkan dari header (`"no_transaksi" in header and kunci != "no_transaksi"`) supaya tak ada kunci SPEC ketiga yang bisa lupa diisi. Aman pula terhadap `no_transaksi` yang di tabel ini NOT NULL — beda dari `t_penjualan_order` yang nullable.
+- **`tanggal_server` di sini PUNYA DEFAULT `GETDATE()`**, beda dari `t_penjualan_order` yang tidak. Jadi ia tak perlu ditulis eksplisit.
+- **Detailnya tanpa `point1`** (ada di `t_pembelian_detail`, tidak di sini) dan tanpa `total` (kolom terhitung di kedua tabel — menyebutnya membuat INSERT ditolak).
+- Dijaga `apps/transactions/test_pembelian_order.py`, yang menguji BENTUK SQL-nya: tanpa data lama, itu satu-satunya yang bisa diuji tanpa server.
+
+## Nilai bawaan layar tulis kasir
+
+`pj.bawaan_form(profile, jenis)` kini melayani **semua** layar tulis, bukan cuma nota. Sebelumnya keempat layar `Transaksi.vue` membuka dengan Jenis Bayar dan Kas KOSONG padahal keduanya NOT NULL ber-FK: simpan pertama selalu gagal dengan galat foreign key, dan galat itu tak terbaca sebagai "ada isian yang belum dipilih".
+
+- Kunci sisi jual (`kd_customer`, `kd_voucher`) **dibuang** untuk jenis beli, bukan dikosongkan — kunci kosong di layar supplier terbaca seperti pilihan yang gagal dimuat. Tak ada "supplier umum": memilih pemasok memang keputusan.
+- Layar hanya mengisi isian yang MASIH kosong (`watch` pada prop deferred). Prop deferred datang setelah cat pertama, jadi menimpa apa adanya akan menghapus pilihan orang yang sudah keburu mengetik.
+- Ancar-ancar nomor ikut ditampilkan di keempat layar, seperti layar nota — dipakai kasir untuk mencocokkan lembar fisik.
+
+## Separasi menu kasir
+
+Section `pos` dipecah tiga: `pos_jual` / `pos_beli` / `pos_lain`, pola yang sama dengan Master Data. **Tetap satu tab navbar "Kasir"** (`NAV_GROUPS` di `useNav.js`) — menjadikannya tiga tab memaksa kasir berpindah tab untuk pekerjaan yang ia lakukan berselang-seling.
+
+- `default_keys_for` dulu membandingkan `m["section"] != "pos"`. Begitu section dipecah, pembandingan itu diam-diam jadi selalu benar dan SELURUH menu kasir masuk ke bawaan admin. Diganti himpunan bernama `SECTIONS_POS`.
+- **Urutan di `ALL_MENUS` menentukan halaman pendaratan, bukan urutan sidebar.** `landing_for()` mengambil menu bawaan peran yang pertama; sidebar mengurutkan sub-grupnya dari `NAV_GROUPS`. Karena itu Cek Stok tetap berdiri di awal daftar walau tampil di grup "Lainnya" paling bawah — ia satu-satunya layar kasir yang tak menulis dan tak pernah tertutup gerbang tautan, jadi ia tempat mendarat yang selalu ada. Memindahkannya ke bawah diam-diam mengubah ke mana setiap kasir mendarat setelah login (dan sempat terjadi: tiga tes menangkapnya).
+- "Terima Pembelian" jadi **"Pembelian"**; kuncinya tetap `kasir_pembelian` karena kunci tersimpan di `allowed_menu_keys` tiap user — menggantinya mencabut layar itu dari semua orang yang menunya sudah diatur satu per satu.
+
+## Database legacy: milik bersama, bukan milik Arunika (`docs/skema/`)
+
+Setiap server toko dipakai bertiga: aplikasi POS lama, job SQL Agent di `scripts/job/`, dan sink PHP/MySQL pusat yang bukan milik kita. Setiap FK, trigger, dan baris `tbl_tmp_post` di sana adalah kontrak dengan ketiganya. **Karena itu jawaban bawaan untuk "haruskah skema/trigger-nya diperbaiki" adalah TIDAK.** Pertahanan Arunika ada di hak akses dan disiplin jalur tulis, bukan di mengubah DDL yang tak bisa kita uji terhadap aplikasi lama.
+
+Dump lengkap dua DB acuan ada di `docs/skema/skema-testGudang.txt` dan `docs/skema/skema-grosirPusat.txt` — tabel, kolom, PK/unique, seluruh FK beserta aturannya, check, default, dan definisi penuh setiap trigger. Regenerasi kapan saja: `python scripts/dump_skema_aturan.py`. Semua angka di bawah diukur langsung 2026-08-09 (testGudang / grosirPusat).
+
+### FK: 129 / 131, dan hampir semuanya cascade
+
+- **`ON UPDATE CASCADE` nyaris universal** (128 dari 129 di testGudang, 118 dari 131 di grosirPusat). Mengubah `kd_barang`, `kd_satuan`, `kd_divisi`, `kd_supplier`, atau `kd_customer` di tabel master merambat ke belasan tabel transaksi sekaligus, dan tiap baris yang tersentuh membangunkan trigger feed sehingga seluruhnya tersembur ke pusat. **Jangan pernah UPDATE kolom `kd_*` di tabel master.** Perubahan kode = baris baru + nonaktifkan yang lama.
+- **`ON DELETE CASCADE` di 66 / 60 FK, dan merambat dua tingkat.** `m_merk`/`m_kategori`/`m_model`/`m_warna`/`m_jenis_bahan` → **`m_barang`** → **`m_barang_divisi_diskon`**. Di sisi transaksi: `t_penjualan` → `_detail`, `_detail_pegawai`, `_total`, `t_piutang_cicilan`, `t_tagihan_detail`; pola yang sama untuk `_retur`, `_order`, `t_pembelian_retur`, `t_mutasi_stok`.
+- **Cascade itu justru sering diblokir tetangganya, dan itu lebih buruk daripada kalau ia konsisten.** `m_barang` → `m_barang_satuan`/`_divisi`/`_supplier`/`_formula` semuanya `NO_ACTION`, jadi DELETE di `m_merk` gagal begitu ada satu barang bersatuan — tapi berhasil menghapus barang-barang "kosong" sebelum sampai ke sana. Hasilnya penghapusan separuh jadi, bukan galat bersih.
+- **116 / 111 FK ber-status `not_trusted`** (dibuat atau di-enable `WITH NOCHECK`). Data historis boleh melanggarnya dan optimizer tak memercayainya. **Jangan pernah menyimpulkan "kan ada FK-nya" lalu mengganti `LEFT JOIN` jadi `INNER JOIN`.**
+- **Tabel detail tak bisa dikunci PK.** `t_penjualan_detail`, `t_pembelian_detail`, `t_penjualan_retur_detail`, `t_mutasi_stok_detail`, `t_tagihan_detail` tanpa PK — dan datanya memang sudah melanggar: 3 grup duplikat `(no_transaksi, kd_barang, kd_satuan)` di `t_penjualan_detail` (570.190 baris), 19 grup di `t_pembelian_detail`. Menambah PK akan gagal; memaksanya berarti membuang baris transaksi asli. Uniqueness dijaga di aplikasi, bukan di DB.
+
+### Trigger: 217 / 176, dua keluarga dengan sifat berlawanan
+
+- **207 / 168 di antaranya trigger feed sync** (`insert_temp_m_*`, `update_temp_m_*`, `delete_temp_m_*`) yang menulis ke `tbl_tmp_post` + `tbl_log_transaksi`. Semuanya **set-based** (`… SELECT … FROM inserted`), jadi aman multi-baris. **Jangan disentuh** — itu jalur hidup sinkronisasi legacy. Dua di antaranya sudah disabled di testGudang: `update_temp_m_t_pembelian_order` dan `update_temp_m_t_penjualan_order`.
+- **Trigger stok (7 / 5) semuanya skalar** — `SELECT @barang = inserted.kd_barang … FROM inserted` — jadi satu `INSERT` banyak baris hanya memproses satu baris sembarang, tanpa galat.
+- **Tapi korbannya tabel yang memang sudah mati.** Semua trigger stok memanggil `sp_update_stok_akhir` dengan `@divisi` **di-hardcode `'-'`**, dan prosedur itu hanya menulis `m_barang_stok_akhir`. Isi tabel itu sekarang: testGudang 31.773 baris **seluruhnya `kd_divisi = '-'`** (total −4.714.672), grosirPusat 22.703 baris `'-'` + 1 baris nyata. Jadi bug multi-barisnya nyata, tapi tak ada angka yang dipakai Arunika yang berubah karenanya — mesin stok kita membaca `t_opname_stok`/`t_penjualan_detail` langsung.
+- **Dua dari trigger stok itu bahkan no-op.** `trig_update_stok_barang_awal` (di `m_barang_divisi`) badannya dikomentari seluruhnya; `trig_update_stok_pembelian` (`FOR DELETE` di `t_pembelian`) menjalankan cursor tapi `EXEC`-nya dikomentari. Jangan berasumsi "ada triggernya berarti ada efeknya" — buka definisinya di `docs/skema/`.
+- **`m_barang_stok_akhir` rusak TAPI masih dibaca legacy.** View `mon_g_stok_barang_per_divisi_new` dan fungsi `GetStokPerUkuranNew` + `GetStokBarangPerSupplier` mengambil dari sana. Ketiganya karena itu **haram dipakai dari Arunika**, sejalan dengan aturan "tanpa view/UDF/SP legacy".
+- **`trig_insert_penjualan_detail_pegawai` juga skalar**, dan ini satu-satunya trigger skalar yang menulis ke tabel hidup: `INSERT` ke `t_penjualan` memanggil `sp_insert_t_penjualan_detail_pegawai` untuk satu `no_transaksi` saja. Efeknya nol hari ini — `t_penjualan_detail_pegawai` 0 baris di kedua server, karena SP-nya butuh baris `t_absensi` yang cocok — tapi mekanismenya hidup dan akan mulai kehilangan data begitu absensi terisi.
+
+**Aturannya, berlaku untuk SEMUA jalur tulis, bukan cuma Koreksi Stok: satu baris per `execute` ke `t_opname_stok`, `t_penjualan`, `t_penjualan_detail`, `t_pembelian_detail`, dan kedua `*_retur_detail`.** Jangan pernah digabung "supaya efisien".
+
+### testGudang ≠ grosirPusat, dan bedanya struktural
+
+Bukan cuma isi data — DDL-nya memang beda, jadi jalur tulis yang sama bisa berperilaku beda tergantung koneksi aktif:
+
+- **testGudang punya 19 FK yang tak ada di grosirPusat**, semuanya ke `m_divisi`, `m_customer`, `m_jurnal` (mis. `t_penjualan → m_divisi`, `t_opname_stok → m_divisi`).
+- **grosirPusat punya 21 FK yang tak ada di testGudang**: 9 ke `m_pegawai`, 9 FK Django (`auth_*`, `django_admin_log` — sisa eksperimen), dan `t_pembelian_detail → t_pembelian` **ON DELETE CASCADE**. Konsekuensinya `DELETE FROM t_pembelian` menghapus detailnya di grosirPusat tapi meninggalkan detail yatim di testGudang.
+- **grosirPusat juga tak punya `trig_update_stok_pembelian_detail`**, sedangkan testGudang punya. Dan sebaliknya, **testGudang tak punya `delete_temp` untuk `t_penjualan` maupun `t_penjualan_detail`** (grosirPusat punya): karena keduanya terhubung `ON DELETE CASCADE`, menghapus satu nota di testGudang melenyapkan header+detail tanpa pernah dikabarkan ke pusat — data pusat menyimpang permanen.
+- Tak satu pun FK bernama sama yang aturannya berbeda. Perbedaannya selalu "ada" versus "tidak ada".
+
+**Karena itu validasi referensi dilakukan di aplikasi, jangan digantungkan pada FK.** "Kalau INSERT-nya sukses berarti kodenya valid" hanya benar di sebagian server.
+
+### Hak akses: BELUM dikerjakan, dan ini pekerjaan nomor satu
+
+Keempat belas `ServerProfile` memakai login `sa`/`SA`. Artinya Arunika secara teknis mampu `DROP TABLE`, mematikan trigger, dan menjalankan `DELETE FROM m_merk` yang cascade sampai `m_barang` — kemampuan yang tak satu pun fiturnya butuhkan.
+
+Satu-satunya `DELETE` yang Arunika kirim ke server toko adalah `_write_snapshot` di `apps/inventory/services.py`, dan itu ke tabel snapshot bikinan sendiri. Semua `DELETE` lain (`cdc_sync`, `feed_sync`, `hub_pull`, `hub_master`, `hub_sync`) menyasar AMPHOREUS atau replica, bukan server toko. Jadi login berhak-terbatas benar-benar muat:
+
+```sql
+CREATE LOGIN arunika_app WITH PASSWORD = '...';
+CREATE USER arunika_app FOR LOGIN arunika_app;
+ALTER ROLE db_datareader ADD MEMBER arunika_app;
+GRANT INSERT, UPDATE ON SCHEMA::dbo TO arunika_app;
+GRANT EXECUTE ON SCHEMA::dbo TO arunika_app;
+DENY DELETE ON SCHEMA::dbo TO arunika_app;   -- lalu GRANT balik khusus tabel snapshot Arunika
+```
+
+Nol perubahan skema, nol risiko ke legacy, dan seluruh bahaya cascade di atas mati di akar alih-alih dijaga kedisiplinan kode. **Aturan turunannya, berlaku sejak sekarang: Arunika TIDAK PERNAH `DELETE` di server toko** — pembatalan memakai kolom `status`/soft-delete. Skrip sekali-pakai di `scripts/` yang butuh hak lebih harus memakai kredensial terpisah secara sadar, bukan mewarisi kuasa penuh aplikasi.
+
+### Belum diperbaiki (jangan dianggap sudah)
+
+- **Kolom `stok` di Master Produk salah.** `list_products()` (`apps/master_data/services.py`, sekitar baris 164) masih mengisi kolom itu dari `m_barang_stok_akhir` — cache `'-'` yang rusak di atas — dengan komentar "must stay live" yang sudah tidak berlaku. Layar lain (`reports.py`, `inventory/services.py`) sudah pindah ke movement engine; yang ini terlewat. Perbaikannya: ambil dari `inv.cek_stok()`/payload kolumnar seperti layar lain, atau buang kolomnya.
+- **Login `arunika_app` belum dibuat**; semua profil masih `sa`.
 
 ## Gotcha / aturan wajib
 
+- **Empat aturan keras terhadap DB legacy** (alasan & angkanya di § "Database legacy: milik bersama"): (1) tak pernah `DELETE` di server toko — pakai soft-delete; (2) tak pernah `UPDATE` kolom `kd_*` di tabel master — `ON UPDATE CASCADE` ada di 128 dari 129 FK; (3) satu baris per `execute` untuk tabel bertrigger skalar (`t_opname_stok`, `t_penjualan`, `t_penjualan_detail`, `t_pembelian_detail`, `*_retur_detail`); (4) validasi referensi di aplikasi — FK-nya beda antar server dan 116 di antaranya `not_trusted`.
 - **Collation CI**: SQL Server anggap `'LYG005'`=`'lyg005'` & abaikan trailing space; dict Python tidak. Semua join key `kd_*` di Python WAJIB `_k()`.
-- **Tanpa view/UDF/SP legacy** (PRD §5.3) — query langsung tabel, parameterized.
+- **Tanpa view/UDF/SP legacy** (PRD §5.3) — query langsung tabel, parameterized. Tiga yang paling menggoda dan paling salah: view `mon_g_stok_barang_per_divisi_new`, fungsi `GetStokPerUkuranNew` dan `GetStokBarangPerSupplier` — ketiganya membaca `m_barang_stok_akhir` yang rusak.
 - **Agregasi di SQL**, bukan Python (movement bisa jutaan row).
 - **Indexing**: auto-ensured per koneksi aktif/registrasi (`apps/transactions/indexes.py`, hook di `get_active_profile` + `connections_save`), bisa dimatikan via env `POS_AUTO_INDEX=0`. Hasil dicatat `ActivityLog`. Tombol "Cek Indexing" manual di halaman Kelola Server (`Admin/Connections/Index.vue`) untuk re-check on-demand + lihat status per index — pelengkap, bukan pengganti auto-trigger. `ensure_indexes()` return `(failed, results)`.
 - **.env Windows**: jangan `Set-Content -Encoding utf8` (bikin BOM rusak key pertama & mojibake). Pakai append UTF-8 tanpa BOM.
 - **Inertia POST = JSON**: `request.POST` kosong; baca via `apps/core/http.get_data()`.
 - **Tutup buku** server aktif lama (mis. Lotim 2024-01-12) → movement besar; sarankan klien tutup buku untuk percepat.
-- **Cache TTL bersama** (`core/cache.py`, `_cached`/`invalidate_master_cache`, 600s) dipakai `apps/inventory/services.py` DAN `apps/master_data/services.py` — satu dict, satu invalidasi. JANGAN cache kolom yang berubah tiap transaksi kasir (mis. `m_barang_stok_akhir`) atau query bertingkat search-term (key bisa membengkak).
+- **Cache TTL bersama** (`core/cache.py`, `_cached`/`invalidate_master_cache`, 600s) dipakai `apps/inventory/services.py` DAN `apps/master_data/services.py` — satu dict, satu invalidasi. JANGAN cache kolom yang berubah tiap transaksi kasir atau query bertingkat search-term (key bisa membengkak). Contoh lamanya `m_barang_stok_akhir` — tapi tabel itu kini bukan soal cache melainkan soal jangan-dibaca-sama-sekali (§ "Database legacy").
 - **Cache dingin = biaya sebenarnya di profil WAN.** Terukur ANDARIA: kunjungan pertama ~30 detik, berikutnya <5 detik. Karena itu `apps/core/scheduler.py` memanaskan cache master tiap tick (`warm_master_cache`, `MASTER_WARM_ENABLED`) dengan TTL 3× jeda tick — entri diganti sebelum kedaluwarsa, jadi tak ada celah waktu di mana seorang pengguna menemukan cache kosong. Konsekuensinya: **key cache jangan pernah memuat parameter yang dipilih pengguna** (dulu `universe:<kd_divisi>` → tiap divisi baru = 30 detik lagi). Cache katalog penuh sekali, saring di Python (`_universe_for`).
 - **Filter tanggal report/listing**: dorong ke SQL (`WHERE tanggal >= ?`) kalau fungsinya tak perlu histori sebelum `date_from` untuk saldo berjalan (lihat `barang_histori` vs `stock_card` di `apps/inventory/services.py`) — jangan tarik semua baris ke Python lalu buang.
 - **Filter/fetch halaman Inventory** (`Stock.vue`, `BarangHistori.vue`): pakai `frontend/composables/useReportFilters.js` + `frontend/components/report/DateRangeFilter.vue`, jangan hand-roll `reactive`+`router.get` lagi. Halaman laporan (`ReportView`) punya pola pagination server-side sendiri di `apps/core/reporting.py` — jangan campur dua pola ini.

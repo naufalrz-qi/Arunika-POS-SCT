@@ -33,7 +33,19 @@ JENIS = {
     "penjualan_order": ("t_penjualan_order", "no_order"),
     "penjualan_retur": ("t_penjualan_retur", "no_retur"),
     "pembelian": ("t_pembelian", "no_transaksi"),
+    "pembelian_order": ("t_pembelian_order", "no_order"),
     "pembelian_retur": ("t_pembelian_retur", "no_retur"),
+    # Koreksi stok. Bentuk nomornya sama persis dengan nota walau tabelnya datar
+    # (satu nomor = satu baris = satu barang): CP2608060001 di PAGESANGAN,
+    # SC2608080001 di PUSAT — keduanya {kepala_nota}{YYMMDD}{NNNN}.
+    "opname": ("t_opname_stok", "no_transaksi"),
+    # Kas. `t_biaya_operasional` punya 9.563 baris di grosirPusat dan seluruhnya
+    # berbentuk SC2603200006 — `{kepala_nota}{YYMMDD}{NNNN}`, sama dengan nota.
+    # Dua tabel kas lainnya NOL baris di setiap server yang bisa dijangkau, jadi
+    # bentuknya mengikuti konvensi tetangga, bukan contoh nyata (lihat kas.py).
+    "biaya": ("t_biaya_operasional", "no_transaksi"),
+    "penambahan_kas": ("t_penambahan_kas", "no_transaksi"),
+    "mutasi_kas": ("t_mutasi_kas", "no_transaksi"),
 }
 
 _PERCOBAAN = 5
@@ -101,6 +113,62 @@ def no_berikutnya(cur, jenis: str, awalan: str, tanggal=None) -> str:
     tabel, kolom = JENIS[jenis]  # KeyError kalau jenisnya tak dikenal — memang.
     tanggal = tanggal or dt.datetime.now()
     return urut_berikutnya(cur, tabel, kolom, f"{awalan}{tanggal:%y%m%d}", 4)
+
+
+# --- Kode master: {huruf}{blok}{NNN}, dan bloknya NAIK ----------------------
+#
+# Bentuknya satu huruf milik tabel + blok dua huruf + tiga digit: `MAA000` di
+# m_merk, `KAA000` di m_kategori, `WAA000` di m_warna. Yang gampang terlewat:
+# **bloknya bergulir saat digitnya habis.** Terukur di testgudang — m_merk sudah
+# di `MAB483` dan m_model di `MAB296`, keduanya lewat `MAA999`.
+#
+# Karena itu awalan tetap seperti `("SAA", None, 3)` tidak cukup: ia punya
+# langit-langit 999 yang pasti tercapai, dan `urut_berikutnya` akan menolak
+# dengan "Nomor sudah habis" pada baris ke-1000 alih-alih pindah ke blok
+# berikutnya. m_supplier sudah 517 baris di blok `SAA`.
+_BLOK_HURUF = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+LEBAR_MASTER = 3
+
+
+def _blok_berikutnya(blok: str) -> str:
+    kiri, kanan = blok[0], blok[1]
+    if kanan < "Z":
+        return kiri + _BLOK_HURUF[_BLOK_HURUF.index(kanan) + 1]
+    if kiri < "Z":
+        return _BLOK_HURUF[_BLOK_HURUF.index(kiri) + 1] + "A"
+    raise ValueError(
+        f"Kode sudah habis sampai blok {blok}ZZZ. Hubungi pengelola aplikasi.")
+
+
+def kode_master_berikutnya(cur, tabel: str, kolom: str, huruf: str) -> str:
+    """Kode master berikutnya untuk keluarga `{huruf}{blok}{NNN}`.
+
+    Polanya disaring `LIKE 'X[A-Z][A-Z][0-9][0-9][0-9]'`, bukan `LIKE 'X%'`.
+    Bedanya bukan kerapian: `m_kategori` memuat satu baris `KAATES` dan
+    `m_voucher` satu baris `1` — peninggalan yang tak berbentuk. `MAX()` tanpa
+    saringan mengembalikan `KAATES` (huruf T > angka 8 secara leksikal), ekornya
+    bukan angka, dan penomorannya diam-diam mengulang dari 001 — kode yang sudah
+    dipakai sejak lama.
+
+    `huruf` berasal dari `_MASTER` di master_crud, tak pernah dari input, jadi ia
+    boleh masuk ke teks SQL. Ditulis sebagai literal alih-alih parameter justru
+    supaya tak ada konversi implisit NVARCHAR→varchar yang membuang index seek —
+    persoalan yang sama yang ditangani `bind_varchar` di `urut_berikutnya`.
+    """
+    cur.execute(  # nosec B608 — tabel/kolom/huruf dari _MASTER, bukan dari input
+        f"SELECT MAX({kolom}) FROM {tabel} WITH (UPDLOCK, HOLDLOCK) "
+        f"WHERE {kolom} LIKE '{huruf}[A-Z][A-Z][0-9][0-9][0-9]'"
+    )
+    baris = cur.fetchone()
+    tertinggi = ((baris[0] if baris else "") or "").strip()
+    if not tertinggi:
+        return f"{huruf}AA{0:0{LEBAR_MASTER}d}"
+
+    blok, ekor = tertinggi[1:3], tertinggi[3:]
+    urut = int(ekor) + 1
+    if urut > 10 ** LEBAR_MASTER - 1:
+        blok, urut = _blok_berikutnya(blok), 0
+    return f"{huruf}{blok}{urut:0{LEBAR_MASTER}d}"
 
 
 def _duplikat(exc: Exception) -> bool:

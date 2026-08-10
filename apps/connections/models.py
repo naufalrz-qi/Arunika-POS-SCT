@@ -82,18 +82,42 @@ class ServerProfile(models.Model):
             self.save(update_fields=["is_default"])
 
     def as_dict(self) -> dict:
-        """Safe representation for Inertia props — NEVER includes the password."""
+        """Representasi untuk prop Inertia UMUM — tanpa password, DAN tanpa
+        alamat server.
+
+        `inertia_share` mengirim daftar koneksi sebagai prop bersama di SETIAP
+        render, termasuk halaman `/kasir/*` yang sengaja tidak dijaga penjaga
+        Tailscale. Selama `host`/`port`/`db_name`/`username` ikut di sini, setiap
+        kasir menerima alamat server tokonya beserta nama user databasenya di
+        dalam HTML tiap halaman, dan setiap admin menerima peta keempat belas
+        server sekaligus — walau menu Koneksi Server tak diberikan kepadanya.
+
+        Alasannya sama persis dengan yang sudah dipakai kartu status server di
+        dashboard (`_boleh_lihat_server` di apps/monitoring/views.py): peta
+        infrastruktur tak dibutuhkan siapa pun untuk MEMAKAI aplikasi. Yang
+        membutuhkannya cuma satu layar, dan layar itu memanggil `as_dict_admin`.
+
+        Yang tersisa di sini adalah yang benar-benar dipakai navbar & pemilih
+        koneksi: nama, jenis, status, dan relasinya.
+        """
         return {
             "id": self.pk,
             "name": self.name,
             "db_type": self.db_type,
-            "host": self.host,
-            "port": self.port,
-            "db_name": self.db_name,
-            "username": self.username,
             "cost_source": self.cost_source_id,
             "report_source": self.report_source_id,
             "is_default": self.is_default,
             "status": self.last_status,
             "last_checked": self.last_checked.isoformat() if self.last_checked else None,
+        }
+
+    def as_dict_admin(self) -> dict:
+        """`as_dict` + alamat server. HANYA untuk layar Kelola Koneksi Server,
+        yang memang menampilkan dan menyunting kolom-kolom ini. Jangan dipakai
+        di prop bersama — lihat alasannya di `as_dict`."""
+        return self.as_dict() | {
+            "host": self.host,
+            "port": self.port,
+            "db_name": self.db_name,
+            "username": self.username,
         }

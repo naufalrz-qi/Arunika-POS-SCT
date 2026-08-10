@@ -1,5 +1,6 @@
 <script setup>
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
+import { router } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import { ACTION_LABELS } from "@/utils/labels";
 import Card from "@/components/ui/Card.vue";
@@ -18,9 +19,21 @@ const props = defineProps({
   logs: { type: Array, default: () => [] },
   action_types: { type: Array, default: () => [] },
   users: { type: Array, default: () => [] },
+  // Superadmin melihat jejak semua orang; peran lain hanya jejaknya sendiri
+  // (disaring di server, lihat logs_index).
+  boleh_semua: { type: Boolean, default: false },
+  filters: { type: Object, default: () => ({}) },
 });
 
-const userFilter = ref("");
+// Penyaring user adalah round-trip, bukan saringan di layar: yang terkirim cuma
+// 300 baris teratas, jadi menyaringnya di sini akan menjawab "tidak ada" untuk
+// orang yang jejaknya nyata tapi lebih tua dari baris ke-300.
+const userFilter = ref(props.filters.user || "");
+watch(userFilter, (v) => {
+  router.get("/admin-panel/logs", v ? { user: v } : {},
+    { preserveState: true, preserveScroll: true, replace: true });
+});
+
 const actionFilter = ref("");
 const dateFrom = ref("");
 const dateTo = ref("");
@@ -39,7 +52,6 @@ const exportColumns = [
 const filtered = computed(() =>
   props.logs.filter((log) => {
     const day = log.timestamp.slice(0, 10);
-    if (userFilter.value && log.user !== userFilter.value) return false;
     if (actionFilter.value && log.action !== actionFilter.value) return false;
     if (dateFrom.value && day < dateFrom.value) return false;
     if (dateTo.value && day > dateTo.value) return false;
@@ -54,18 +66,20 @@ function resetFilters() {
   dateTo.value = "";
 }
 
-const columns = [
+// Kolom User dibuang untuk yang cuma melihat jejaknya sendiri: satu kolom berisi
+// nama yang sama di setiap baris hanya memakan lebar tanpa memberi apa pun.
+const columns = computed(() => [
   { key: "timestamp", label: "Waktu", sortable: true },
-  { key: "user", label: "User", sortable: true },
+  ...(props.boleh_semua ? [{ key: "user", label: "User", sortable: true }] : []),
   { key: "action", label: "Aksi", sortable: true },
   { key: "detail", label: "Detail" },
   { key: "ip_address", label: "IP" },
-];
+]);
 
 const actionVariant = (a) => {
-  if (a === "login_gagal" || a === "batal") return "danger";
-  if (a === "transaksi" || a === "tutup_buku") return "success";
-  if (a === "konfigurasi") return "warning";
+  if (a === "login_gagal" || a === "login_terkunci") return "danger";
+  if (a === "penjualan" || a === "penjualan_order") return "success";
+  if (a === "konfigurasi" || a === "koreksi_stok") return "warning";
   return "neutral";
 };
 </script>
@@ -81,9 +95,13 @@ const actionVariant = (a) => {
       <FilterSection title="Periode & Pencarian">
         <DateRangeField class="sm:col-span-2" v-model:from="dateFrom" v-model:to="dateTo" />
         <Input v-model="actionFilter" label="Aksi" placeholder="cari aksi…" />
-        <SelectSearch v-model="userFilter" :options="userOptions" label="User" />
+        <SelectSearch v-if="boleh_semua" v-model="userFilter" :options="userOptions" label="User" />
       </FilterSection>
     </FilterPanel>
+
+    <p v-if="!boleh_semua" class="mb-3 text-xs text-ink-subtle">
+      Halaman ini menampilkan jejak akun Anda sendiri.
+    </p>
 
     <DataTable :columns="columns" :rows="filtered" :per-page="100" empty-message="Tidak ada log untuk filter ini.">
       <template #cell-action="{ value }">

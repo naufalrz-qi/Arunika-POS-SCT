@@ -14,6 +14,7 @@
 import { Link } from "@inertiajs/vue3";
 import Button from "@/components/ui/Button.vue";
 import Icon from "@/components/nav/Icon.vue";
+import ToastContainer from "@/components/ui/ToastContainer.vue";
 
 defineProps({
   judul: { type: String, default: "Halaman ini belum bisa dibuka" },
@@ -43,4 +44,5 @@ defineProps({
       </div>
     </div>
   </div>
+  <ToastContainer />
 </template>

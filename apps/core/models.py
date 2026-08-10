@@ -27,10 +27,39 @@ class ActivityLog(models.Model):
         return f"{self.timestamp:%Y-%m-%d %H:%M} {self.username} {self.action}"
 
 
+def log_untuk(user):
+    """Jejak yang boleh dilihat `user`: miliknya sendiri, kecuali superadmin.
+
+    Satu aturan untuk TIGA layar — kartu Aktivitas Terbaru di dashboard, kotak
+    notif di navbar, dan halaman Log Aktivitas. Sebelumnya hanya dashboard yang
+    menyaring, dan halaman log memperlihatkan jejak semua orang kepada admin
+    mana pun; dua aturan untuk data yang sama adalah cara paling rapi supaya
+    satu di antaranya diam-diam tertinggal saat yang lain diperbaiki.
+
+    Disaring lewat `username` (salinan teks di baris log), bukan relasi ke User:
+    kolom itu didenormalisasi supaya jejak tetap terbaca setelah akunnya dihapus,
+    dan menyaring lewat FK akan menyembunyikan baris-baris itu dari superadmin.
+    """
+    from apps.auth_app.models import Role
+
+    qs = ActivityLog.objects.all()
+    if not (user and getattr(user, "is_authenticated", False)):
+        return qs.none()
+    if user.role == Role.SUPERADMIN:
+        return qs
+    return qs.filter(username=user.username)
+
+
 def log_activity(request, action, detail=""):
     """Convenience helper to record an audit entry from a request."""
+    from apps.core.http import client_ip
+
     user = getattr(request, "user", None)
-    ip = request.META.get("REMOTE_ADDR") if request else None
+    # Lewat helper, bukan REMOTE_ADDR mentah: di belakang proxy setiap baris
+    # audit akan mencatat alamat proxy-nya, dan pertanyaan "dari mana" — satu-
+    # satunya alasan kolom ini ada — berhenti bisa dijawab untuk semua orang
+    # sekaligus, tanpa ada yang menyadarinya sampai dibutuhkan.
+    ip = client_ip(request) if request else None
     ActivityLog.objects.create(
         user=user if (user and user.is_authenticated) else None,
         username=(user.username if (user and user.is_authenticated) else ""),

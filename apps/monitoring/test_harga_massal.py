@@ -20,7 +20,7 @@ class FakeProfile:
 
 def _post(payload):
     request = RequestFactory().post(
-        "/admin-panel/master/update-barang/harga-massal",
+        "/admin-panel/master/update-harga/harga-massal",
         data=json.dumps(payload),
         content_type="application/json",
     )

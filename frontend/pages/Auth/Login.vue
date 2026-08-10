@@ -5,6 +5,7 @@ import Button from "@/components/ui/Button.vue";
 import Input from "@/components/ui/Input.vue";
 import Banner from "@/components/ui/Banner.vue";
 import Icon from "@/components/nav/Icon.vue";
+import ToastContainer from "@/components/ui/ToastContainer.vue";
 
 const form = useForm({ username: "", password: "" });
 
@@ -65,4 +66,5 @@ function submit() {
       </div>
     </div>
   </div>
+  <ToastContainer />
 </template>

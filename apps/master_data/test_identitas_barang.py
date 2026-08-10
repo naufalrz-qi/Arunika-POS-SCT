@@ -137,7 +137,7 @@ class RutePenulisan(TestCase):
     """Rute HTTP-nya sendiri harus menolak, bukan hanya service-nya.
 
     Ini yang benar-benar terekspos: seseorang bisa mengirim POST ke
-    /master/update-barang/identitas tanpa pernah membuka layarnya.
+    /master/update-harga/identitas tanpa pernah membuka layarnya.
     """
 
     def setUp(self):
@@ -145,7 +145,7 @@ class RutePenulisan(TestCase):
 
         self.user = User.objects.create_user("bos", password="x", role=Role.SUPERADMIN)
         self.client.force_login(self.user)
-        self.url = "/admin-panel/master/update-barang/identitas"
+        self.url = "/admin-panel/master/update-harga/identitas"
 
     def _post(self, tipe):
         """POST ke rute identitas dengan koneksi aktif bertipe `tipe`.

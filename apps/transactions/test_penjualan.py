@@ -72,7 +72,7 @@ class ValidasiTests(SimpleTestCase):
         kalimat yang bisa ditindaklanjuti, bukan galat ODBC."""
         with self.assertRaises(ValueError) as ctx:
             pj._periksa([{"kd_barang": "X", "qty": 1}], "")
-        self.assertIn("Manajemen User", str(ctx.exception))
+        self.assertIn("Kelola Tautan User", str(ctx.exception))
 
     def test_nota_kosong_ditolak(self):
         with self.assertRaises(ValueError):

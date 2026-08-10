@@ -255,7 +255,103 @@ function pilihCustomer(c) {
   tab.value.customer_nama = c.nama;
   cariCustomer.value = "";
   hasilCustomer.value = [];
-  fokusEntri();
+  fokusEntri();   // panel info menyusul lewat watch di bawah
+}
+
+// --- Panel info -------------------------------------------------------------
+//
+// Tiga keterangan yang selama ini cuma ada di /admin-panel — dan panel itu
+// tertutup penjaga Tailscale, jadi dari jaringan toko memang tak terjangkau.
+//
+// Aturan pengambilannya: HANYA saat dibutuhkan. Info pelanggan dijemput ketika
+// pelanggannya dipilih (satu round-trip untuk profil + piutang + nota
+// terakhirnya); histori kasir dijemput sekali saat bloknya pertama dibuka.
+// Menjemput keduanya saat halaman dimuat berarti dua perjalanan WAN sebelum
+// barang pertama sempat dipindai.
+const CUSTOMER_UMUM = "CAA000";
+const info = ref({ profil: null, piutang: [], histori: [] });
+const infoMuat = ref(false);
+const infoGalat = ref("");
+
+async function muatInfoCustomer(kd) {
+  info.value = { profil: null, piutang: [], histori: [] };
+  infoGalat.value = "";
+  // Pelanggan lewat: bawaan hampir setiap nota tunai, dan tak punya member info
+  // yang berarti. Memanggilnya berarti satu perjalanan sia-sia tiap nota.
+  if (!kd || kd.toUpperCase() === CUSTOMER_UMUM) return;
+  infoMuat.value = true;
+  try {
+    const { data } = await axios.get(`${props.base}/info-customer`, {
+      params: { kd_customer: kd },
+    });
+    if (data.error) infoGalat.value = data.error;
+    else info.value = { profil: data.profil, piutang: data.piutang || [], histori: data.histori || [] };
+  } catch {
+    infoGalat.value = "Info pelanggan tak bisa diambil.";
+  } finally {
+    infoMuat.value = false;
+  }
+}
+
+const totalPiutang = computed(() =>
+  info.value.piutang.reduce((s, p) => s + (p.sisa_piutang || 0), 0));
+// Peringatan, bukan penghalang: batas kredit itu kebijakan toko, dan yang tahu
+// kapan ia boleh dilanggar adalah orang di depan kasir, bukan layar ini.
+const lewatLimit = computed(() => {
+  const limit = info.value.profil?.limit_kredit || 0;
+  return limit > 0 && totalPiutang.value > limit;
+});
+
+// Satu-satunya pemicu, supaya tak ada jalur ganda: memilih pelanggan, berpindah
+// tab keranjang, dan mengambil order semuanya berujung mengubah kolom ini.
+// `immediate` untuk keranjang yang dipulihkan dari localStorage — kalau isinya
+// pelanggan UMUM, panggilannya berhenti sebelum menyentuh jaringan.
+watch(() => tab.value.kd_customer, (kd) => { muatInfoCustomer(kd); }, { immediate: true });
+
+const histori = ref([]);
+const historiMuat = ref(false);
+const historiGalat = ref("");
+let historiPernahDimuat = false;
+
+async function muatHistoriSaya() {
+  if (historiPernahDimuat) return;   // sekali saja; berpindah tab bolak-balik
+  historiPernahDimuat = true;        // bukan alasan mengulang perjalanan WAN
+  historiMuat.value = true;
+  try {
+    const { data } = await axios.get(`${props.base}/histori-user`);
+    if (data.error) historiGalat.value = data.error;
+    else histori.value = data.rows || [];
+  } catch {
+    historiGalat.value = "Histori tak bisa diambil.";
+  } finally {
+    historiMuat.value = false;
+  }
+}
+
+// --- Tab panel info ---------------------------------------------------------
+//
+// Bentuk tab, bukan tumpukan kartu di bawah form: kartu bertumpuk membuat
+// piutang berada di bawah lima belas isian, jadi ia baru terlihat kalau
+// seseorang menggulung layar — dan yang perlu dilihat justru saat orangnya
+// masih berdiri di depan kasir. Panel ini menempati satu petak tetap di bawah
+// tabel keranjang, kolom yang lebar, seperti panel bawah aplikasi desktop.
+//
+// Jumlahnya tercetak di label tab, jadi "ada 3 nota belum lunas" terbaca TANPA
+// membuka tabnya. Tab tidak berpindah sendiri saat pelanggan dipilih:
+// memindahkan panel di bawah tangan orang yang sedang mengetik lebih
+// mengganggu daripada menolong — yang menarik perhatian cukup angkanya.
+const infoTab = ref("member");
+const INFO_TABS = computed(() => [
+  { key: "member", label: "Member" },
+  { key: "piutang", label: "Piutang", jml: info.value.piutang.length, siaga: lewatLimit.value },
+  { key: "nota_pelanggan", label: "Nota Pelanggan", jml: info.value.histori.length },
+  { key: "nota_saya", label: "Nota Saya" },
+  { key: "pintasan", label: "Pintasan" },
+]);
+
+function keInfoTab(key) {
+  infoTab.value = key;
+  if (key === "nota_saya") muatHistoriSaya();
 }
 
 // --- Order ------------------------------------------------------------------
@@ -342,8 +438,12 @@ const menyimpan = ref(false);
 // nota milik orang lain.
 const notaTerakhir = ref(props.nota_terakhir || "");
 watch(() => props.nota_terakhir, (v) => { if (v) notaTerakhir.value = v; });
+// Syaratnya kd_user + kd_divisi, TANPA kd_pegawai — sama persis dengan
+// tautan_wajib() di server. Dulu di sini kd_pegawai ikut wajib, jadi akun yang
+// bertautan lengkap tapi tak dipasangi pegawai melihat tombol Simpan mati
+// selamanya padahal server akan menerimanya (pegawai cuma nilai bawaan form).
 const siap = computed(
-  () => Boolean(props.kd_user && props.kd_divisi && props.kd_pegawai)
+  () => Boolean(props.kd_user && props.kd_divisi)
     && tab.value.baris.length > 0 && tab.value.kd_customer
     && tab.value.kd_jenis && tab.value.kd_kas && tab.value.kd_voucher);
 
@@ -442,11 +542,17 @@ const KELAS_PILIH =
 
 <template>
   <AdminLayout :title="judul">
+    <!-- Menu ini sudah disembunyikan penjaga saat kd_user/kd_divisi kosong
+         (butuh_tautan di apps/core/menus.py), jadi banner ini praktis hanya
+         muncul untuk pegawai yang belum diisi — tetap disimpan karena pegawai
+         bukan syarat simpan, cuma isian bawaan yang jadi kosong. -->
     <Banner
       v-if="!kd_user || !kd_divisi || !kd_pegawai"
       variant="warning"
       class="mb-4"
-      message="Akun Anda belum ditautkan lengkap ke user legacy, divisi, dan pegawai — nota belum bisa dibuat. Minta pengelola aplikasi mengisinya di Manajemen User."
+      :message="!kd_user || !kd_divisi
+        ? 'Akun Anda belum ditautkan ke user legacy dan divisi, jadi nota belum bisa dibuat. Minta pengelola aplikasi mengisinya di Kelola Tautan User.'
+        : 'Akun Anda belum dipasangi pegawai untuk koneksi ini, jadi isian Pegawai kosong. Nota tetap bisa dibuat. Minta pengelola aplikasi mengisinya di Kelola Tautan User.'"
     />
 
     <Deferred data="nota">
@@ -594,13 +700,170 @@ const KELAS_PILIH =
             <p v-if="pesan" class="mt-2 text-sm text-warning-fg">{{ pesan }}</p>
           </Card>
 
-          <Card>
-            <div class="grid grid-cols-2 gap-x-4 text-xs text-ink-subtle sm:grid-cols-3">
-              <p v-for="[k, ket] in PINTASAN" :key="k">
-                <kbd class="rounded bg-surface-2 px-1 font-mono">{{ k }}</kbd> {{ ket }}
-              </p>
+          <!-- Panel info bertab, ala panel bawah aplikasi desktop. Menempati
+               satu petak tinggi TETAP supaya isi tab yang panjang tak
+               menggeser apa pun di layar; kartu Pintasan yang dulu berdiri
+               sendiri jadi salah satu tabnya. -->
+          <div class="overflow-hidden rounded-control border border-border-default bg-surface">
+            <div role="tablist" class="flex overflow-x-auto border-b border-border-default bg-surface-2">
+              <button
+                v-for="t in INFO_TABS"
+                :key="t.key"
+                type="button"
+                role="tab"
+                :aria-selected="infoTab === t.key"
+                :class="['flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors',
+                         infoTab === t.key
+                           ? 'border-brand-600 bg-surface text-ink'
+                           : 'border-transparent text-ink-muted hover:bg-surface-3 hover:text-ink']"
+                @click="keInfoTab(t.key)"
+              >
+                {{ t.label }}
+                <span
+                  v-if="t.jml"
+                  :class="['rounded-full px-1.5 text-[10px] font-semibold leading-4',
+                           t.siaga ? 'bg-danger-bg text-danger-fg' : 'bg-surface-3 text-ink-muted']"
+                >{{ t.jml }}</span>
+              </button>
             </div>
-          </Card>
+
+            <div class="scroll-slim h-44 overflow-y-auto p-3 text-xs">
+              <!-- Member -->
+              <template v-if="infoTab === 'member'">
+                <p v-if="infoMuat" class="text-ink-subtle">Mengambil info pelanggan…</p>
+                <p v-else-if="infoGalat" class="text-danger-fg">{{ infoGalat }}</p>
+                <p v-else-if="!info.profil" class="text-ink-subtle">
+                  Pelanggan umum — tidak ada data member. Pilih pelanggan di kotak Customer (F4).
+                </p>
+                <dl v-else class="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+                  <div class="sm:col-span-2">
+                    <dt class="text-ink-subtle">Nama</dt>
+                    <dd class="text-sm font-medium text-ink">
+                      {{ info.profil.nama }}
+                      <span class="font-mono text-xs text-ink-subtle">{{ info.profil.kd_customer }}</span>
+                    </dd>
+                  </div>
+                  <div v-if="info.profil.alamat" class="sm:col-span-2">
+                    <dt class="text-ink-subtle">Alamat</dt>
+                    <dd class="text-ink">{{ info.profil.alamat }}</dd>
+                  </div>
+                  <div v-if="info.profil.hp || info.profil.telepon">
+                    <dt class="text-ink-subtle">Telepon</dt>
+                    <dd class="text-ink">{{ [info.profil.hp, info.profil.telepon].filter(Boolean).join(" · ") }}</dd>
+                  </div>
+                  <div>
+                    <dt class="text-ink-subtle">Point</dt>
+                    <dd class="tabular-nums text-ink">{{ info.profil.point }}</dd>
+                  </div>
+                  <div v-if="info.profil.disc">
+                    <dt class="text-ink-subtle">Diskon langganan</dt>
+                    <dd class="tabular-nums text-ink">{{ info.profil.disc }}%</dd>
+                  </div>
+                  <div v-if="info.profil.limit_kredit !== undefined && info.profil.limit_kredit > 0">
+                    <dt class="text-ink-subtle">Limit kredit</dt>
+                    <dd class="tabular-nums text-ink">{{ formatRupiah(info.profil.limit_kredit) }}</dd>
+                  </div>
+                </dl>
+              </template>
+
+              <!-- Piutang aktif: angka ini sebelumnya hanya ada di
+                   /admin-panel/laporan/piutang, yang tertutup penjaga Tailscale
+                   dari jaringan toko. -->
+              <template v-else-if="infoTab === 'piutang'">
+                <p v-if="!info.profil" class="text-ink-subtle">Pilih pelanggan dulu.</p>
+                <p v-else-if="!info.piutang.length" class="text-ink-subtle">
+                  Tidak ada nota yang belum lunas.
+                </p>
+                <template v-else>
+                  <div class="mb-2 flex items-baseline justify-between">
+                    <span class="text-ink-muted">{{ info.piutang.length }} nota belum lunas</span>
+                    <strong class="text-sm tabular-nums text-ink">{{ formatRupiah(totalPiutang) }}</strong>
+                  </div>
+                  <!-- Peringatan, bukan penghalang: kapan batas kredit boleh
+                       dilewati adalah keputusan orang, bukan keputusan layar. -->
+                  <Banner
+                    v-if="lewatLimit"
+                    variant="warning"
+                    class="mb-2"
+                    :message="`Piutang berjalan melewati limit kredit ${formatRupiah(info.profil.limit_kredit)}.`"
+                  />
+                  <table class="w-full">
+                    <thead class="text-ink-subtle">
+                      <tr class="border-b border-border-default">
+                        <th class="py-1 text-left font-medium">No. Nota</th>
+                        <th class="py-1 text-left font-medium">Jatuh Tempo</th>
+                        <th class="py-1 text-right font-medium">Telat</th>
+                        <th class="py-1 text-right font-medium">Sisa</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="p in info.piutang" :key="p.no_transaksi" class="border-b border-border-default/60">
+                        <td class="py-1 font-mono text-ink">{{ p.no_transaksi }}</td>
+                        <td class="py-1 text-ink-muted">{{ p.jatuh_tempo || "—" }}</td>
+                        <td :class="['py-1 text-right tabular-nums', p.hari_terlambat ? 'text-danger-fg' : 'text-ink-subtle']">
+                          {{ p.hari_terlambat ? `${p.hari_terlambat} hari` : "—" }}
+                        </td>
+                        <td v-if="p.sisa_piutang !== undefined" class="py-1 text-right tabular-nums text-ink">
+                          {{ formatRupiah(p.sisa_piutang) }}
+                        </td>
+                        <td v-else class="py-1 text-right text-ink-subtle">—</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </template>
+              </template>
+
+              <!-- Nota terakhir pelanggan: menjawab "yang kemarin sudah diambil
+                   belum?" tanpa berpindah halaman. -->
+              <template v-else-if="infoTab === 'nota_pelanggan'">
+                <p v-if="!info.profil" class="text-ink-subtle">Pilih pelanggan dulu.</p>
+                <p v-else-if="!info.histori.length" class="text-ink-subtle">
+                  Belum ada nota atas nama pelanggan ini.
+                </p>
+                <table v-else class="w-full">
+                  <tbody>
+                    <tr v-for="n in info.histori" :key="n.no_transaksi" class="border-b border-border-default/60">
+                      <td class="py-1 font-mono text-ink">{{ n.no_transaksi }}</td>
+                      <td class="py-1 text-ink-muted">{{ n.tanggal }}</td>
+                      <td class="py-1 text-ink-muted">{{ n.status }}</td>
+                      <td v-if="n.nominal !== undefined" class="py-1 text-right tabular-nums text-ink">
+                        {{ formatRupiah(n.nominal) }}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </template>
+
+              <!-- Milik KASIR, bukan milik nota ini — karena itu dijemput hanya
+                   saat tabnya pertama dibuka: satu perjalanan WAN yang tak boleh
+                   terjadi tiap kali layar dimuat. -->
+              <template v-else-if="infoTab === 'nota_saya'">
+                <p v-if="historiMuat" class="text-ink-subtle">Mengambil…</p>
+                <p v-else-if="historiGalat" class="text-danger-fg">{{ historiGalat }}</p>
+                <p v-else-if="!histori.length" class="text-ink-subtle">
+                  Belum ada nota atas nama akun Anda di koneksi ini.
+                </p>
+                <table v-else class="w-full">
+                  <tbody>
+                    <tr v-for="n in histori" :key="n.no_transaksi" class="border-b border-border-default/60">
+                      <td class="py-1 font-mono text-ink">{{ n.no_transaksi }}</td>
+                      <td class="py-1 text-ink-muted">{{ n.tanggal }}</td>
+                      <td class="truncate py-1 text-ink-muted">{{ n.customer || "—" }}</td>
+                      <td v-if="n.nominal !== undefined" class="py-1 text-right tabular-nums text-ink">
+                        {{ formatRupiah(n.nominal) }}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </template>
+
+              <div v-else class="grid grid-cols-2 gap-x-4 gap-y-1 text-ink-subtle sm:grid-cols-3">
+                <p v-for="[k, ket] in PINTASAN" :key="k">
+                  <kbd class="rounded bg-surface-2 px-1 font-mono">{{ k }}</kbd> {{ ket }}
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
 
         <Card title="Input Data">
@@ -622,6 +885,13 @@ const KELAS_PILIH =
                 {{ tab.customer_nama || "—" }}
                 <span class="font-mono text-xs text-ink-subtle">{{ tab.kd_customer }}</span>
               </p>
+              <!-- Keterangannya ada di tab Member pada panel info di kiri, bukan
+                   di sini: kotak ini sudah berdiri di tengah lima belas isian,
+                   dan menyelipkan blok yang tingginya berubah-ubah di antaranya
+                   membuat isian di bawahnya melompat tiap kali pelanggan
+                   berganti. Yang tinggal di sini cuma penanda sedang mengambil. -->
+              <p v-if="infoMuat" class="mb-1.5 text-xs text-ink-subtle">Mengambil info pelanggan…</p>
+              <p v-else-if="infoGalat" class="mb-1.5 text-xs text-danger-fg">{{ infoGalat }}</p>
               <input
                 id="kotak-cust"
                 v-model="cariCustomer"

@@ -5,6 +5,13 @@
 > Ini **potret satu waktu**, bukan dokumen hidup. Jangan dijadikan acuan setelah beberapa
 > perubahan besar berikutnya tanpa diaudit ulang.
 
+> ⚠ **SUDAH BASI per 2026-08-09.** `ALL_MENUS` kini berisi **58** menu, bukan 42. Enam belas
+> menu yang menyusul — seluruh layar kasir yang MENULIS (Penjualan, Penjualan Order, Retur
+> Penjualan, Pembelian, Order Pembelian, Retur Pembelian), Koreksi Stok, Neraca Opname, Kelola
+> Pelanggan/Supplier, Kelola Kode Nota, Kesehatan Sync, Kelola Tautan User — **tidak ada di
+> matriks di bawah**, dan justru merekalah satu-satunya yang menyentuh jalur tulis. Matriks ini
+> masih sahih untuk 42 menu yang disebutnya; ia tidak sahih sebagai daftar lengkap.
+
 ---
 
 ## Ringkasan
@@ -102,6 +109,21 @@ RBAC di sini **3 tingkat, bukan per-menu-per-peran**:
 Menu ber-flag `always` (saat ini: Bantuan & Istilah) tidak bisa dicabut dan tidak muncul di
 Kelola Menu.
 
+**Sumbu ketiga: tautan user legacy.** Enam layar yang MENULIS ke server legacy
+(`kasir_penjualan`, `kasir_penjualan_order`, `kasir_retur_penjualan`, `kasir_pembelian`,
+`kasir_retur_pembelian`, `koreksi_stok`) ber-flag `butuh_tautan`. Menunya hilang dari sidebar
+dan URL-nya ditutup 403 selama akun itu belum punya `TautanUser` lengkap **untuk koneksi yang
+sedang aktif** — superadmin termasuk. Ini bukan pencabutan menu: barisnya tetap ada di Kelola
+Menu, dan penolakannya berbunyi "belum ditautkan", bukan "belum dibuka". Cek Stok dan Cetak
+Faktur sengaja di luar daftar (keduanya hanya membaca), supaya kasir yang belum ditautkan tak
+kehilangan seluruh halaman kasirnya sekaligus.
+
+**Log & notif per akun.** `/admin-panel/logs` kini disaring ke jejak akun sendiri; hanya
+superadmin yang melihat jejak orang lain dan memakai penyaring `?user=`. Aturannya satu
+(`apps/core/models.log_untuk`) dan dipakai bersama kartu dashboard serta lonceng notif di
+navbar. Ini **perubahan perilaku**: sebelum ini admin mana pun yang punya menu `logs` membaca
+pekerjaan seluruh kantor.
+
 **Izin nilai uang (`User.hidden_data_keys`)** adalah sumbu terpisah: menu boleh dibuka, tapi
 kolom rupiahnya dicabut di server. Cakupannya masih SEBAGIAN — daftar halaman yang benar-benar
 menyaring:
@@ -112,6 +134,7 @@ menyaring:
 | Stok Akhir | `harga_jual`, `harga_beli`, `nominal` | halaman + export XLSX |
 | Barang Histori | `harga_jual`, `harga_beli`, `nominal` | halaman |
 | Klasifikasi Pelanggan | `nominal` | halaman, panel detail, **kedua sheet** export |
+| Panel info kasir | `nominal` | `info-customer` (profil, piutang, histori) + `histori-user` |
 
 Halaman lain (FMI Stok, Mutasi Stok, Master Produk, laporan penjualan/pembelian) **masih
 menampilkan uang ke siapa pun yang boleh membukanya** — untuk membatasi seseorang, menu-menu itu

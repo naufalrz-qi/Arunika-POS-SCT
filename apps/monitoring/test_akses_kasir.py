@@ -78,6 +78,58 @@ class MenuBawaanPeranTests(TestCase):
         self.assertEqual(_keys(self.kasir), {"kasir_stok", "stock", "bantuan"})
 
 
+class MenuKhususAdminTests(TestCase):
+    """`admin_only` — dicentang di Kelola Menu pun tak berlaku.
+
+    Beda dari menu admin biasa: yang biasa memang BISA diberikan ke supervisor
+    (lihat test_kasir_bisa_diberi_menu_admin di atas). Kedua layar opname tidak,
+    karena Opname Stok kini juga menulis koreksi — satu baris di t_opname_stok
+    langsung menggeser stok lewat trigger dan terkirim ke pusat, dan tak ada
+    layar mana pun yang bisa menariknya kembali.
+    """
+
+    # Tiga layar tulis kas ikut di sini dengan alasan yang sama: uang keluar
+    # dari kas begitu disimpan, dan tak ada layar yang bisa menariknya kembali.
+    KUNCI = ("opname", "koreksi_stok", "opname_neraca",
+             "kas_biaya_input", "kas_penambahan", "kas_mutasi")
+
+    def setUp(self):
+        self.spv = User.objects.create_user("spv7", password="rahasia-kuat-123", role=Role.SUPERVISOR)
+        self.kasir = User.objects.create_user("kasir7", password="rahasia-kuat-123", role=Role.KASIR)
+        self.admin = User.objects.create_user("admin7", password="rahasia-kuat-123", role=Role.ADMIN)
+
+    def test_ditandai_admin_only_di_registry(self):
+        ditandai = {m["key"] for m in ALL_MENUS if m.get("admin_only")}
+        self.assertEqual(ditandai, set(self.KUNCI))
+
+    def test_dicentang_pun_tidak_diberikan_ke_supervisor(self):
+        for user in (self.spv, self.kasir):
+            user.allowed_menu_keys = ["kasir_stok", *self.KUNCI]
+            user.save(update_fields=["allowed_menu_keys"])
+            keys = _keys(user)
+            for k in self.KUNCI:
+                self.assertNotIn(k, keys, f"{k} bocor ke {user.role}")
+            # Yang lain di daftar yang sama tetap berlaku — yang dibuang hanya
+            # yang ber-admin_only, bukan seluruh pemberiannya.
+            self.assertIn("kasir_stok", keys)
+
+    def test_admin_dan_superadmin_tetap_mendapatkannya(self):
+        boss = User.objects.create_user("boss7", password="rahasia-kuat-123", role=Role.SUPERADMIN)
+        for k in self.KUNCI:
+            self.assertIn(k, _keys(self.admin), f"{k} hilang dari admin")
+            self.assertIn(k, _keys(boss), f"{k} hilang dari superadmin")
+
+    def test_tetap_bisa_diberi_dan_dicabut_untuk_admin(self):
+        """Tetap di assignable_menus: admin masih dikelola lewat Kelola Menu."""
+        assignable = {m["key"] for m in assignable_menus()}
+        for k in self.KUNCI:
+            self.assertIn(k, assignable)
+        self.admin.allowed_menu_keys = ["dashboard"]
+        self.admin.save(update_fields=["allowed_menu_keys"])
+        for k in self.KUNCI:
+            self.assertNotIn(k, _keys(self.admin))
+
+
 class GerbangHalamanKasirTests(TestCase):
     def setUp(self):
         self.kasir = User.objects.create_user("kasir8", password="rahasia-kuat-123", role=Role.KASIR)
@@ -201,7 +253,7 @@ class LayarKelolaMenuTests(TestCase):
         """Mengubah data induk bukan pekerjaan harian toko: satu salah ketik di
         sini ikut terbawa ke SETIAP nota yang menunjuk ke baris itu."""
         menus = {m["key"]: m for m in assignable_menus()}
-        for kunci in ("products", "customers", "suppliers", "update_barang",
+        for kunci in ("products", "customers", "suppliers", "update_harga",
                       "kelola_pelanggan", "kelola_supplier"):
             self.assertNotIn("roles", menus[kunci], f"{kunci} bocor ke kasir/supervisor")
             self.assertIn(kunci, default_keys_for(Role.ADMIN))

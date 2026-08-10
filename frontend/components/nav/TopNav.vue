@@ -5,6 +5,7 @@ import { useUiStore } from "@/stores/ui";
 import { useNav } from "@/composables/useNav";
 import Icon from "./Icon.vue";
 import UserMenu from "./UserMenu.vue";
+import NotifMenu from "./NotifMenu.vue";
 import ConnectionMenu from "./ConnectionMenu.vue";
 
 const ui = useUiStore();
@@ -53,6 +54,7 @@ watch(
         >
           <Icon :name="ui.theme === 'dark' ? 'sun' : 'moon'" />
         </button>
+        <NotifMenu />
         <ConnectionMenu />
         <UserMenu />
         <button

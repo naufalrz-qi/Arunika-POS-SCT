@@ -94,10 +94,16 @@ class SimpanTests(SimpleTestCase):
         return patch.object(mc.mssql, "cursor", fake)
 
     def test_baris_baru_dapat_kode_berformat(self):
+        """Tabel kosong mulai dari 000, bukan 001.
+
+        Bukan selera: baris TERENDAH setiap tabel keluarga ini memang berakhiran
+        000 di server — SAA000, MAA000, KAA000, BAA000, WAA000. Mulai dari 001
+        melompati satu kode yang seharusnya ada.
+        """
         cur = FakeCursor(maks=None)
         with self._profile(cur):
             hasil = mc.simpan_master(object(), "supplier", {"nama": "PT Maju", "kd_kota": "KAA000", "kd_bank": "BAA000"})
-        self.assertEqual(hasil["kode"], "SAA001")
+        self.assertEqual(hasil["kode"], "SAA000")
         self.assertTrue(hasil["baru"])
         self.assertTrue(any(s.startswith("INSERT INTO m_supplier") for s in cur.sql))
 

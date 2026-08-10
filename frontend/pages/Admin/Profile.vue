@@ -13,11 +13,17 @@ const props = defineProps({
 const form = useForm({
   username: props.profile.username || "",
   name: props.profile.name || "",
+  password_lama: "",
   password: "",
 });
 
 function save() {
-  form.post("/admin-panel/profile/save", { onSuccess: () => (form.password = "") });
+  form.post("/admin-panel/profile/save", {
+    onSuccess: () => {
+      form.password = "";
+      form.password_lama = "";
+    },
+  });
 }
 </script>
 
@@ -37,12 +43,24 @@ function save() {
       <div class="space-y-4">
         <Input v-model="form.username" label="Username" :error="form.errors.username" />
         <Input v-model="form.name" label="Nama Lengkap" :error="form.errors.name" />
+        <!-- Kotak password lama berdiri DI ATAS password baru dan hanya muncul
+             saat password baru mulai diisi: memintanya di muka pada halaman yang
+             lebih sering dipakai untuk mengubah nama membuat orang mengira
+             seluruh formulir butuh sandi. -->
         <Input
           v-model="form.password"
           label="Password Baru"
           type="password"
           placeholder="Kosongkan jika tidak diubah"
           :error="form.errors.password"
+        />
+        <Input
+          v-if="form.password"
+          v-model="form.password_lama"
+          label="Password Saat Ini"
+          type="password"
+          placeholder="Wajib diisi untuk mengganti password"
+          :error="form.errors.password_lama"
         />
         <div class="flex justify-end">
           <Button :loading="form.processing" @click="save">Simpan Perubahan</Button>

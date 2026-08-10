@@ -120,7 +120,7 @@ class ValidasiTests(SimpleTestCase):
     def test_tanpa_tautan_akun_ditolak_dengan_arahan(self):
         with self.assertRaises(ValueError) as ctx:
             tx._periksa(ITEM, "", "DAA000")
-        self.assertIn("Manajemen User", str(ctx.exception))
+        self.assertIn("Kelola Tautan User", str(ctx.exception))
 
     def test_divisi_kosong_juga_ditolak(self):
         """kd_divisi menentukan awalan nomor — tanpanya nomor bisa salah cabang."""

@@ -38,30 +38,16 @@ class User(AbstractUser):
     # dan mematikan semua centang mengisi ketiga kunci.
     hidden_data_keys = models.JSONField(default=list, blank=True)
 
-    # Tautan ke user legacy di MS SQL (m_userx.kd_user) dan divisi tempat ia
-    # bekerja (m_divisi.kd_divisi). Transaksi menyimpan kd_user, bukan id user
-    # Arunika, jadi tanpa tautan ini nota yang kita tulis tak bisa dikenali
-    # laporan "Penjualan per User" — di Arunika MAUPUN di aplikasi POS lama.
-    #
-    # Hanya TAUTAN, bukan salinan akun — skema m_userx memang jauh berbeda dari
-    # AbstractUser, jadi memetakan kolomnya satu per satu tak akan pernah rapi.
-    # Yang dipinjam cuma kd_user-nya.
-    #
-    # Kata sandi tetap milik Arunika. Arunika TIDAK PERNAH membaca maupun
-    # menulis dua kolom sandi di m_userx:
-    #   passwd  — menyimpan sandi apa adanya (terukur 4-9 karakter, bukan hash);
-    #             menyalinnya ke sini berarti menyebarkan sandi terbuka ke
-    #             sistem kedua.
-    #   passweb — peninggalan pengembang sebelumnya dan sudah diketahui
-    #             mengganggu aplikasi legacy. Menulisinya berarti mengulang
-    #             kerusakan yang sudah ada, bukan memperbaikinya.
-    kd_user = models.CharField(max_length=6, blank=True, default="")
-    kd_divisi = models.CharField(max_length=6, blank=True, default="")
-    # Pegawai yang melayani, terisi otomatis di form nota. Tak bisa disimpulkan
-    # dari kd_user: m_pegawai menyebutnya "KASIR9" sedangkan m_userx "KASIR01",
-    # dan mencocokkan lewat nama akan menautkan orang yang salah tanpa satu pun
-    # galat — nota lalu tercatat atas nama pegawai lain.
-    kd_pegawai = models.CharField(max_length=6, blank=True, default="")
+    # Batas baca kotak notif: satu stempel waktu, bukan tabel status baca per
+    # baris. Notif di sini adalah irisan ActivityLog milik akun ini (lihat
+    # apps/core/models.log_untuk), dan yang benar-benar ditanyakan orang cuma
+    # "ada yang baru sejak terakhir saya lihat?" — pertanyaan yang dijawab satu
+    # perbandingan timestamp. NULL berarti belum pernah dibuka, jadi semuanya
+    # terhitung baru; itu pula perilaku yang benar untuk akun yang baru dibuat.
+    notif_dibaca_at = models.DateTimeField(null=True, blank=True)
+
+    # Tautan ke user legacy TIDAK ada di sini — ia per koneksi, lihat TautanUser
+    # di bawah berkas ini.
 
     # Server yang boleh dipakai akun ini. Kasir/supervisor DIKUNCI ke sini dan
     # tak bisa berpindah: koneksi menentukan ke server toko MANA sebuah nota
@@ -95,3 +81,50 @@ class User(AbstractUser):
 
     def __str__(self) -> str:
         return f"{self.get_full_name() or self.username} ({self.role})"
+
+
+class TautanUser(models.Model):
+    """Tautan akun Arunika → user legacy `m_userx`, SATU PER KONEKSI.
+
+    Kenapa per koneksi dan bukan satu field di User: `kd_user` dibuat berurutan
+    (`UAA000`, `UAA001`, …) oleh tiap server SENDIRI-SENDIRI, jadi kode yang sama
+    menunjuk orang yang berbeda di server yang berbeda. Terukur antara dua server:
+    dari 11 kode yang ada di keduanya, 10 milik orang lain — `UAA002` adalah
+    KASIR01 di satu server dan YIQ di server lain.
+
+    Akibatnya satu `kd_user` di akun admin sudah salah sejak admin berpindah
+    koneksi (dan admin memang berpindah — 14 profil). Nota atau koreksi stoknya
+    akan tercatat atas nama orang lain di server tujuan, tanpa galat apa pun:
+    kodenya valid di sana, cuma bukan miliknya.
+
+    Kasir/supervisor tidak jadi kasus khusus — mereka terkunci ke satu server,
+    jadi tautannya kebetulan cuma satu baris. Satu mekanisme, bukan dua.
+
+    Ini TAUTAN, bukan salinan akun. Kata sandi tetap milik Arunika; Arunika tak
+    pernah membaca maupun menulis `m_userx.passwd` (menyimpan sandi apa adanya,
+    4-9 karakter) maupun `passweb` (peninggalan yang sudah diketahui mengganggu
+    aplikasi legacy).
+    """
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="tautan")
+    # Koneksi ikut terhapus bersama tautannya: tautan ke server yang sudah tak
+    # ada tidak berarti apa-apa, dan menyimpannya cuma membuat layar menampilkan
+    # baris hantu.
+    profile = models.ForeignKey(
+        "connections.ServerProfile", on_delete=models.CASCADE, related_name="tautan")
+    kd_user = models.CharField(max_length=6, blank=True, default="")
+    kd_divisi = models.CharField(max_length=6, blank=True, default="")
+    # Pegawai yang melayani, terisi otomatis di form nota. Tak bisa disimpulkan
+    # dari kd_user: m_pegawai menyebutnya "KASIR9" sedangkan m_userx "KASIR01",
+    # dan mencocokkan lewat nama akan menautkan orang yang salah tanpa satu pun
+    # galat — nota lalu tercatat atas nama pegawai lain.
+    kd_pegawai = models.CharField(max_length=6, blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "profile"], name="tautan_unik_per_koneksi"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user_id}@{self.profile_id} → {self.kd_user or '-'}"

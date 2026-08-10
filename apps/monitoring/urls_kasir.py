@@ -16,6 +16,8 @@ urlpatterns = [
     path("penjualan-retur/save", v.retur_penjualan_save, name="kasir_retur_penjualan_save"),
     path("pembelian", v.pembelian, name="kasir_pembelian"),
     path("pembelian/save", v.pembelian_save, name="kasir_pembelian_save"),
+    path("pembelian-order", v.pembelian_order, name="kasir_pembelian_order"),
+    path("pembelian-order/save", v.pembelian_order_save, name="kasir_pembelian_order_save"),
     path("pembelian-retur", v.retur_pembelian, name="kasir_retur_pembelian"),
     path("pembelian-retur/save", v.retur_pembelian_save, name="kasir_retur_pembelian_save"),
 ]
@@ -29,13 +31,21 @@ urlpatterns = [
 # 2. Path yang tak cocok menu mana pun dianggap BEBAS — dan endpoint ini
 #    membocorkan nama barang, harga, serta isi nota.
 for _layar in ("penjualan", "penjualan-order", "penjualan-retur",
-               "pembelian", "pembelian-retur"):
+               "pembelian", "pembelian-order", "pembelian-retur"):
     urlpatterns += [
         path(f"{_layar}/cari-barang", v.cari_barang_json,
              name=f"kasir_cari_barang_{_layar}"),
         path(f"{_layar}/satuan", v.satuan_json, name=f"kasir_satuan_{_layar}"),
     ]
 for _layar in ("penjualan", "penjualan-order"):
-    urlpatterns.append(
+    urlpatterns += [
         path(f"{_layar}/cari-customer", v.cari_customer_json,
-             name=f"kasir_cari_customer_{_layar}"))
+             name=f"kasir_cari_customer_{_layar}"),
+        # Alasan yang sama seperti di atas, dan di sini bocorannya lebih besar
+        # lagi: info-customer membawa piutang, batas kredit, dan nota terakhir
+        # seseorang. Path yang tak cocok menu mana pun dianggap BEBAS.
+        path(f"{_layar}/info-customer", v.info_customer_json,
+             name=f"kasir_info_customer_{_layar}"),
+        path(f"{_layar}/histori-user", v.histori_user_json,
+             name=f"kasir_histori_user_{_layar}"),
+    ]

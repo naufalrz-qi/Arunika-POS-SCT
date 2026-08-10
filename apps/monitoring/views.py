@@ -9,15 +9,16 @@ import pyodbc
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from django.http import HttpResponseForbidden, JsonResponse
+from django.http import Http404, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 from inertia import defer, render
 
-from apps.auth_app.models import DATA_KEY_SET, DATA_KEYS, Role, User
+from apps.auth_app.models import DATA_KEY_SET, DATA_KEYS, Role, TautanUser, User
+from apps.auth_app.tautan import tautan_untuk, tautan_wajib
 from apps.connections.models import ServerProfile
-from apps.core.http import get_data
+from apps.core.http import get_data, redirect_aman as _redirect_back
 from apps.core.middleware import ditolak
 from apps.core.menus import (
     SECTION_LABELS,
@@ -34,10 +35,14 @@ from apps.core.models import (
     log_activity,
     log_barang_updates,
     log_sync,
+    log_untuk,
 )
 from apps.inventory import services as inv
-from apps.master_data import master_crud
+from apps.master_data import barang, master_crud
+from apps.transactions import kas as kas_tulis
+from apps.transactions import opname as opname_tulis
 from apps.transactions.penjualan import opsi_nota as _opsi_nota
+from apps.transactions.penjualan import satuan_banyak as _satuan_banyak
 from apps.master_data import services as master
 from apps.transactions import services as tx
 from apps.core import reporting
@@ -66,6 +71,14 @@ CONN_ERROR = "Tidak ada koneksi aktif, atau server tidak dapat dihubungi. Pilih 
 # mengirim seluruh katalog dalam satu payload, jadi satu permintaan memuat
 # harga ~55rb barang sekaligus.
 #
+# Kolom uang panel info di layar kasir (apps/monitoring/views_kasir.py). Berdiri
+# di luar /admin-panel, jadi ia melewatkan SELURUH penyaringan berbasis spec
+# laporan; satu-satunya yang menahannya adalah nama field di sini plus
+# `_tanpa_harga`. Bernama supaya tesnya bisa membacanya dari sumber alih-alih
+# menjiplaknya — daftar jiplakan tetap hijau justru saat ada yang lupa didaftar.
+_UANG_INFO_KASIR = {"sisa_piutang", "total_cicilan", "total_penjualan",
+                    "limit_kredit"}
+
 # Satu kunci izin menutup beberapa field. `harga_average` ikut harga_beli
 # karena ia rata-rata harga perolehan — modal, bukan harga jual.
 _FIELDS_BY_DATA_KEY = {
@@ -86,7 +99,7 @@ _FIELDS_BY_DATA_KEY = {
     "nominal": {"nominal", "revenue", "nilai", "total_belanja", "rata_nota",
                 "tier_nilai", "total_nilai", "rata_nota_semua",
                 "nilai_lebih", "nilai_kurang", "nilai_neto",
-                "total_nilai_kurang", "total_nilai_neto"},
+                "total_nilai_kurang", "total_nilai_neto"} | _UANG_INFO_KASIR,
 }
 
 
@@ -136,16 +149,6 @@ def _active():
     return mssql.get_active_profile()
 
 
-def _redirect_back(data, default: str):
-    """Redirect ke halaman asal form (opsional `redirect_to` di payload) supaya
-    endpoint update barang bisa dipakai dari halaman lain (mis. Pergerakan
-    Harga) tanpa terlempar balik ke Update Barang. Hanya path admin-panel."""
-    target = (data.get("redirect_to") or "").strip()
-    if target.startswith("/admin-panel/"):
-        return redirect(target)
-    return redirect(default)
-
-
 # --- Dashboard -------------------------------------------------------------
 
 def dashboard(request):
@@ -162,18 +165,10 @@ def dashboard(request):
             {"id": p.id, "name": p.name, "host": f"{p.host}:{p.port}", "status": p.last_status}
             for p in ServerProfile.objects.all()
         ] if boleh_lihat_server else []
-        # Kartu Aktivitas Terbaru di dashboard hanya menampilkan jejak pemakainya
-        # sendiri; superadmin melihat semuanya. Ini kartu ringkasan pribadi —
-        # "apa yang baru saja saya lakukan" — bukan jendela ke pekerjaan rekan
-        # kerja. Halaman Log Aktivitas (/admin-panel/logs) sengaja TIDAK ikut
-        # disaring: itu memang layar audit, dan aksesnya sudah dijaga menu.
-        #
-        # Disaring lewat `username` (salinan teks di baris log), bukan relasi ke
-        # User: kolom itu didenormalisasi supaya jejak tetap terbaca setelah
-        # akunnya dihapus.
-        log_qs = ActivityLog.objects.all()
-        if request.user.role != Role.SUPERADMIN:
-            log_qs = log_qs.filter(username=request.user.username)
+        # Kartu Aktivitas Terbaru hanya menampilkan jejak pemakainya sendiri;
+        # superadmin melihat semuanya. Aturannya ada di `log_untuk` dan dipakai
+        # bersama kotak notif di navbar serta halaman Log Aktivitas.
+        log_qs = log_untuk(request.user)
         recent = [
             {
                 "id": a.id,
@@ -240,9 +235,10 @@ def _user_dict(u):
         "role": u.role,
         "is_active": u.is_active,
         "created_at": _local(u.date_joined, "%Y-%m-%d"),
-        "kd_user": u.kd_user,
-        "kd_divisi": u.kd_divisi,
-        "kd_pegawai": u.kd_pegawai,
+        # Berapa koneksi yang sudah ditautkan — angkanya saja. Kodenya sendiri
+        # milik Kelola Tautan User; menampilkannya di sini akan menyarankan
+        # bahwa ia bisa diubah dari sini juga.
+        "jml_tautan": u.tautan.exclude(kd_user="").count(),
         "server_profile_id": u.server_profile_id,
         "koneksi_terkunci": u.koneksi_terkunci,
     }
@@ -275,23 +271,9 @@ def users_index(request):
     roles = _managed_roles(request.user)
     users = User.objects.filter(role__in=roles).order_by("role", "username")
 
-    def load_legacy():
-        """Pilihan tautan ke user & divisi legacy. Ditunda: dua query MS SQL ini
-        tak boleh menahan tampilnya daftar user, yang datanya ada di SQLite."""
-        profile = _active()
-        if not profile:
-            return {"userx": [], "divisi": [], "pegawai": [], "conn_error": CONN_ERROR}
-        try:
-            return {
-                "userx": master.list_userx(profile),
-                "divisi": inv.list_divisi(profile),
-                "pegawai": _opsi_nota(profile)["pegawai"],
-                "conn_error": None,
-            }
-        except pyodbc.Error as exc:
-            return {"userx": [], "divisi": [], "pegawai": [],
-                    "conn_error": mssql.friendly_error(exc, "Gagal membaca user legacy")}
-
+    # Pilihan user/divisi/pegawai legacy TIDAK dimuat di sini lagi: tautannya
+    # per koneksi, jadi satu daftar dari koneksi yang kebetulan aktif akan
+    # menyesatkan. Lihat tautan_user_index.
     return render(request, "Admin/Users/Index", props={
         "users": [_user_dict(u) for u in users],
         "assignable_roles": roles,
@@ -300,7 +282,6 @@ def users_index(request):
             {"value": p.pk, "label": f"{p.name} ({p.db_type})"}
             for p in ServerProfile.objects.all().order_by("name")
         ],
-        "legacy": defer(load_legacy),
     })
 
 
@@ -350,12 +331,10 @@ def users_save(request):
             return redirect("/admin-panel/users")
         user.set_password(password)
 
-    # Tautan ke akun legacy. Dipangkas ke panjang kolomnya supaya kode yang
-    # kepanjangan ditolak di sini, bukan jadi galat SQLite yang tak berarti apa
-    # pun bagi yang mengisinya.
-    user.kd_user = (data.get("kd_user") or "").strip()[:6]
-    user.kd_divisi = (data.get("kd_divisi") or "").strip()[:6]
-    user.kd_pegawai = (data.get("kd_pegawai") or "").strip()[:6]
+    # Tautan ke akun legacy TIDAK diatur di sini — ia per koneksi, dan tempatnya
+    # di Kelola Tautan User. Satu isian di layar ini dulu memang ada, tapi ia
+    # menjanjikan sesuatu yang tak bisa ditepati: kode legacy berbeda artinya di
+    # tiap server, jadi satu nilai sudah salah begitu pemakainya pindah koneksi.
     # Server yang boleh dipakai. Untuk kasir/supervisor ini mengunci ke mana
     # nota mereka tertulis; salah isi berarti nota masuk ke cabang lain.
     sp = data.get("server_profile_id")
@@ -656,7 +635,7 @@ def update_barang_harga(request):
     data = get_data(request)
     if not profile:
         request.session["flash_error"] = CONN_ERROR
-        return _redirect_back(data, "/admin-panel/master/update-barang")
+        return _redirect_back(data, "/admin-panel/master/update-harga")
     kd_barang = (data.get("kd_barang") or "").strip()
     nama_barang = (data.get("nama") or "").strip()
     prices = data.get("prices") or {}  # {kd_satuan: harga_jual}
@@ -685,7 +664,7 @@ def update_barang_harga(request):
         request.session["flash_error"] = f"Harga {kd_barang} ditolak. {exc}"
     except pyodbc.Error as exc:
         request.session["flash_error"] = mssql.friendly_error(exc, "Gagal update harga")
-    return _redirect_back(data, "/admin-panel/master/update-barang")
+    return _redirect_back(data, "/admin-panel/master/update-harga")
 
 
 def update_barang_harga_massal(request):
@@ -699,7 +678,7 @@ def update_barang_harga_massal(request):
     data = get_data(request)
     if not profile:
         request.session["flash_error"] = CONN_ERROR
-        return _redirect_back(data, "/admin-panel/master/update-barang")
+        return _redirect_back(data, "/admin-panel/master/update-harga")
 
     # items: [{kd_barang, kd_satuan, harga, nama?}] -> {kd_barang: {kd_satuan: harga}}
     per_barang: dict = {}
@@ -717,7 +696,7 @@ def update_barang_harga_massal(request):
 
     if not per_barang:
         request.session["flash_error"] = "Tidak ada baris yang dipilih."
-        return _redirect_back(data, "/admin-panel/master/update-barang")
+        return _redirect_back(data, "/admin-panel/master/update-harga")
 
     # ponytail: satu transaksi per barang (update_harga sudah atomic per barang).
     # Kalau jumlah baris tumbuh sampai ribuan, baru pertimbangkan batch tunggal.
@@ -762,7 +741,7 @@ def update_barang_harga_massal(request):
         if status.get("modal_error"):
             request.session["flash_error"] = status["modal_error"]
         request.session["flash_success"] = f"{total} satuan harga diperbarui pada {len(per_barang)} barang."
-    return _redirect_back(data, "/admin-panel/master/update-barang")
+    return _redirect_back(data, "/admin-panel/master/update-harga")
 
 
 def update_barang_status(request):
@@ -771,7 +750,7 @@ def update_barang_status(request):
     data = get_data(request)
     if not profile:
         request.session["flash_error"] = CONN_ERROR
-        return _redirect_back(data, "/admin-panel/master/update-barang")
+        return _redirect_back(data, "/admin-panel/master/update-harga")
     kd_barang = (data.get("kd_barang") or "").strip()
     nama_barang = (data.get("nama") or "").strip()
     table = data.get("table") or ""
@@ -791,7 +770,7 @@ def update_barang_status(request):
     except ValueError as exc:
         # Penolakan whitelist dari master.update_status — pesannya sudah Indonesia.
         request.session["flash_error"] = f"Gagal update status: {exc}"
-    return _redirect_back(data, "/admin-panel/master/update-barang")
+    return _redirect_back(data, "/admin-panel/master/update-harga")
 
 
 def update_barang_identitas(request):
@@ -810,7 +789,7 @@ def update_barang_identitas(request):
     data = get_data(request)
     if not profile:
         request.session["flash_error"] = CONN_ERROR
-        return _redirect_back(data, "/admin-panel/master/update-barang")
+        return _redirect_back(data, "/admin-panel/master/update-harga")
 
     kd_barang = (data.get("kd_barang") or "").strip()
     try:
@@ -818,17 +797,17 @@ def update_barang_identitas(request):
             profile, kd_barang, data.get("nama") or "", data.get("keterangan") or "")
     except master.BukanServerGudang as exc:
         request.session["flash_error"] = str(exc)
-        return _redirect_back(data, "/admin-panel/master/update-barang")
+        return _redirect_back(data, "/admin-panel/master/update-harga")
     except ValueError as exc:
         request.session["flash_error"] = str(exc)
-        return _redirect_back(data, "/admin-panel/master/update-barang")
+        return _redirect_back(data, "/admin-panel/master/update-harga")
     except pyodbc.Error as exc:
         request.session["flash_error"] = mssql.friendly_error(exc, "Gagal menyimpan nama/keterangan")
-        return _redirect_back(data, "/admin-panel/master/update-barang")
+        return _redirect_back(data, "/admin-panel/master/update-harga")
 
     if not ubah:
         request.session["flash_success"] = f"Tidak ada perubahan untuk {kd_barang}."
-        return _redirect_back(data, "/admin-panel/master/update-barang")
+        return _redirect_back(data, "/admin-panel/master/update-harga")
 
     nama_final = next((u["baru"] for u in ubah if u["field"] == "nama"), None)
     log_barang_updates(
@@ -843,7 +822,7 @@ def update_barang_identitas(request):
         + "; ".join(f"{_IDENTITAS_LABEL[u['field']]}: \"{u['lama'] or '(kosong)'}\" → "
                     f"\"{u['baru'] or '(kosong)'}\"" for u in ubah)
     )
-    return _redirect_back(data, "/admin-panel/master/update-barang")
+    return _redirect_back(data, "/admin-panel/master/update-harga")
 
 
 def update_barang_detail(request):
@@ -1202,6 +1181,23 @@ def sync_master_apply(request):
 # --- Logs ------------------------------------------------------------------
 
 def logs_index(request):
+    """Log Aktivitas — jejak sendiri, kecuali superadmin.
+
+    Dulu halaman ini memperlihatkan jejak SEMUA orang kepada admin mana pun,
+    dengan alasan "ini layar audit dan aksesnya sudah dijaga menu". Alasan itu
+    tidak berlaku: menu `logs` bukan superadmin_only, jadi ia bisa diberikan ke
+    siapa saja, dan yang lolos ikut membaca pekerjaan seluruh kantor.
+    Pengauditannya sekarang tetap utuh — di tangan superadmin.
+    """
+    boleh_semua = request.user.role == Role.SUPERADMIN
+    qs = log_untuk(request.user)
+    # Penyaring user hanya berarti bagi yang memang melihat lebih dari satu.
+    # Didorong ke SQL, bukan disaring di layar: menyaring 300 baris yang sudah
+    # terpotong akan memperlihatkan "tak ada" untuk orang yang jejaknya nyata
+    # tapi lebih tua dari baris ke-300.
+    pilih_user = (request.GET.get("user") or "").strip() if boleh_semua else ""
+    if pilih_user:
+        qs = qs.filter(username=pilih_user)
     logs = [
         {
             "id": a.id,
@@ -1211,14 +1207,24 @@ def logs_index(request):
             "ip_address": a.ip_address or "",
             "timestamp": _local(a.timestamp),
         }
-        for a in ActivityLog.objects.all()[:300]
+        for a in qs[:300]
     ]
     action_types = sorted({a["action"] for a in logs})
-    users = sorted({a["user"] for a in logs if a["user"] != "—"})
+    # Daftar user dibangun dari tabel User, bukan dari 300 baris yang terkirim:
+    # yang terakhir menyempit diam-diam begitu log bertambah, sehingga nama yang
+    # jejaknya ada tapi lama hilang dari dropdown-nya sendiri.
+    users = (sorted(User.objects.values_list("username", flat=True))
+             if boleh_semua else [])
     return render(
         request,
         "Admin/ActivityLogs",
-        props={"logs": logs, "action_types": action_types, "users": users},
+        props={
+            "logs": logs,
+            "action_types": action_types,
+            "users": users,
+            "boleh_semua": boleh_semua,
+            "filters": {"user": pilih_user},
+        },
     )
 
 
@@ -1593,6 +1599,100 @@ def _deny_non_superadmin(request):
     return None
 
 
+# --- Kelola Tautan User ----------------------------------------------------
+#
+# Halaman sendiri, bukan sederet isian di Manajemen User, karena bentuk datanya
+# memang matriks: N user × sekian koneksi. Presedennya Kelola Menu, yang dipisah
+# karena alasan yang sama.
+#
+# Keuntungan konkretnya: kolom kode bisa jadi PILIHAN yang dibaca dari server
+# yang bersangkutan, bukan isian bebas 6 karakter. `UAA0O2` (huruf O) dulu bisa
+# tersimpan diam-diam dan baru ketahuan saat nota pertama gagal.
+
+def tautan_user_index(request):
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+    users = User.objects.order_by("role", "username")
+    profiles = list(ServerProfile.objects.all().order_by("name"))
+    tersimpan = {}
+    for t in TautanUser.objects.all():
+        tersimpan.setdefault(t.user_id, {})[t.profile_id] = {
+            "kd_user": t.kd_user, "kd_divisi": t.kd_divisi,
+            "kd_pegawai": t.kd_pegawai,
+        }
+
+    return render(request, "Admin/TautanUser/Index", props={
+        "users": [
+            {
+                "id": u.id,
+                "username": u.username,
+                "name": u.get_full_name() or u.username,
+                "role": u.role,
+                # Kasir/supervisor terkunci ke satu server, jadi layar cukup
+                # menawarkan satu koneksi untuk mereka — menampilkan 14 baris
+                # yang 13 di antaranya takkan pernah dipakai cuma mengundang
+                # salah isi.
+                "koneksi_terkunci": u.koneksi_terkunci,
+                "server_profile_id": u.server_profile_id,
+                "tautan": tersimpan.get(u.id, {}),
+            }
+            for u in users
+        ],
+        "profiles": [{"id": p.pk, "name": p.name, "db_type": p.db_type}
+                     for p in profiles],
+    })
+
+
+def tautan_user_opsi(request, profile_id):
+    """Pilihan user/divisi/pegawai legacy DARI SATU koneksi.
+
+    Per koneksi dan diambil saat koneksinya dibuka, bukan sekaligus untuk semua:
+    14 profil berarti 42 query MS SQL lintas Tailscale kalau dimuat di muka, dan
+    kebanyakan takkan pernah dilihat.
+    """
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+    profile = get_object_or_404(ServerProfile, pk=profile_id)
+    try:
+        return JsonResponse({
+            "userx": master.list_userx(profile),
+            "divisi": inv.list_divisi(profile),
+            "pegawai": _opsi_nota(profile)["pegawai"],
+            "error": None,
+        })
+    except pyodbc.Error as exc:
+        return JsonResponse({
+            "userx": [], "divisi": [], "pegawai": [],
+            "error": mssql.friendly_error(exc, f"Gagal membaca data {profile.name}")})
+
+
+@require_POST
+def tautan_user_save(request):
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+    data = get_data(request)
+    user = get_object_or_404(User, pk=data.get("user_id"))
+    profile = get_object_or_404(ServerProfile, pk=data.get("profile_id"))
+    # Dipangkas ke panjang kolom legacy (char(6)) supaya kode kepanjangan
+    # ditolak di sini, bukan jadi galat SQL yang tak berarti bagi pengisinya.
+    nilai = {k: (data.get(k) or "").strip()[:6]
+             for k in ("kd_user", "kd_divisi", "kd_pegawai")}
+
+    if not any(nilai.values()):
+        # Mengosongkan = mencabut tautan. Menyimpan baris kosong akan membuat
+        # layar tampak "sudah ditautkan" padahal jalur tulis tetap menolak.
+        TautanUser.objects.filter(user=user, profile=profile).delete()
+        pesan = f"Tautan {user.username} di {profile.name} dihapus."
+    else:
+        TautanUser.objects.update_or_create(
+            user=user, profile=profile, defaults=nilai)
+        pesan = f"Tautan {user.username} di {profile.name} disimpan."
+
+    log_activity(request, "tautan_user", pesan)
+    request.session["flash_success"] = pesan
+    return redirect("/admin-panel/tautan-user")
+
+
 def menus_index(request):
     if (denied := _deny_non_superadmin(request)):
         return denied
@@ -1805,8 +1905,13 @@ def _report_view(spec):
                     "options": options, "conn_error": conn_error,
                     "notice": f["warning"] or None}
 
-        return render(request, spec["component"],
-                      props={"report": defer(load_report), "filters": _spec_filters(f, spec)})
+        props = {"report": defer(load_report), "filters": _spec_filters(f, spec)}
+        # Opsional, bawaannya tak ada — halaman yang tak menyebutnya tak berubah.
+        # Dipakai halaman laporan yang juga punya aksi tulis dan perlu tahu
+        # sesuatu tentang si pemakai (Opname: apakah akunnya sudah ditautkan).
+        if spec.get("extra_props"):
+            props.update(spec["extra_props"](request))
+        return render(request, spec["component"], props=props)
 
     return view
 
@@ -2496,6 +2601,8 @@ _OPNAME = {
     "filter_keys": ["kd_divisi"],
     "options": lambda p: {"divisi": _opt_divisi(p)},
     "filename": "opname",
+    # Layar ini murni laporan. Jalur tulisnya pindah ke halaman Koreksi Stok —
+    # satu sesi balancing menyentuh ratusan baris dan tak muat di modal.
     "columns": [{"key": "no_transaksi", "label": "No. Opname"}, {"key": "tanggal", "label": "Tanggal", "format": "date"}, {"key": "divisi", "label": "Divisi"}, {"key": "kd_barang", "label": "Kd. Barang"}, {"key": "barang", "label": "Barang"}, {"key": "koreksi_masuk", "label": "Koreksi Masuk", "format": "number"}, {"key": "koreksi_keluar", "label": "Koreksi Keluar", "format": "number"}, {"key": "diferensi", "label": "Diferensi", "format": "number"}],
 }
 opname = _report_view(_OPNAME)
@@ -2598,6 +2705,176 @@ def opname_neraca_detail(request):
         "kejadian": kejadian,
         "periode": {"dari": f["date_from_s"], "sampai": f["date_to_s"]},
     })
+
+
+# --- Koreksi stok — satu-satunya jalur TULIS di halaman laporan -------------
+#
+# Ketiga rute di bawah sengaja duduk di bawah prefix /admin-panel/inventory/opname
+# supaya menu_key_for_path memberinya key `opname` lewat pencocokan prefix. Itu
+# berarti penjagaannya ikut: menu `opname` ber-admin_only, jadi kasir/supervisor
+# tak bisa mencapainya walau mengetik URL-nya sendiri.
+
+def _bukan_admin(request):
+    """Lapis kedua di atas penjaga menu.
+
+    Penjaga menu sudah menutup rute ini, tapi ia bergantung pada satu flag di
+    menus.py yang bisa hilang saat menu disusun ulang. Yang ditulis di sini
+    menggeser stok sungguhan dan langsung terkirim ke pusat, jadi ia layak
+    diperiksa dua kali.
+    """
+    if request.user.role in (Role.ADMIN, Role.SUPERADMIN):
+        return None
+    return ditolak(
+        request,
+        "Koreksi stok hanya untuk pengelola",
+        "Menggeser stok mengubah angka yang dipakai seluruh laporan, dan tak "
+        "bisa dibatalkan dari layar mana pun. Minta pengelola aplikasi yang "
+        "melakukannya.",
+    )
+
+
+def koreksi_stok_index(request):
+    """Layar koreksi stok — grid ala aplikasi desktop.
+
+    Halaman sendiri, bukan modal di layar Opname: satu sesi balancing menyentuh
+    ratusan baris (terukur di gudang: 410 baris ber-keterangan sama dalam satu
+    sesi), dan itu tak muat di kotak dialog.
+
+    Daftar barangnya TIDAK dikirim di muka. Universe barang×divisi ~55rb baris
+    sudah pernah membunuh halaman Stok Akhir sebagai tabel baca-saja (15,6 MB
+    JSON, tak pernah selesai dimuat di Firefox Android); grid dengan kotak isian
+    di tiap baris jauh lebih berat lagi. Barisnya masuk lewat pencarian.
+    """
+    if (denied := _bukan_admin(request)):
+        return denied
+
+    def muat():
+        profile = _active()
+        if not profile:
+            return {"divisi": [], "conn_error": CONN_ERROR}
+        try:
+            return {"divisi": inv.list_divisi(profile), "conn_error": None}
+        except pyodbc.Error as exc:
+            return {"divisi": [],
+                    "conn_error": mssql.friendly_error(exc, "Gagal membaca divisi")}
+
+    return render(request, "Admin/Inventory/KoreksiStok", props={
+        "awal": defer(muat),
+        # Kosong = akun ini belum ditautkan untuk koneksi aktif. Dikirim supaya
+        # layar mengatakannya sebelum operator mengisi lima puluh baris.
+        "kd_user": tautan_untuk(request.user, _active()).kd_user,
+        "jenis": [
+            # Label dari view legacy `mon_t_opname_stok`, bukan karangan kita.
+            # `menambah` dipakai layar untuk memilih jenis bawaan dari tanda
+            # selisih — arah tak pernah jadi pilihan terpisah.
+            {"value": "lain_plus", "label": "Lain-Lain (+)", "menambah": True},
+            {"value": "lain_minus", "label": "Lain-Lain (−)", "menambah": False},
+            {"value": "rusak", "label": "Rusak", "menambah": False},
+            {"value": "hilang", "label": "Hilang", "menambah": False},
+        ],
+        "batas_muat": _BATAS_MUAT,
+    })
+
+
+# Batas "muat sekaligus". Bukan angka bulat yang dikarang: satu sesi balancing
+# terbesar di data gudang menyentuh ~410 baris sejenis, jadi 300 baris cukup
+# untuk satu rak sekali tarik tanpa mendekati ukuran yang dulu membekukan
+# halaman Stok Akhir. Terpotong? Layar mengatakannya, tidak diam-diam.
+_BATAS_MUAT = 300
+
+
+def koreksi_stok_cari(request):
+    """Barang + STOK SISTEM-nya, untuk masuk ke grid.
+
+    Menyaring payload kolumnar yang sudah dihitung, dicache, dan dihangatkan
+    scheduler (`inv.cek_stok`) — bukan query baru. Karena itu menampilkan stok
+    di tiap baris tak menambah biaya apa pun.
+
+    `limit` membedakan dua pemakaian dari satu endpoint: daftar saran di bawah
+    kotak cari (kecil), dan tombol "muat sekaligus" yang memasukkan seluruh
+    hasil filter ke grid (sampai _BATAS_MUAT).
+    """
+    profile = _active()
+    if not profile:
+        return JsonResponse({"rows": [], "error": CONN_ERROR})
+    try:
+        limit = min(int(request.GET.get("limit") or 20), _BATAS_MUAT)
+    except ValueError:
+        limit = 20
+    try:
+        rows = inv.cek_stok(
+            profile,
+            request.GET.get("cari") or "",
+            kd_divisi=(request.GET.get("kd_divisi") or "").strip() or None,
+            # Satu lebih banyak dari yang diminta: itulah cara tahu hasilnya
+            # terpotong tanpa menghitung ulang seluruh universe.
+            limit=limit + 1,
+        )
+        terpotong = len(rows) > limit
+        rows = rows[:limit]
+        # Satuan ikut dikirim, tidak diambil per baris saat dropdown-nya
+        # disentuh. `kd_satuan` WAJIB terisi sebelum sebuah baris bisa disimpan
+        # (ia menentukan besar pergeseran stoknya), jadi mengambilnya belakangan
+        # berarti operator harus membuka 300 dropdown — masing-masing satu
+        # round-trip — sebelum bisa menekan Simpan sekali pun.
+        peta = _satuan_banyak(profile, [r["kd_barang"] for r in rows])
+    except pyodbc.Error as exc:
+        return JsonResponse(
+            {"rows": [], "error": mssql.friendly_error(exc, "Gagal mencari barang")})
+    for r in rows:
+        r["satuan_list"] = peta.get(r["kd_barang"], [])
+    return JsonResponse({"rows": rows, "terpotong": terpotong})
+
+
+@require_POST
+def koreksi_stok_save(request):
+    if (denied := _bukan_admin(request)):
+        return denied
+    kembali = "/admin-panel/inventory/koreksi-stok"
+    data = get_data(request)
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect(kembali)
+    try:
+        # Menolak kalau akun ini belum ditautkan UNTUK KONEKSI INI — tidak
+        # meminjam tautan koneksi lain. Kode legacy dibuat berurutan oleh tiap
+        # server sendiri, jadi kode pinjaman akan lolos foreign key dan tercatat
+        # atas nama orang yang tak pernah menyentuhnya.
+        tautan = tautan_wajib(request.user, profile)
+        hasil = opname_tulis.buat_koreksi(
+            profile,
+            # Dari TAUTAN, tak pernah dari kiriman layar: kd_user menentukan
+            # koreksi ini tercatat atas nama siapa, dan sekali tertulis ia ikut
+            # terkirim ke pusat oleh trigger.
+            kd_user=tautan.kd_user,
+            # Dari layar — dan satu-satunya yang begitu. Diperiksa di
+            # buat_koreksi terhadap m_divisi server ini, karena ia memutuskan
+            # stok divisi mana yang bergeser sekaligus awalan nomornya.
+            kd_divisi=data.get("kd_divisi") or "",
+            items=data.get("items") or [],
+            keterangan=data.get("keterangan") or "",
+        )
+    except ValueError as exc:
+        request.session["flash_error"] = str(exc)
+        return redirect(kembali)
+    except (pyodbc.Error, RuntimeError) as exc:
+        request.session["flash_error"] = (
+            str(exc) if isinstance(exc, RuntimeError)
+            else mssql.friendly_error(exc, "Gagal menyimpan koreksi stok"))
+        return redirect(kembali)
+
+    # Nomornya bisa ratusan dalam satu sesi balancing — yang dicatat di log
+    # rentangnya, dan pesan di layar cuma jumlahnya. Daftar 410 nomor di toast
+    # tak terbaca oleh siapa pun.
+    nomor = hasil["nomor"]
+    rentang = nomor[0] if len(nomor) == 1 else f"{nomor[0]}–{nomor[-1]}"
+    log_activity(request, "koreksi_stok",
+                 f"Koreksi stok {hasil['baris']} baris — {rentang}")
+    request.session["flash_success"] = (
+        f"Koreksi stok tersimpan: {hasil['baris']} baris ({rentang}).")
+    return redirect(kembali)
+
 
 # Promo & Voucher
 _PROMO = {
@@ -3140,6 +3417,18 @@ def profile_save(request):
         u.username = username
     password = data.get("password")
     if password:
+        # Password LAMA wajib. Tanpa ini, peramban yang ditinggal terbuka di meja
+        # kasir cukup untuk mengambil alih akun secara permanen — dan
+        # `update_session_auth_hash` di bawah justru membuat sesi yang dipakai
+        # penyerang tetap hidup sementara pemilik aslinya terkunci di luar.
+        # Hanya berlaku untuk penggantian password; nama & username tetap bisa
+        # diperbaiki tanpa mengetik ulang sandi.
+        if not u.check_password(data.get("password_lama") or ""):
+            request.session["flash_error"] = (
+                "Password lama salah. Untuk mengganti password, masukkan dulu "
+                "password Anda saat ini."
+            )
+            return redirect("/admin-panel/profile")
         try:
             validate_password(password, u)
         except ValidationError as exc:
@@ -3158,8 +3447,12 @@ def profile_save(request):
 # Sengaja di sini dan bukan di views_kasir.py: mengubah data induk bukan
 # pekerjaan harian toko, dan berkas itu menjelaskan batas /kasir yang justru
 # TIDAK menuntut Tailscale.
-def _master_index(request, entitas: str):
-    """Layar daftar+form untuk satu entitas master (pelanggan/supplier)."""
+def _master_index(request, entitas: str, aksi_url: str | None = None, pemilih=None):
+    """Layar daftar+form untuk satu entitas master.
+
+    `pemilih`: daftar entitas untuk dropdown di layar Kelola Data Referensi.
+    Kosong untuk Pelanggan/Supplier, yang masing-masing punya menunya sendiri.
+    """
     s = master_crud.spec(entitas)
     cari = (request.GET.get("cari") or "").strip()
 
@@ -3183,19 +3476,25 @@ def _master_index(request, entitas: str):
         "data": defer(muat),
         "filters": {"cari": cari},
         "entitas": entitas,
-        "aksi_url": f"/admin-panel/master/kelola-{entitas}",
+        "aksi_url": aksi_url or f"/admin-panel/master/kelola-{entitas}",
         "label": s["label"],
         "kunci": s["kunci"],
         "teks": s["teks"],
         "angka": s["angka"],
         "lookup_fields": list(s["lookup"]),
         "wajib": s["wajib"],
+        # Bentuk tabel & form ikut spec, bukan daftar tetap di Vue: tanpa ini
+        # layar Merk merender kolom Alamat/Telepon/HP yang tabelnya tak punya.
+        "kolom_tabel": s.get("kolom_tabel", []),
+        "kolom_nama": s.get("kolom_nama", "nama"),
+        "pilihan": s.get("pilihan", {}),
+        "pemilih": pemilih or [],
     })
 
 
-def _master_save(request, entitas: str):
+def _master_save(request, entitas: str, tujuan: str | None = None):
     s = master_crud.spec(entitas)
-    tujuan = f"/admin-panel/master/kelola-{entitas}"
+    tujuan = tujuan or f"/admin-panel/master/kelola-{entitas}"
     profile = _active()
     if not profile:
         request.session["flash_error"] = CONN_ERROR
@@ -3233,3 +3532,244 @@ def supplier(request):
 @require_POST
 def supplier_save(request):
     return _master_save(request, "supplier")
+
+
+# --- Kelola Data Referensi: sebelas tabel, satu menu -----------------------
+# Satu key menu untuk kesebelasnya. Bukan penghematan baris kode — mereka jarang
+# disentuh (m_bank 3 baris, m_satuan 18), dan sebelas baris sidebar tambahan
+# membuat grup Master Data lebih sulit dibaca daripada isinya sendiri.
+_REFERENSI_URL = "/admin-panel/master/referensi"
+
+
+def _pemilih_referensi():
+    return [{"value": e, "label": master_crud.spec(e)["label"]}
+            for e in master_crud.REFERENSI]
+
+
+def _entitas_referensi(entitas: str) -> str:
+    """Tolak entitas yang tak terdaftar dengan 404, bukan KeyError → 500.
+
+    Entitasnya bagian dari URL, jadi salah ketik itu wajar dan bukan kerusakan.
+    Daftar putihnya `REFERENSI`, bukan `_MASTER`: pelanggan & supplier punya key
+    menu sendiri, dan menyajikannya lewat rute ini akan memberi jalan pintas
+    mengelilingi hak akses keduanya.
+    """
+    if entitas not in master_crud.REFERENSI:
+        raise Http404(f"Data referensi '{entitas}' tidak dikenal.")
+    return entitas
+
+
+def referensi_awal(request):
+    """`/master/referensi` telanjang — href menu, diantar ke entitas pertama.
+
+    Href menu tak boleh membawa entitas: `menu_key_for_path` mencocokkan prefix,
+    jadi href-nya harus jadi induk seluruh sub-rute agar semuanya ikut terjaga.
+    """
+    return redirect(f"{_REFERENSI_URL}/{master_crud.REFERENSI[0]}")
+
+
+def referensi(request, entitas: str):
+    entitas = _entitas_referensi(entitas)
+    return _master_index(request, entitas,
+                         aksi_url=f"{_REFERENSI_URL}/{entitas}",
+                         pemilih=_pemilih_referensi())
+
+
+@require_POST
+def referensi_save(request, entitas: str):
+    entitas = _entitas_referensi(entitas)
+    return _master_save(request, entitas, tujuan=f"{_REFERENSI_URL}/{entitas}")
+
+
+# --- Kelola Barang (WRITE struktur m_barang, khusus gudang) ----------------
+# Struktur di sini, harga di layar Update Harga. Lihat apps/master_data/barang.py.
+_KELOLA_BARANG_URL = "/admin-panel/master/kelola-barang"
+
+
+def barang_baru_index(request):
+    profile = _active()
+
+    def muat():
+        if not profile:
+            return {"opsi": {}, "terakhir": [], "conn_error": CONN_ERROR}
+        try:
+            return {"opsi": barang.opsi(profile),
+                    "terakhir": barang.terakhir_didaftar(profile),
+                    "conn_error": None}
+        except pyodbc.Error as exc:
+            return {"opsi": {}, "terakhir": [],
+                    "conn_error": mssql.friendly_error(exc, "Gagal membaca data barang")}
+
+    return render(request, "Admin/MasterData/KelolaBarang", props={
+        "data": defer(muat),
+        # Nama prop sama dengan di Update Harga: pertanyaannya memang sama —
+        # apakah server ini boleh mengubah identitas katalog bersama.
+        "boleh_edit_identitas": bool(profile and profile.db_type == "gudang"),
+        "nama_koneksi": profile.name if profile else None,
+    })
+
+
+def barang_cari(request):
+    """Pemilih barang di atas layar — kode + nama saja."""
+    profile = _active()
+    q = (request.GET.get("q") or "").strip()
+    if not profile:
+        return JsonResponse({"rows": [], "error": CONN_ERROR})
+    try:
+        return JsonResponse({"rows": barang.cari_barang(profile, q), "error": None})
+    except pyodbc.Error as exc:
+        return JsonResponse({"rows": [],
+                             "error": mssql.friendly_error(exc, "Gagal mencari barang")})
+
+
+def barang_muat(request):
+    """Satu barang lengkap (identitas + satuan + divisi) untuk diisikan ke form."""
+    profile = _active()
+    kd_barang = (request.GET.get("kd_barang") or "").strip()
+    if not profile:
+        return JsonResponse({"item": None, "error": CONN_ERROR})
+    try:
+        item = barang.baca_barang(profile, kd_barang)
+    except pyodbc.Error as exc:
+        return JsonResponse({"item": None,
+                             "error": mssql.friendly_error(exc, "Gagal membaca barang")})
+    return JsonResponse({
+        "item": item,
+        "error": None if item else f"Barang {kd_barang} tidak ada di koneksi ini.",
+    })
+
+
+@require_POST
+def barang_baru_save(request):
+    """Simpan — membuat barang baru, atau menyunting yang sudah ada.
+
+    Bedanya cuma ada-tidaknya `kd_barang_asal` di payload. Dipisah di sini, bukan
+    di service, supaya kedua jalur tulis tetap punya prasyarat dan pesannya
+    masing-masing: yang satu memeriksa bentrok kode, yang lain memeriksa barangnya
+    memang ada.
+    """
+    data = get_data(request)
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect(_KELOLA_BARANG_URL)
+    asal = (data.get("kd_barang_asal") or "").strip()
+    try:
+        if asal:
+            hasil = barang.ubah_barang(profile, asal, data)
+        else:
+            hasil = barang.buat_barang(profile, data)
+    except (master.BukanServerGudang, ValueError) as exc:
+        # Keduanya sudah berbunyi kalimat utuh untuk operator — yang satu
+        # menjelaskan kenapa server ini bukan tempatnya, yang lain isian mana
+        # yang salah. Tak ada yang perlu ditambahkan di sini.
+        request.session["flash_error"] = str(exc)
+        return redirect(_KELOLA_BARANG_URL)
+    except pyodbc.Error as exc:
+        request.session["flash_error"] = mssql.friendly_error(
+            exc, "Gagal menyimpan barang")
+        return redirect(_KELOLA_BARANG_URL)
+
+    kode = hasil["kd_barang"]
+    if asal:
+        tambahan = []
+        if hasil["satuan_baru"]:
+            tambahan.append(f"{hasil['satuan_baru']} satuan baru")
+        if hasil["divisi_baru"]:
+            tambahan.append(f"{hasil['divisi_baru']} divisi baru")
+        ekor = f" ({', '.join(tambahan)})" if tambahan else ""
+        log_activity(request, "barang", f"Ubah barang {kode} ({profile.name}){ekor}")
+        request.session["flash_success"] = f"Barang {kode} disimpan{ekor}."
+    else:
+        log_activity(request, "barang",
+                     f"Tambah barang {kode} ({profile.name}): "
+                     f"{hasil['satuan']} satuan, {hasil['divisi']} divisi")
+        request.session["flash_success"] = (
+            f"Barang {kode} dibuat ({hasil['satuan']} satuan"
+            + (f", {hasil['divisi']} divisi" if hasil["divisi"] else "") + ").")
+    return redirect(_KELOLA_BARANG_URL)
+
+
+# --- Kas: biaya operasional, penambahan kas, mutasi kas --------------------
+# Ketiganya MENULIS uang ke server legacy dan tak ada layar mana pun yang bisa
+# menariknya kembali — sama seperti Koreksi Stok, jadi admin saja dan wajib
+# bertautan. Satu layar untuk ketiganya; yang berbeda datang dari kas.FORM.
+_KAS_URL = "/admin-panel/kas/input"
+
+
+def _jenis_kas(jenis: str) -> str:
+    if jenis not in kas_tulis.SPEC:
+        raise Http404(f"Jenis transaksi kas '{jenis}' tidak dikenal.")
+    return jenis
+
+
+def kas_input_index(request, jenis: str):
+    jenis = _jenis_kas(jenis)
+    if (denied := _bukan_admin(request)):
+        return denied
+    s = kas_tulis.SPEC[jenis]
+
+    def muat():
+        profile = _active()
+        if not profile:
+            return {"lookups": {}, "riwayat": [], "conn_error": CONN_ERROR}
+        try:
+            return {
+                "lookups": kas_tulis.list_lookups(profile, jenis),
+                "riwayat": kas_tulis.riwayat(profile, jenis),
+                "conn_error": None,
+            }
+        except pyodbc.Error as exc:
+            return {"lookups": {}, "riwayat": [],
+                    "conn_error": mssql.friendly_error(
+                        exc, f"Gagal membaca data {s['label'].lower()}")}
+
+    tautan = tautan_untuk(request.user, _active())
+    return render(request, "Admin/Cash/KasInput", props={
+        "data": defer(muat),
+        "jenis": jenis,
+        "label": s["label"],
+        "aksi_url": f"{_KAS_URL}/{jenis}",
+        "form": kas_tulis.FORM[jenis],
+        "kolom_riwayat": [k for k in s["kolom"] if k != "tanggal_server"],
+        # Kosong = akun ini belum ditautkan untuk koneksi aktif. Dikatakan di
+        # awal, bukan sesudah nominalnya diketik.
+        "kd_user": tautan.kd_user,
+        # Tabel penambahan & mutasi kas tak punya kolom divisi, tapi nomornya
+        # tetap butuh awalan `kepala_nota`. Dikirim dari tautan, bukan dipilih.
+        "kd_divisi_tautan": tautan.kd_divisi,
+    })
+
+
+@require_POST
+def kas_input_save(request, jenis: str):
+    jenis = _jenis_kas(jenis)
+    if (denied := _bukan_admin(request)):
+        return denied
+    kembali = f"{_KAS_URL}/{jenis}"
+    data = get_data(request)
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect(kembali)
+    try:
+        tautan = tautan_wajib(request.user, profile)
+        # Divisi: dipilih di layar untuk biaya (tabelnya punya kolomnya dan
+        # gudang punya lima divisi), dari tautan untuk dua lainnya. Keduanya
+        # lewat satu pintu supaya awalan nomor tak punya dua sumber.
+        isi = dict(data)
+        if not kas_tulis.SPEC[jenis]["divisi_dari_layar"]:
+            isi["kd_divisi"] = tautan.kd_divisi
+        hasil = kas_tulis.simpan(profile, jenis, kd_user=tautan.kd_user, data=isi)
+    except ValueError as exc:
+        request.session["flash_error"] = str(exc)
+        return redirect(kembali)
+    except (pyodbc.Error, RuntimeError) as exc:
+        request.session["flash_error"] = (
+            str(exc) if isinstance(exc, RuntimeError)
+            else mssql.friendly_error(exc, "Gagal menyimpan transaksi kas"))
+        return redirect(kembali)
+
+    log_activity(request, "kas", f"{hasil['label']} {hasil['nomor']}")
+    request.session["flash_success"] = f"{hasil['label']} tersimpan: {hasil['nomor']}."
+    return redirect(kembali)

@@ -12,6 +12,7 @@ from django.shortcuts import redirect
 from django.views.decorators.http import require_POST
 from inertia import defer, render
 
+from apps.auth_app.tautan import tautan_untuk, tautan_wajib
 from apps.core.http import get_data
 from apps.core.models import log_activity
 from apps.inventory import services as inv
@@ -62,6 +63,10 @@ def _layar_penjualan(request, mode: str):
     cari = (request.GET.get("cari") or "").strip()
     order = mode == "order"
 
+    # Tautan koneksi AKTIF, bukan tautan akun: kode legacy berbeda artinya di
+    # tiap server, jadi layar harus menunjukkan yang berlaku di server ini.
+    tautan = tautan_untuk(request.user, _active())
+
     def muat():
         profile = _active()
         if not profile:
@@ -74,9 +79,9 @@ def _layar_penjualan(request, mode: str):
                 "bawaan": pj.bawaan_form(
                     profile, "penjualan_order" if order else "penjualan"),
                 "nama_divisi": _label(inv.list_divisi(profile), "kd_divisi", "nama",
-                                      request.user.kd_divisi),
+                                      tautan.kd_divisi),
                 "nama_pegawai": _label(opsi["pegawai"], "value", "label",
-                                       request.user.kd_pegawai),
+                                       tautan.kd_pegawai),
                 "conn_error": None,
             }
         except pyodbc.Error as exc:
@@ -90,9 +95,9 @@ def _layar_penjualan(request, mode: str):
         "base": "/kasir/penjualan-order" if order else "/kasir/penjualan",
         # Ditampilkan di layar supaya kasir tahu nota akan tercatat atas nama
         # siapa — dan tahu sejak awal kalau akunnya belum ditautkan.
-        "kd_user": request.user.kd_user,
-        "kd_divisi": request.user.kd_divisi,
-        "kd_pegawai": request.user.kd_pegawai,
+        "kd_user": tautan.kd_user,
+        "kd_divisi": tautan.kd_divisi,
+        "kd_pegawai": tautan.kd_pegawai,
         # Hanya layar nota yang boleh MENGAMBIL penanda ini: kalau layar order
         # ikut mem-pop-nya, tombol Cetak di layar nota kehilangan nomornya
         # begitu kasir sempat mampir ke order.
@@ -116,17 +121,21 @@ def penjualan_save(request):
         request.session["flash_error"] = CONN_ERROR
         return redirect("/kasir/penjualan")
     try:
+        # Tautan koneksi aktif. `tautan_wajib` menolak kalau belum ada — TIDAK
+        # meminjam tautan koneksi lain, sebab kode yang sama milik orang lain di
+        # server lain dan notanya akan tersimpan tanpa galat atas nama mereka.
+        tautan = tautan_wajib(request.user, profile)
         hasil = pj.buat_nota(
             profile,
-            kd_user=request.user.kd_user,
-            # kd_divisi dari AKUN, tidak pernah dari kiriman layar: ia menentukan
-            # awalan nomor nota dan milik cabang mana nota itu tercatat.
-            kd_divisi=request.user.kd_divisi,
+            kd_user=tautan.kd_user,
+            # kd_divisi dari TAUTAN, tidak pernah dari kiriman layar: ia
+            # menentukan awalan nomor nota dan milik cabang mana nota tercatat.
+            kd_divisi=tautan.kd_divisi,
             kd_customer=data.get("kd_customer"),
             kd_jenis=data.get("kd_jenis"),
             kd_kas=data.get("kd_kas"),
             kd_voucher=data.get("kd_voucher"),
-            kd_pegawai=data.get("kd_pegawai") or request.user.kd_pegawai,
+            kd_pegawai=data.get("kd_pegawai") or tautan.kd_pegawai,
             items=data.get("items") or [],
             keterangan=data.get("keterangan") or pj.KOSONG,
             no_bukti=data.get("no_bukti") or pj.KOSONG,
@@ -167,17 +176,19 @@ def penjualan_order_save(request):
         request.session["flash_error"] = CONN_ERROR
         return redirect("/kasir/penjualan-order")
     try:
+        tautan = tautan_wajib(request.user, profile)
         hasil = pj.buat_order(
             profile,
-            kd_user=request.user.kd_user,
-            # Dari AKUN, tak pernah dari kiriman layar — alasannya sama dengan
-            # nota: kd_divisi menentukan order ini milik cabang mana.
-            kd_divisi=request.user.kd_divisi,
+            kd_user=tautan.kd_user,
+            # Dari TAUTAN koneksi aktif, tak pernah dari kiriman layar —
+            # alasannya sama dengan nota: kd_divisi menentukan order ini milik
+            # cabang mana.
+            kd_divisi=tautan.kd_divisi,
             kd_customer=data.get("kd_customer"),
             kd_jenis=data.get("kd_jenis"),
             kd_kas=data.get("kd_kas"),
             kd_voucher=data.get("kd_voucher"),
-            kd_pegawai=data.get("kd_pegawai") or request.user.kd_pegawai,
+            kd_pegawai=data.get("kd_pegawai") or tautan.kd_pegawai,
             items=data.get("items") or [],
             keterangan=data.get("keterangan") or pj.KOSONG,
             no_bukti=data.get("no_bukti") or pj.KOSONG,
@@ -239,6 +250,7 @@ def _transaksi_index(request, jenis: str):
     s = tx.spec(jenis)
     cari = (request.GET.get("cari") or "").strip()
     pihak_supplier = s["pihak"] == "kd_supplier"
+    tautan = tautan_untuk(request.user, _active())
 
     def muat():
         profile = _active()
@@ -256,9 +268,15 @@ def _transaksi_index(request, jenis: str):
             else:
                 opsi["pihak"] = opsi["pelanggan"]
             return {"opsi": opsi, "hasil_cari": pj.cari_barang(profile, cari),
+                    # Nilai bawaan + ancar-ancar nomor, sama seperti layar nota.
+                    # Tanpa ini ketiga layar ini membuka dengan Jenis Bayar dan
+                    # Kas KOSONG, padahal keduanya NOT NULL ber-FK: simpan
+                    # pertama selalu gagal dengan galat foreign key, dan
+                    # kesalahannya tak kelihatan sebagai isian yang belum diisi.
+                    "bawaan": pj.bawaan_form(profile, jenis),
                     "conn_error": None}
         except pyodbc.Error as exc:
-            return {"opsi": {}, "hasil_cari": [],
+            return {"opsi": {}, "hasil_cari": [], "bawaan": {},
                     "conn_error": mssql.friendly_error(exc, "Gagal membaca data transaksi")}
 
     return render(request, "Kasir/Transaksi", props={
@@ -269,8 +287,13 @@ def _transaksi_index(request, jenis: str):
         "label_pihak": "Supplier" if pihak_supplier else "Pelanggan",
         "aksi_url": f"/kasir/{jenis.replace('_', '-')}",
         "pakai_pegawai": "kd_pegawai" in s["detail"],
-        "kd_user": request.user.kd_user,
-        "kd_divisi": request.user.kd_divisi,
+        # Kolom yang hanya dimiliki t_pembelian_order. Dikirim sebagai daftar
+        # yang disimpulkan dari SPEC, bukan dari `jenis == "pembelian_order"` di
+        # Vue: kalau suatu saat kolomnya berubah, layarnya ikut tanpa disunting.
+        "kolom_order": [k for k in ("no_pp_order", "tanggal_terima", "jaminan")
+                        if k in s["header"]],
+        "kd_user": tautan.kd_user,
+        "kd_divisi": tautan.kd_divisi,
     })
 
 
@@ -283,12 +306,13 @@ def _transaksi_save(request, jenis: str):
         request.session["flash_error"] = CONN_ERROR
         return redirect(tujuan)
     try:
+        tautan = tautan_wajib(request.user, profile)
         hasil = tx.buat(
             profile, jenis,
-            # Dari AKUN, tak pernah dari kiriman layar: keduanya menentukan atas
-            # nama siapa dan cabang mana transaksi ini tercatat.
-            kd_user=request.user.kd_user,
-            kd_divisi=request.user.kd_divisi,
+            # Dari TAUTAN koneksi aktif, tak pernah dari kiriman layar: keduanya
+            # menentukan atas nama siapa dan cabang mana transaksi ini tercatat.
+            kd_user=tautan.kd_user,
+            kd_divisi=tautan.kd_divisi,
             kd_pihak=data.get("kd_pihak"),
             kd_jenis=data.get("kd_jenis"),
             kd_kas=data.get("kd_kas"),
@@ -297,6 +321,11 @@ def _transaksi_save(request, jenis: str):
             keterangan=data.get("keterangan") or tx.KOSONG,
             pajak=float(data.get("pajak") or 0),
             ppnbm=float(data.get("ppnbm") or 0),
+            # Hanya dirujuk header `pembelian_order`; jenis lain tak punya
+            # kolomnya, jadi nilainya berhenti di ctx dan tak sampai ke SQL.
+            no_pp_order=data.get("no_pp_order") or tx.KOSONG,
+            jaminan=data.get("jaminan") or 0,
+            tanggal_terima=_waktu(data.get("tanggal_terima")),
         )
     except ValueError as exc:
         request.session["flash_error"] = str(exc)
@@ -331,6 +360,15 @@ def pembelian(request):
 @require_POST
 def pembelian_save(request):
     return _transaksi_save(request, "pembelian")
+
+
+def pembelian_order(request):
+    return _transaksi_index(request, "pembelian_order")
+
+
+@require_POST
+def pembelian_order_save(request):
+    return _transaksi_save(request, "pembelian_order")
 
 
 def retur_pembelian(request):
@@ -426,6 +464,61 @@ def cari_customer_json(request):
     except pyodbc.Error as exc:
         return JsonResponse(
             {"rows": [], "error": mssql.friendly_error(exc, "Gagal mencari pelanggan")})
+
+
+def info_customer_json(request):
+    """Panel info pelanggan: identitas + piutang aktif + nota terakhirnya.
+
+    SATU round-trip untuk ketiganya, dipanggil ketika pelanggan dipilih. Tiga
+    endpoint terpisah akan berarti tiga perjalanan WAN untuk satu klik — dan di
+    profil jauh jumlah round-trip-lah biayanya, bukan besar datanya.
+
+    Pelanggan UMUM tidak dijemput sama sekali (dijaga juga di layar): ia bawaan
+    setiap nota tunai, jadi memanggilnya berarti satu perjalanan sia-sia di awal
+    hampir setiap nota.
+    """
+    profile = _active()
+    if not profile:
+        return JsonResponse({"error": CONN_ERROR}, status=200)
+    kd = (request.GET.get("kd_customer") or "").strip()
+    if not kd or kd.upper() == pj.CUSTOMER_UMUM:
+        return JsonResponse({"profil": None, "piutang": [], "histori": []})
+    try:
+        profil = pj.info_customer(profile, kd)
+        return JsonResponse({
+            # Kolom uang dicabut DI SINI, bukan di layar: penyaringan di Vue
+            # cuma kosmetik (lihat useHiddenData.js), dan payload-nya tetap
+            # sampai ke peramban yang tak berhak. `profil` sebuah dict tunggal,
+            # jadi ia dibungkus list dulu — kalau tidak, `limit_kredit` lolos
+            # justru di satu-satunya tempat panel ini menyebut rupiah langsung.
+            "profil": (_tanpa_harga(request, [profil])[0] if profil else None),
+            "piutang": _tanpa_harga(request, pj.piutang_customer(profile, kd)),
+            "histori": _tanpa_harga(request, pj.histori_nota(profile, kd_customer=kd)),
+        })
+    except pyodbc.Error as exc:
+        return JsonResponse(
+            {"error": mssql.friendly_error(exc, "Gagal membaca info pelanggan")})
+
+
+def histori_user_json(request):
+    """Nota terakhir yang dibuat AKUN INI di koneksi ini.
+
+    `kd_user` diambil dari tautan, tidak pernah dari payload layar: kalau layar
+    boleh menyebut kodenya sendiri, siapa pun bisa membaca nota orang lain
+    dengan mengganti satu parameter di URL.
+    """
+    profile = _active()
+    if not profile:
+        return JsonResponse({"rows": [], "error": CONN_ERROR})
+    kd_user = tautan_untuk(request.user, profile).kd_user
+    if not kd_user:
+        return JsonResponse({"rows": []})
+    try:
+        rows = pj.histori_nota(profile, kd_user=kd_user)
+        return JsonResponse({"rows": _tanpa_harga(request, rows)})
+    except pyodbc.Error as exc:
+        return JsonResponse(
+            {"rows": [], "error": mssql.friendly_error(exc, "Gagal membaca histori")})
 
 
 def order_json(request):

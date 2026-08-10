@@ -1,11 +1,12 @@
 """Inertia shared props + app-level access control."""
-import ipaddress
 import re
 
 from inertia import render, share
 from django.conf import settings
 from django.shortcuts import redirect
+from django.utils import timezone
 
+from apps.core.http import client_ip, ip_dalam
 from apps.core.menus import landing_for, menu_key_for_path, menus_for
 
 # Paths reachable without authentication.
@@ -36,6 +37,41 @@ def _auth_user_dict(user):
         # (_hidden_fields di apps/monitoring/views.py). Jangan pernah jadikan
         # ini satu-satunya penjaga.
         "hidden_data_keys": sorted(user.hidden_data()),
+    }
+
+
+# Berapa baris yang dibawa lonceng. Sengaja kecil: ini ringkasan "apa yang baru",
+# bukan pengganti halaman Log Aktivitas — yang menampung 300 baris beserta
+# penyaringnya.
+NOTIF_TAMPIL = 8
+
+
+def _notif(user):
+    """Isi lonceng untuk `user`. Lazy — hanya jalan pada render Inertia.
+
+    Aturan siapa-melihat-apa ada di `log_untuk`, satu tempat bersama dashboard
+    dan halaman Log Aktivitas.
+    """
+    from apps.core.models import log_untuk
+
+    if not (user and getattr(user, "is_authenticated", False)):
+        return {"items": [], "belum": 0}
+    qs = log_untuk(user)
+    batas = user.notif_dibaca_at
+    belum = qs.filter(timestamp__gt=batas).count() if batas else qs.count()
+    return {
+        "items": [
+            {
+                "id": a.id,
+                "user": a.username or "—",
+                "action": a.action,
+                "detail": a.detail,
+                "waktu": timezone.localtime(a.timestamp).strftime("%Y-%m-%d %H:%M"),
+                "baru": batas is None or a.timestamp > batas,
+            }
+            for a in qs[:NOTIF_TAMPIL]
+        ],
+        "belum": belum,
     }
 
 
@@ -84,6 +120,7 @@ def inertia_share(get_response):
             allowed_menus=lambda: menus_for(user),
             active_connection=active_connection,
             connections=connections_list,
+            notif=lambda: _notif(user),
             flash=lambda: {
                 "success": request.session.pop("flash_success", None),
                 "error": request.session.pop("flash_error", None),
@@ -117,12 +154,17 @@ def auth_required(get_response):
 
 
 def _ip_allowed(ip: str) -> bool:
+    """Boleh membuka /admin-panel dari alamat ini?
+
+    Daftarnya kini JAMAK (`ADMIN_ALLOWED_NETWORKS`): rentang Tailscale plus
+    rentang LAN mana pun yang sengaja diizinkan lewat `ADMIN_EXTRA_CIDRS`.
+    Sebelumnya hanya satu CIDR, dan kantor yang perangkatnya tak ber-Tailscale
+    tak punya cara menyatakan itu selain menjembataninya diam-diam — yang justru
+    membuat penjaga ini meloloskan semua orang tanpa ada yang tahu.
+    """
     if ip in settings.ADMIN_IP_ALLOWLIST:
         return True
-    try:
-        return ipaddress.ip_address(ip) in ipaddress.ip_network(settings.TAILSCALE_CIDR)
-    except ValueError:
-        return False
+    return ip_dalam(ip, settings.ADMIN_ALLOWED_NETWORKS)
 
 
 def admin_network_guard(get_response):
@@ -154,8 +196,11 @@ def admin_network_guard(get_response):
             # Tailscale hanya untuk panel pengaturan. Halaman kasir justru harus
             # bisa dibuka dari jaringan toko.
             if di_admin and settings.ENFORCE_TAILSCALE:
-                ip = request.META.get("REMOTE_ADDR", "")
-                if not _ip_allowed(ip):
+                # `client_ip`, bukan REMOTE_ADDR langsung: di belakang reverse
+                # proxy REMOTE_ADDR selalu proxy-nya, dan `ADMIN_IP_ALLOWLIST`
+                # memuat 127.0.0.1 — proxy di mesin yang sama akan meloloskan
+                # SETIAP permintaan tanpa satu pun tanda di layar maupun di log.
+                if not _ip_allowed(client_ip(request)):
                     return ditolak(
                         request,
                         "Belum tersambung ke jaringan kantor",
@@ -163,6 +208,12 @@ def admin_network_guard(get_response):
                         "dulu perangkat Anda, lalu buka lagi halaman ini.",
                     )
             if not _menu_allowed(user, request.path):
+                # Tertutup karena TAUTAN, bukan karena menunya dicabut: katakan
+                # begitu. Pesan generik di bawah akan mengirim orangnya ke
+                # Kelola Menu, padahal yang kurang ada di Kelola Tautan User.
+                if (pesan := _pesan_tautan(user, request.path)):
+                    return ditolak(
+                        request, "Akun Anda belum ditautkan untuk koneksi ini", pesan)
                 # Menu yang tak diberikan: antar ke halaman yang memang miliknya
                 # alih-alih menghadang. Hanya untuk permintaan yang sekadar
                 # MEMBACA — mengalihkan sebuah POST akan menelan tulisan pengguna
@@ -205,6 +256,29 @@ def ditolak(request, judul: str, saran: str):
     )
     resp.status_code = 403
     return resp
+
+
+def _pesan_tautan(user, path: str) -> str | None:
+    """Alasan sebenarnya kalau `path` tertutup karena tautan legacy, atau None.
+
+    Sengaja TIDAK mengalihkan pemanggilnya ke landing_for seperti menu yang
+    dicabut: bagi kasir, satu-satunya menu yang tak bisa dicabut adalah Bantuan,
+    dan Bantuan ada di /admin-panel yang tertutup penjaga Tailscale dari jaringan
+    toko. Mengalihkan ke sana berarti jalan buntu dengan pesan yang salah pula.
+    """
+    from apps.auth_app.tautan import pesan_belum_tertaut, tautan_untuk, yang_kurang
+    from apps.core.menus import KEYS_BUTUH_TAUTAN, tautan_lengkap
+    from core import mssql
+
+    key = menu_key_for_path(path)
+    if key not in KEYS_BUTUH_TAUTAN or tautan_lengkap(user):
+        return None
+    # Menu ini memang tak diberikan kepadanya — tautan bukan alasannya, dan
+    # menyebutnya akan mengirim orangnya ke layar yang salah.
+    if key not in {m["key"] for m in menus_for(user, abaikan_tautan=True)}:
+        return None
+    profile = mssql.get_active_profile()
+    return pesan_belum_tertaut(profile, yang_kurang(tautan_untuk(user, profile)))
 
 
 def _menu_allowed(user, path: str) -> bool:
