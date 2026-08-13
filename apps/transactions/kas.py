@@ -1,6 +1,6 @@
-"""Jalur tulis kas: biaya operasional, penambahan kas, mutasi kas.
+"""Jalur tulis kas: biaya operasional, pendapatan lain-lain, penambahan kas, mutasi kas.
 
-Satu mesin untuk tiga tabel, dijelaskan sebagai DATA di `SPEC`. Bentuknya sama
+Satu mesin untuk empat tabel, dijelaskan sebagai DATA di `SPEC`. Bentuknya sama
 persis dengan Koreksi Stok (`opname.py`) dan karena itu mewarisi aturannya:
 nomor dari `kepala_nota`, `kd_user` dari tautan (tak pernah dari layar), satu
 baris per `execute`, dan kolom disebut eksplisit.
@@ -73,6 +73,29 @@ SPEC = {
         },
         "bukti": ["no_bukti"],
     },
+    "pendapatan": {
+        "tabel": "t_pendapatan",
+        "jenis_nomor": "pendapatan",
+        "label": "Pendapatan lain-lain",
+        # Kembarannya `biaya`: kolomnya sama persis kecuali kd_biaya → kd_pendapatan.
+        # Bentuknya diukur, bukan ditebak — 6 baris di grosirPusat semuanya
+        # SC2203310001 / DAA000 / PAA000 / JAA000 / KAA000 / no_bukti "-".
+        #
+        # Bertrigger `insert_temp_m_t_pendapatan` (aktif di GUDANG dan testgudang,
+        # sama seperti t_biaya_operasional), jadi barisnya masuk antrean kirim ke
+        # sink pusat SEKETIKA disimpan — bukan sesuatu yang bisa ditarik kembali.
+        # Itu alasan menunya admin_only + butuh_tautan seperti tiga saudaranya.
+        "kolom": ["no_transaksi", "kd_divisi", "kd_pendapatan", "kd_jenis", "kd_kas",
+                  "tanggal", "nominal", "no_bukti", "keterangan", "kd_user",
+                  "tanggal_server"],
+        "divisi_dari_layar": True,
+        "kode": {
+            "kd_pendapatan": ("m_pendapatan", "Jenis pendapatan"),
+            "kd_jenis": ("m_jenis_bayar", "Cara bayar"),
+            "kd_kas": ("m_kas", "Kas"),
+        },
+        "bukti": ["no_bukti"],
+    },
     "penambahan": {
         "tabel": "t_penambahan_kas",
         "jenis_nomor": "penambahan_kas",
@@ -114,6 +137,15 @@ FORM = {
         {"name": "no_bukti", "label": "No. Bukti", "tipe": "teks"},
         {"name": "keterangan", "label": "Keterangan", "tipe": "teks"},
     ],
+    "pendapatan": [
+        {"name": "kd_divisi", "label": "Divisi", "tipe": "pilih", "opsi": "divisi"},
+        {"name": "kd_pendapatan", "label": "Jenis Pendapatan", "tipe": "pilih", "opsi": "pendapatan"},
+        {"name": "kd_jenis", "label": "Cara Bayar", "tipe": "pilih", "opsi": "jenis_bayar"},
+        {"name": "kd_kas", "label": "Kas", "tipe": "pilih", "opsi": "kas"},
+        {"name": "nominal", "label": "Nominal", "tipe": "uang"},
+        {"name": "no_bukti", "label": "No. Bukti", "tipe": "teks"},
+        {"name": "keterangan", "label": "Keterangan", "tipe": "teks"},
+    ],
     "penambahan": [
         {"name": "kd_kas", "label": "Kas", "tipe": "pilih", "opsi": "kas"},
         {"name": "nominal", "label": "Nominal", "tipe": "uang"},
@@ -134,6 +166,7 @@ FORM = {
 LOOKUP = {
     "divisi": ("m_divisi", "kd_divisi", "nama"),
     "biaya": ("m_biaya", "kd_biaya", "nama"),
+    "pendapatan": ("m_pendapatan", "kd_pendapatan", "nama"),
     "jenis_bayar": ("m_jenis_bayar", "kd_jenis", "nama"),
     "kas": ("m_kas", "kd_kas", "cabang"),
 }

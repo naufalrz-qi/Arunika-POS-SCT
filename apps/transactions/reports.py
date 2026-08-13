@@ -686,6 +686,127 @@ def retur_pembelian(f):
     return inner, params
 
 
+# --- Order Penjualan & Order Pembelian --
+# Arunika MENULIS kedua order (penjualan.py, transaksi.py SPEC["pembelian_order"])
+# tapi sampai sekarang tak ada satu pun laporan yang membacanya: order ditulis
+# lalu hilang dari pandangan. Grain-nya per ORDER (header), bukan per baris
+# seperti mon_t_penjualan_order_edit — yang dicari operator adalah order yang
+# belum jadi nota.
+#
+# ORDER TERBUKA = belum punya nota, dan itu datang dalam DUA bentuk di data live:
+#   no_transaksi = no_order  -> penanda yang dipakai jalur tulis kita (38 di PUSAT)
+#   no_transaksi kosong      -> peninggalan aplikasi lama (20 di PUSAT)
+# Keduanya sama artinya bagi yang membaca, jadi digabung jadi "Terbuka"; kolom
+# no_transaksi tetap ditampilkan apa adanya supaya bedanya tidak hilang.
+# Kolom `status` (0/1) BUKAN penandanya — 16 baris status=0 vs 38 order terbuka
+# di server yang sama.
+#
+# `t_pembelian_order` nol baris di setiap server yang bisa dijangkau, jadi
+# laporannya kosong sampai layar Order Pembelian kita sendiri mengisinya. Itu
+# justru alasannya ada: tanpa ini, satu-satunya jalur tulis ke tabel itu tak
+# punya layar baca sama sekali.
+
+_ORDER_TERBUKA = (
+    "CASE WHEN LTRIM(RTRIM(COALESCE(h.no_transaksi, ''))) IN ('', LTRIM(RTRIM(h.no_order))) "
+    "THEN 'Terbuka' ELSE 'Jadi Nota' END"
+)
+
+
+def _order_inner(f, *, tabel, detail, harga, mitra, mitra_tabel, ekor, extra_hdr,
+                 extra_group):
+    """Inner SQL satu laporan order, grain per no_order.
+
+    Dua level seperti _nota_net()/_pembelian_nota() dan dengan alasan yang sama:
+    inner mengagregasi baris detail, outer menerapkan diskon header + pajak
+    sekali per order. Semantik diskon/pajak diwarisi utuh dari _ghb() — jangan
+    diganti SUM(qty*harga) polos, klaim "diskon selalu rupiah flat" sudah pernah
+    salah untuk 87 baris t_penjualan_detail (lihat docstring _unit_net).
+
+    `ekor` = ekspresi setelah pajak (diskon_uang utk penjualan, ppnbm utk
+    pembelian); `extra_hdr` = kolom header tambahan yang dipakai `ekor`.
+    """
+    where, params = _base_where(f)
+    if f.get(f"kd_{mitra}"):
+        where.append(f"h.kd_{mitra} = ?")
+        params.append(f[f"kd_{mitra}"])
+    if f.get("status_order"):
+        where.append(f"{_ORDER_TERBUKA} = ?")
+        params.append(f["status_order"])
+    _search(where, params, f, ["h.no_order", "m.nama"])
+
+    net_pre_tax = _ghb("net_lines", ["hd1", "hd2", "hd3", "hd4"])
+    inner = (
+        "SELECT no_order, tanggal, tanggal_terima, mitra, divisi, status, no_transaksi, "
+        "jml_item, total_qty, "
+        f"({net_pre_tax}) {ekor} AS total_bersih "
+        "FROM ("
+        "SELECT h.no_order, MIN(h.tanggal) AS tanggal, MIN(h.tanggal_terima) AS tanggal_terima, "
+        "COALESCE(MIN(m.nama), '') AS mitra, COALESCE(MIN(dv.nama), '') AS divisi, "
+        f"MIN({_ORDER_TERBUKA}) AS status, MIN(COALESCE(h.no_transaksi, '')) AS no_transaksi, "
+        "COUNT(*) AS jml_item, SUM(d.qty) AS total_qty, "
+        "COALESCE(MIN(h.pajak), 0) AS pajak_rate, "
+        f"{extra_hdr} "
+        "COALESCE(MIN(h.diskon1), 0) AS hd1, COALESCE(MIN(h.diskon2), 0) AS hd2, "
+        "COALESCE(MIN(h.diskon3), 0) AS hd3, COALESCE(MIN(h.diskon4), 0) AS hd4, "
+        f"SUM({_unit_net(harga)} * d.qty) AS net_lines "
+        f"FROM {tabel} h "
+        f"INNER JOIN {detail} d ON h.no_order = d.no_order "
+        f"LEFT JOIN {mitra_tabel} m ON h.kd_{mitra} = m.kd_{mitra} "
+        "LEFT JOIN m_divisi dv ON h.kd_divisi = dv.kd_divisi "
+        f"WHERE {' AND '.join(where)} "
+        "GROUP BY h.no_order, h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.pajak, "
+        f"{extra_group}"
+        ") nz"
+    )
+    return inner, params
+
+
+_SORTS_ORDER = {
+    "no_order": "no_order", "tanggal": "tanggal", "tanggal_terima": "tanggal_terima",
+    "status": "status", "total_qty": "total_qty", "total_bersih": "total_bersih",
+}
+SORTS_ORDER_PENJUALAN = {**_SORTS_ORDER, "customer": "mitra"}
+SORTS_ORDER_PEMBELIAN = {**_SORTS_ORDER, "supplier": "mitra"}
+SUMMARY_ORDER = (
+    "COUNT(*) AS jml_order, "
+    "COALESCE(SUM(CASE WHEN q.status = 'Terbuka' THEN 1 ELSE 0 END), 0) AS jml_terbuka, "
+    "COALESCE(SUM(q.total_qty), 0) AS total_qty, "
+    "COALESCE(SUM(q.total_bersih), 0) AS total_nilai"
+)
+_FILTERS_ORDER = {
+    "no_order": ("no_order", "text"),
+    "status": ("status", "category"),
+    "total_qty": ("total_qty", "number_range"),
+    "total_bersih": ("total_bersih", "number_range"),
+}
+FILTERS_ORDER_PENJUALAN = {**_FILTERS_ORDER, "customer": ("mitra", "text")}
+FILTERS_ORDER_PEMBELIAN = {**_FILTERS_ORDER, "supplier": ("mitra", "text")}
+
+
+def order_penjualan(f):
+    return _order_inner(
+        f, tabel="t_penjualan_order", detail="t_penjualan_order_detail",
+        harga="harga_jual", mitra="customer", mitra_tabel="m_customer",
+        # diskon_uang dikurangi PALING AKHIR, sesudah pajak — sama seperti
+        # _nota_net(); ia memang rupiah flat.
+        ekor="* (1 + pajak_rate) - diskon_uang",
+        extra_hdr="COALESCE(MIN(h.diskon_uang), 0) AS diskon_uang,",
+        extra_group="h.diskon_uang",
+    )
+
+
+def order_pembelian(f):
+    return _order_inner(
+        f, tabel="t_pembelian_order", detail="t_pembelian_order_detail",
+        harga="harga_beli", mitra="supplier", mitra_tabel="m_supplier",
+        # pajak & ppnbm dikalikan berurutan, bukan dijumlah — sama seperti
+        # _pembelian_nota(), mengikuti UDF GetTotalPembelian.
+        ekor="* (1 + pajak_rate) * (1 + ppnbm_rate)",
+        extra_hdr="COALESCE(MIN(h.ppnbm), 0) AS ppnbm_rate,",
+        extra_group="h.ppnbm",
+    )
+
+
 # --- Piutang (receivables) --
 # Reimplements mon_t_piutang_aktif's logic against base tables (view/UDF not
 # called directly, per project convention). t_penjualan.status=0 marks a
@@ -747,6 +868,73 @@ def piutang(f):
     # SELECT list, which renders BEFORE the FROM (nota_sql) clause that embeds
     # `params` — so date_to/date_to come first, then `params`, then the cic
     # subquery's cutoff.
+    return inner, [f["date_to"], f["date_to"]] + params + [f["date_to"]]
+
+
+# --- Hutang Supplier --
+# Cermin Piutang, sampai ke nama konstantanya. Yang berbeda hanya sisi lawannya:
+# _pembelian_nota() menggantikan _nota_net(), m_supplier menggantikan m_customer,
+# t_hutang_cicilan menggantikan t_piutang_cicilan.
+#
+# `t_hutang_cicilan` NOL BARIS di setiap server yang bisa dijangkau, jadi kolom
+# cicilan akan selalu nol dan tiap nota kredit tampil belum lunas — 9.652 dari
+# 16.579 pembelian di gudang. Itu keadaan datanya (pembayaran hutang memang tak
+# pernah dicatat di sini), bukan cacat laporan. Kolomnya tetap ada supaya
+# bentuknya sama dengan Piutang dan tetap benar begitu ada yang mencatatnya;
+# layarnya yang menjelaskan lewat banner.
+
+SORTS_HUTANG = {
+    "no_transaksi": "no_transaksi", "supplier": "supplier", "tanggal": "tanggal",
+    "jatuh_tempo": "jatuh_tempo", "sisa_hutang": "sisa_hutang",
+}
+SUMMARY_HUTANG = (
+    "COUNT(*) AS jml_nota, COALESCE(SUM(q.total_pembelian), 0) AS total_pembelian, "
+    "COALESCE(SUM(q.total_cicilan), 0) AS total_cicilan, COALESCE(SUM(q.sisa_hutang), 0) AS total_sisa_hutang"
+)
+FILTERS_HUTANG = {
+    "no_transaksi": ("no_transaksi", "text"),
+    "supplier": ("supplier", "text"),
+    "jatuh_tempo": ("jatuh_tempo", "date"),
+    "total_pembelian": ("total_pembelian", "number_range"),
+    "sisa_hutang": ("sisa_hutang", "number_range"),
+    "hari_terlambat": ("hari_terlambat", "number_range"),
+}
+
+def hutang(f):
+    """Saldo hutang per nota pembelian, as-of f['date_to'] — cermin piutang().
+
+    date_from/date_to memfilter tanggal nota (h.tanggal), cicilan dihitung s.d.
+    date_to. Lebar-kan rentang untuk melihat hutang yang lebih lama."""
+    where, params = _base_where(f)
+    where.append("h.status = 0")  # 0 = kredit, konvensi yang sama dgn t_penjualan
+    if f.get("kd_supplier"):
+        where.append("h.kd_supplier = ?")
+        params.append(f["kd_supplier"])
+    if f["search"]:
+        where.append("h.no_transaksi LIKE ?")
+        params.append(f"%{f['search']}%")
+
+    nota_sql = _pembelian_nota(" AND ".join(where))
+    inner = (
+        "SELECT n.no_transaksi, n.tanggal, COALESCE(s.nama, '') AS supplier, "
+        "h.tanggal_jatuh_tempo AS jatuh_tempo, n.total_bersih AS total_pembelian, "
+        "COALESCE(cic.total_cicilan, 0) AS total_cicilan, "
+        "n.total_bersih - COALESCE(cic.total_cicilan, 0) AS sisa_hutang, "
+        "CASE WHEN DATEDIFF(day, h.tanggal_jatuh_tempo, ?) > 0 "
+        "THEN DATEDIFF(day, h.tanggal_jatuh_tempo, ?) ELSE 0 END AS hari_terlambat "
+        f"FROM ({nota_sql}) n "
+        # _pembelian_nota() tak membawa tanggal_jatuh_tempo (Piutang mendapatnya
+        # dari _nota_net yang memang memilihnya). Diambil lewat join balik ke
+        # header, bukan dengan menambah kolom di helper yang dipakai 3 laporan lain.
+        "INNER JOIN t_pembelian h ON h.no_transaksi = n.no_transaksi "
+        "LEFT JOIN m_supplier s ON n.kd_supplier = s.kd_supplier "
+        "LEFT JOIN (SELECT no_transaksi, SUM(nominal) AS total_cicilan FROM t_hutang_cicilan "
+        "WHERE tanggal <= ? GROUP BY no_transaksi) cic ON cic.no_transaksi = n.no_transaksi "
+        "WHERE n.total_bersih - COALESCE(cic.total_cicilan, 0) > 0"
+    )
+    # Urutan param mengikuti posisi ? kiri-ke-kanan dalam teks SQL, BUKAN urutan
+    # pembuatannya: dua DATEDIFF ada di SELECT list yang dirender SEBELUM
+    # FROM (nota_sql) yang menanam `params`. Jebakan yang sama dgn piutang().
     return inner, [f["date_to"], f["date_to"]] + params + [f["date_to"]]
 
 

@@ -31,7 +31,8 @@ const riwayat = computed(() => isi.value.riwayat || []);
 
 const LABEL = {
   no_transaksi: "No. Transaksi", tanggal: "Tanggal", kd_divisi: "Divisi",
-  kd_biaya: "Jenis Biaya", kd_jenis: "Cara Bayar", kd_kas: "Kas",
+  kd_biaya: "Jenis Biaya", kd_pendapatan: "Jenis Pendapatan",
+  kd_jenis: "Cara Bayar", kd_kas: "Kas",
   kd_kas_sumber: "Kas Sumber", kd_kas_tujuan: "Kas Tujuan", nominal: "Nominal",
   no_bukti: "No. Bukti", no_bukti_sumber: "Bukti Sumber",
   no_bukti_tujuan: "Bukti Tujuan", keterangan: "Keterangan", kd_user: "Petugas",

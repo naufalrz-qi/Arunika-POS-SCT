@@ -3,7 +3,7 @@
 # Section order + display labels for the collapsible sidebar groups.
 SECTIONS = [
     "pos_jual", "pos_beli", "pos_lain",
-    "ringkasan", "penjualan", "pembelian", "stok", "analitik", "promo", "kas",
+    "ringkasan", "penjualan", "pembelian", "akuntansi", "stok", "analitik", "promo", "kas",
     "master", "master_harga", "master_sync", "admin",
 ]
 # Menu kasir dipecah tiga, seperti Master Data — satu tab navbar yang sama,
@@ -17,6 +17,9 @@ SECTION_LABELS = {
     "ringkasan": "Ringkasan",
     "penjualan": "Penjualan",
     "pembelian": "Pembelian",
+    # Nama seksi mengikuti menu legacy ("Akuntansi"), supaya orang yang terbiasa
+    # dengan aplikasi lama mencarinya di tempat yang sama.
+    "akuntansi": "Akuntansi",
     "stok": "Inventori & Stok",
     "analitik": "Analitik",
     "promo": "Promo & Voucher",
@@ -84,11 +87,20 @@ ALL_MENUS = [
     {"key": "penjualan_periode", "label": "Penjualan per Periode", "icon": "calendar", "href": "/admin-panel/laporan/penjualan-periode", "section": "penjualan"},
     {"key": "retur_penjualan", "label": "Retur Penjualan", "icon": "refund", "href": "/admin-panel/laporan/retur-penjualan", "section": "penjualan", "roles": ("supervisor",)},
     {"key": "piutang", "label": "Piutang Pelanggan", "icon": "cash", "href": "/admin-panel/laporan/piutang", "section": "penjualan"},
+    # Order penjualan sudah DITULIS sejak lama (layar kasir Penjualan Order),
+    # tapi sampai sekarang tak ada layar yang membacanya kembali.
+    {"key": "order_penjualan", "label": "Order Penjualan", "icon": "clipboard", "href": "/admin-panel/laporan/order-penjualan", "section": "penjualan"},
     # Pembelian
     {"key": "pembelian", "label": "Pembelian", "icon": "truck", "href": "/admin-panel/laporan/pembelian", "section": "pembelian", "roles": ("supervisor",)},
     {"key": "pembelian_supplier", "label": "Pembelian per Supplier", "icon": "truck", "href": "/admin-panel/laporan/pembelian-supplier", "section": "pembelian"},
     {"key": "pembelian_periode", "label": "Pembelian per Periode", "icon": "calendar", "href": "/admin-panel/laporan/pembelian-periode", "section": "pembelian"},
     {"key": "retur_pembelian", "label": "Retur Pembelian", "icon": "refund", "href": "/admin-panel/laporan/retur-pembelian", "section": "pembelian", "roles": ("supervisor",)},
+    {"key": "order_pembelian", "label": "Order Pembelian", "icon": "clipboard", "href": "/admin-panel/laporan/order-pembelian", "section": "pembelian"},
+    # Hutang ke supplier: cerminan Piutang Pelanggan di seksi sebelah.
+    {"key": "hutang", "label": "Hutang Supplier", "icon": "cash", "href": "/admin-panel/laporan/hutang", "section": "pembelian"},
+    # Akuntansi — angkanya SENGAJA tidak sama dengan aplikasi lama (legacy memakai
+    # LIFO yang dilarang PSAK 14); layarnya yang menjelaskan. Lihat laba_rugi.py.
+    {"key": "laba_rugi", "label": "Laba Rugi", "icon": "chart", "href": "/admin-panel/laporan/laba-rugi", "section": "akuntansi"},
     # Inventori & Stok
     {"key": "stock", "label": "Stok Akhir", "icon": "box", "href": "/admin-panel/inventory/stock", "section": "stok"},
     {"key": "barang_histori", "label": "Barang Histori", "icon": "list", "href": "/admin-panel/inventory/histori", "section": "stok"},
@@ -120,11 +132,12 @@ ALL_MENUS = [
     {"key": "shift", "label": "Shift Kasir", "icon": "clock", "href": "/admin-panel/kas/shift", "section": "kas"},
     {"key": "biaya_operasional", "label": "Biaya Operasional", "icon": "cash", "href": "/admin-panel/laporan/biaya-operasional", "section": "kas"},
     {"key": "biaya_kategori", "label": "Biaya per Kategori", "icon": "chart", "href": "/admin-panel/laporan/biaya-kategori", "section": "kas"},
-    # Tiga layar TULIS kas. `admin_only` + `butuh_tautan` dengan alasan yang
-    # sama persis seperti Koreksi Stok: uang keluar dari kas begitu disimpan,
+    # Empat layar TULIS kas. `admin_only` + `butuh_tautan` dengan alasan yang
+    # sama persis seperti Koreksi Stok: uang bergerak begitu disimpan,
     # `kd_user` menentukan itu tercatat atas nama siapa, dan tak ada layar mana
     # pun di sini yang bisa menariknya kembali.
     {"key": "kas_biaya_input", "label": "Input Biaya Operasional", "icon": "cash", "href": "/admin-panel/kas/input/biaya", "section": "kas", "admin_only": True, "butuh_tautan": True},
+    {"key": "kas_pendapatan", "label": "Pendapatan Lain-Lain", "icon": "cash", "href": "/admin-panel/kas/input/pendapatan", "section": "kas", "admin_only": True, "butuh_tautan": True},
     {"key": "kas_penambahan", "label": "Penambahan Kas", "icon": "cash", "href": "/admin-panel/kas/input/penambahan", "section": "kas", "admin_only": True, "butuh_tautan": True},
     {"key": "kas_mutasi", "label": "Mutasi Kas", "icon": "refresh", "href": "/admin-panel/kas/input/mutasi", "section": "kas", "admin_only": True, "butuh_tautan": True},
     # Master Data — sub-grup 1: data master

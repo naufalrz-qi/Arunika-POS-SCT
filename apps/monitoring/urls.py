@@ -92,6 +92,8 @@ urlpatterns = [
     path("laporan/retur-penjualan/export", views.retur_penjualan_export, name="retur_penjualan_export"),
     path("laporan/piutang", views.piutang, name="piutang"),
     path("laporan/piutang/export", views.piutang_export, name="piutang_export"),
+    path("laporan/order-penjualan", views.order_penjualan, name="order_penjualan"),
+    path("laporan/order-penjualan/export", views.order_penjualan_export, name="order_penjualan_export"),
     path("laporan/pembelian", views.pembelian, name="pembelian"),
     path("laporan/pembelian/export", views.pembelian_export, name="pembelian_export"),
     path("laporan/pembelian-supplier", views.pembelian_supplier, name="pembelian_supplier"),
@@ -100,6 +102,13 @@ urlpatterns = [
     path("laporan/pembelian-periode/export", views.pembelian_periode_export, name="pembelian_periode_export"),
     path("laporan/retur-pembelian", views.retur_pembelian, name="retur_pembelian"),
     path("laporan/retur-pembelian/export", views.retur_pembelian_export, name="retur_pembelian_export"),
+    path("laporan/order-pembelian", views.order_pembelian, name="order_pembelian"),
+    path("laporan/order-pembelian/export", views.order_pembelian_export, name="order_pembelian_export"),
+    path("laporan/hutang", views.hutang, name="hutang"),
+    path("laporan/hutang/export", views.hutang_export, name="hutang_export"),
+    # Akuntansi
+    path("laporan/laba-rugi", views.laba_rugi, name="laba_rugi"),
+    path("laporan/laba-rugi/export", views.laba_rugi_export, name="laba_rugi_export"),
     # Analitik (FMI)
     path("analitik/fmi-penjualan", views.fmi_penjualan, name="fmi_penjualan"),
     path("analitik/fmi-penjualan/export", views.fmi_penjualan_export, name="fmi_penjualan_export"),

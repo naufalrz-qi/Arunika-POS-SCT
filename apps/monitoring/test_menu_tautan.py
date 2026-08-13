@@ -28,7 +28,7 @@ TULIS = {
     # Kas: `kd_user` menentukan transaksi tercatat atas nama siapa, dan pada
     # penambahan/mutasi kas `kd_divisi` tautan itu pula yang jadi awalan
     # nomornya — tabelnya sendiri tak punya kolom divisi.
-    "kas_biaya_input", "kas_penambahan", "kas_mutasi",
+    "kas_biaya_input", "kas_pendapatan", "kas_penambahan", "kas_mutasi",
 }
 
 

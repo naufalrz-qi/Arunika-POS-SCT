@@ -46,6 +46,9 @@ JENIS = {
     "biaya": ("t_biaya_operasional", "no_transaksi"),
     "penambahan_kas": ("t_penambahan_kas", "no_transaksi"),
     "mutasi_kas": ("t_mutasi_kas", "no_transaksi"),
+    # `t_pendapatan` punya 6 baris di PUSAT dan seluruhnya SC2203310001 —
+    # bentuk yang sama dengan biaya operasional, bukan tebakan.
+    "pendapatan": ("t_pendapatan", "no_transaksi"),
 }
 
 _PERCOBAAN = 5

@@ -5,12 +5,15 @@
 > Ini **potret satu waktu**, bukan dokumen hidup. Jangan dijadikan acuan setelah beberapa
 > perubahan besar berikutnya tanpa diaudit ulang.
 
-> ⚠ **SUDAH BASI per 2026-08-09.** `ALL_MENUS` kini berisi **58** menu, bukan 42. Enam belas
-> menu yang menyusul — seluruh layar kasir yang MENULIS (Penjualan, Penjualan Order, Retur
-> Penjualan, Pembelian, Order Pembelian, Retur Pembelian), Koreksi Stok, Neraca Opname, Kelola
-> Pelanggan/Supplier, Kelola Kode Nota, Kesehatan Sync, Kelola Tautan User — **tidak ada di
-> matriks di bawah**, dan justru merekalah satu-satunya yang menyentuh jalur tulis. Matriks ini
-> masih sahih untuk 42 menu yang disebutnya; ia tidak sahih sebagai daftar lengkap.
+> ⚠ **SUDAH BASI per 2026-08-11.** `ALL_MENUS` kini berisi **67** menu, bukan 42 — dan angka di
+> banner ini sendiri sudah sekali salah (tertulis 58 padahal 62). **Hitung dari `len(ALL_MENUS)`,
+> jangan dari dokumen mana pun.** Menu yang menyusul dan **tidak ada di matriks di bawah**:
+> seluruh layar kasir yang MENULIS (Penjualan, Penjualan Order, Retur Penjualan, Pembelian,
+> Order Pembelian, Retur Pembelian), Koreksi Stok, Neraca Opname, Kelola Pelanggan/Supplier,
+> Kelola Kode Nota, Kesehatan Sync, Kelola Tautan User, lalu **Hutang Supplier, laporan Order
+> Penjualan, laporan Order Pembelian, Input Pendapatan Lain-Lain, dan Laba Rugi** (2026-08-11). Justru
+> merekalah yang menyentuh jalur tulis. Matriks ini masih sahih untuk 42 menu yang disebutnya;
+> ia tidak sahih sebagai daftar lengkap.
 
 ---
 
