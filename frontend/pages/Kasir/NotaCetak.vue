@@ -57,7 +57,7 @@ const tanggalJam = (v) => {
   return y && m && d ? `${d}/${m}/${y} ${jam.slice(0, 5)}`.trim() : s.slice(0, 16);
 };
 
-const teks = computed(() => {
+const semua = computed(() => {
   const n = props.nota;
   const L = [];
 
@@ -89,7 +89,9 @@ const teks = computed(() => {
 
   // 3. Detail barang.
   for (const b of n.baris || []) {
-    for (const t of bungkus(`${b.kd_barang} - ${b.nama}`)) L.push(t);
+    // Kode barang SENGAJA tak dicetak: ini struk untuk pelanggan, dan kode
+    // seperti `TY-001333` atau `SBN336` cuma berarti bagi orang dalam toko.
+    for (const t of bungkus(b.nama)) L.push(t);
     L.push(`     ${rp(b.qty)} ${b.satuan} x ${rp(b.harga)} = ${rp(b.bruto)}`);
     // Tanpa baris ini, "2 x 2.500 = 5.000" di atas tidak akan menjumlah ke
     // Sub Total pada 49.181 baris legacy yang memang berdiskon.
@@ -129,8 +131,13 @@ const teks = computed(() => {
   L.push(garis("="));
   L.push(tengah("Terima kasih atas kunjungan Anda"));
   L.push("");
-  return L.join("\n");
+  return L;
 });
+
+// Baris pertama (nama perusahaan) berdiri sendiri supaya bisa ditebalkan:
+// <pre> tak bisa menebalkan satu baris tanpa elemen khusus untuknya.
+const kop = computed(() => semua.value[0] || "");
+const badan = computed(() => semua.value.slice(1).join("\n"));
 
 // Langsung buka dialog cetak: halaman ini hanya pernah dibuka untuk dicetak.
 const cetakUlang = () => window.print();
@@ -141,7 +148,8 @@ onMounted(() => {
 
 <template>
   <div class="cetak">
-    <pre>{{ teks }}</pre>
+    <pre><b class="kop">{{ kop }}</b>
+{{ badan }}</pre>
     <button class="sembunyi-cetak" @click="cetakUlang">Cetak ulang</button>
   </div>
 </template>
@@ -151,6 +159,14 @@ onMounted(() => {
   background: #fff;
   color: #000;
   padding: 8px;
+}
+/* Satu-satunya penebalan di seluruh struk, dan itu disengaja. Pada LX-310 bold
+   jatuh ke double-strike (kepala mengetuk dua kali) — tetap TEKS, cuma sedikit
+   lebih lambat per baris. Yang memaksa seluruh halaman jadi grafis adalah
+   tabel/border/warna, bukan ini. Menebalkan banyak baris membuat cetaknya
+   terasa lambat tanpa menambah kejelasan. */
+.kop {
+  font-weight: 700;
 }
 pre {
   font-family: "Courier New", Courier, monospace;
