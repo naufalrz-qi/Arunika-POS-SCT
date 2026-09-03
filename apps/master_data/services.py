@@ -107,96 +107,12 @@ def _cek_harga_bulat(prices: dict) -> dict:
     return bersih
 
 
-def list_products(profile, search: str = "", kd_kategori: str = "") -> list[dict]:
-    """Return products shaped exactly like the Products.vue props."""
-    where, params = ["1=1"], []
-    if search:
-        where.append("(nama LIKE ? OR kd_barang LIKE ?)")
-        params += [f"%{search}%", f"%{search}%"]
-    if kd_kategori:
-        where.append("kd_kategori = ?")
-        params.append(kd_kategori)
-    where_sql = " AND ".join(where)
-
-    with mssql.cursor(profile) as cur:
-        cur.execute(
-            f"SELECT kd_barang, kd_kategori, kd_jenis_bahan, kd_model, kd_merk, kd_warna, "
-            f"ukuran, nama, keterangan, pabrik, status, status_pinjam "
-            f"FROM m_barang WHERE {where_sql} ORDER BY nama",
-            params,
-        )
-        barang = _dictify(cur)
-
-        categories = _cached(
-            profile, "categories", lambda: _key_map(cur, "SELECT kd_kategori, nama FROM m_kategori", "kd_kategori", "nama")
-        )
-        # Empat lookup sisanya. Dulu hanya kategori yang di-join, jadi layar Master
-        # Produk memberi label manusiawi ("Merk", "Model") tapi mengikat ke kolom
-        # kode — operator melihat MAA003, bukan nama. Bentuknya mengikuti
-        # _barang_meta() di apps/inventory/services.py, yang sudah meresolusi
-        # kelimanya untuk layar Stok Akhir.
-        lookups = {
-            "jenis_bahan": _cached(profile, "jenis_bahan_names_k", lambda: _key_map_k(
-                cur, "SELECT kd_jenis_bahan, nama FROM m_jenis_bahan", "kd_jenis_bahan", "nama")),
-            "departemen": _cached(profile, "model_names_k", lambda: _key_map_k(
-                cur, "SELECT kd_model, nama FROM m_model", "kd_model", "nama")),
-            "divisi_barang": _cached(profile, "merk_names_k", lambda: _key_map_k(
-                cur, "SELECT kd_merk, nama FROM m_merk", "kd_merk", "nama")),
-            "sub_kategori": _cached(profile, "warna_names_k", lambda: _key_map_k(
-                cur, "SELECT kd_warna, nama FROM m_warna", "kd_warna", "nama")),
-        }
-        satuan_names = _cached(
-            profile, "satuan_names", lambda: _key_map(cur, "SELECT kd_satuan, nama FROM m_satuan", "kd_satuan", "nama")
-        )
-
-        # First selling unit + price per product.
-        def _build_satuan_price():
-            cur.execute("SELECT kd_barang, kd_satuan, harga_jual FROM m_barang_satuan")
-            by_barang: dict[str, dict] = {}
-            for r in _dictify(cur):
-                by_barang.setdefault(r["kd_barang"], r)
-            return by_barang
-
-        price_by_barang = _cached(profile, "satuan_price", _build_satuan_price)
-
-        # Stock summed across divisions (in Python, not SQL) — NOT cached: this
-        # column changes on every POS sale/purchase/opname, must stay live.
-        cur.execute("SELECT kd_barang, stok_akhir FROM m_barang_stok_akhir")
-        stok_by_barang: dict[str, float] = {}
-        for r in _dictify(cur):
-            stok_by_barang[r["kd_barang"]] = stok_by_barang.get(r["kd_barang"], 0.0) + _f(r["stok_akhir"])
-
-    products = []
-    for b in barang:
-        kd = b["kd_barang"]
-        price = price_by_barang.get(kd, {})
-        products.append(
-            {
-                "kd_barang": kd.strip() if isinstance(kd, str) else kd,
-                "nama": (b["nama"] or "").strip(),
-                "kd_kategori": (b["kd_kategori"] or "").strip(),
-                "kategori": (categories.get(b["kd_kategori"], "") or "").strip(),
-                "kd_jenis_bahan": _st(b.get("kd_jenis_bahan")),
-                "kd_model": _st(b.get("kd_model")),
-                "kd_merk": _st(b.get("kd_merk")),
-                "kd_warna": _st(b.get("kd_warna")),
-                # Nama, bukan kode. Istilah layar mengikuti sebutan di toko:
-                # m_model = Departemen, m_merk = Divisi Barang, m_warna = Sub Kategori.
-                "jenis_bahan": _st(lookups["jenis_bahan"].get(_k(b.get("kd_jenis_bahan")))),
-                "departemen": _st(lookups["departemen"].get(_k(b.get("kd_model")))),
-                "divisi_barang": _st(lookups["divisi_barang"].get(_k(b.get("kd_merk")))),
-                "sub_kategori": _st(lookups["sub_kategori"].get(_k(b.get("kd_warna")))),
-                "ukuran": _st(b.get("ukuran")),
-                "keterangan": _st(b.get("keterangan")),
-                "pabrik": _st(b.get("pabrik")),
-                "satuan": (satuan_names.get(price.get("kd_satuan"), "") or "").strip(),
-                "harga_jual": _f(price.get("harga_jual")),
-                "stok": _f(stok_by_barang.get(kd, 0)),
-                "status": _active(b["status"]),
-                "status_pinjam": _st(b.get("status_pinjam")),
-            }
-        )
-    return products
+# `list_products` DIHAPUS (2026-09-03). Layar Master Produk kini laporan
+# spec-driven — `reports.master_produk` + `_report_view` — jadi katalognya
+# dipaginasi server alih-alih dikirim utuh (~55.000 baris list-of-dict)
+# lalu disaring di peramban. Gejala lamanya: halaman tak pernah selesai
+# memuat. `list_categories` di bawah ikut hilang bersamanya; dropdown
+# kategori sekarang datang dari `spec["options"]`.
 
 
 # varchar(5) di m_divisi. Dibatasi huruf/angka karena nilainya jadi AWALAN
@@ -256,6 +172,74 @@ def update_kepala_nota(profile, kd_divisi, kepala_nota) -> dict:
     return {"kd_divisi": kd_divisi, "lama": lama, "baru": kepala}
 
 
+# --- Informasi perusahaan (g_info_profile) ----------------------------------
+# Tabel ini bukan tabel master yang rapi, dan itu menentukan bentuk kedua fungsi
+# di bawah. Terukur di server Testing (grosirPusat) 2026-09-03:
+#
+#   16.581 baris, tapi COUNT(DISTINCT) = 1 pada SETIAP kolom — seluruhnya
+#   duplikat identik. Tak ada primary key, tak ada kolom identity, tak ada index
+#   sama sekali (sys.indexes: satu baris HEAP). testGudang: 14.867 baris.
+#
+# Artinya tidak ada cara menunjuk "baris yang mana". Satu-satunya tulis yang
+# benar adalah mengganti seluruh isinya dengan satu baris, di dalam satu
+# transaksi. Yang lama memakai `UPDATE ... SET` TANPA `WHERE`: hasil akhirnya
+# kebetulan sama, tapi ia menulis ulang 16.581 baris tiap klik Simpan.
+_INFO_KOLOM = ("perusahaan", "alamat", "kota", "telp", "hp", "email", "website", "nama_kontak")
+
+
+def baca_info_perusahaan(profile) -> dict:
+    """Profil perusahaan dari `g_info_profile`, atau nilai kosong bila tabelnya kosong.
+
+    `ORDER BY` bukan hiasan: tanpa itu `TOP 1` atas sebuah heap tak menjanjikan
+    baris yang sama dua kali. Hari ini seluruh barisnya identik sehingga tak
+    tampak bedanya — tapi begitu tabel ini pernah terisi dua profil berbeda,
+    kop struk akan berganti-ganti sendiri tanpa ada yang mengubah apa pun.
+    """
+    with mssql.cursor(profile) as cur:
+        cur.execute(
+            f"SELECT TOP 1 {', '.join(_INFO_KOLOM)} FROM g_info_profile "
+            "ORDER BY perusahaan, alamat, kota, telp"
+        )
+        row = cur.fetchone()
+    if not row:
+        return {k: "" for k in _INFO_KOLOM}
+    return {k: (v or "").strip() for k, v in zip(_INFO_KOLOM, row)}
+
+
+def simpan_info_perusahaan(profile, data: dict) -> None:
+    """Ganti isi `g_info_profile` dengan SATU baris.
+
+    DELETE + INSERT, bukan UPDATE: lihat catatan di atas — tabelnya heap tanpa
+    kunci, jadi tak ada `WHERE` yang bisa menunjuk satu baris. Sekalian ini
+    memampatkan tumpukan duplikat peninggalan aplikasi lama jadi satu baris,
+    tanpa kehilangan informasi apa pun (seluruh baris identik).
+
+    `nama_kontak` ikut ditulis. Sebelumnya ia dibaca tapi tak pernah bisa
+    diubah, dan jalur INSERT-nya mengisi `"-"` — jadi mengisi kolom itu di layar
+    diam-diam tak berefek.
+
+    `modal_awal` TIDAK ada di layar ini dan tak boleh hilang karena DELETE: ia
+    kolom akuntansi milik aplikasi lama. Nilainya dibaca dulu lalu ditulis
+    kembali apa adanya.
+    """
+    nilai = [(str(data.get(k) or "")).strip()[:1000] for k in _INFO_KOLOM]
+    if not nilai[0]:
+        raise ValueError("Nama perusahaan wajib diisi.")
+
+    kolom = (*_INFO_KOLOM, "modal_awal")
+    tanya = ", ".join("?" for _ in kolom)
+    with mssql.cursor(profile, autocommit=False) as cur:
+        cur.execute("SELECT TOP 1 modal_awal FROM g_info_profile WHERE modal_awal IS NOT NULL")
+        baris = cur.fetchone()
+        cur.execute("DELETE FROM g_info_profile")
+        cur.execute(
+            f"INSERT INTO g_info_profile ({', '.join(kolom)}) VALUES ({tanya})",
+            [*nilai, baris[0] if baris else None],
+        )
+        cur.connection.commit()
+
+
+
 def list_userx(profile) -> list[dict]:
     """User legacy (m_userx) untuk dropdown penautan di Kelola Tautan User.
 
@@ -275,15 +259,6 @@ def list_userx(profile) -> list[dict]:
                 "nama": _st(r["nama"]),
                 "aktif": _active(r["status"]),
             }
-            for r in _dictify(cur)
-        ]
-
-
-def list_categories(profile) -> list[dict]:
-    with mssql.cursor(profile) as cur:
-        cur.execute("SELECT kd_kategori, nama FROM m_kategori ORDER BY nama")
-        return [
-            {"kd_kategori": (r["kd_kategori"] or "").strip(), "nama": (r["nama"] or "").strip()}
             for r in _dictify(cur)
         ]
 

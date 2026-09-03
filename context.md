@@ -337,6 +337,20 @@ Layar tulis pertama yang tabelnya **tidak punya satu pun baris lama untuk ditiru
 - Layar hanya mengisi isian yang MASIH kosong (`watch` pada prop deferred). Prop deferred datang setelah cat pertama, jadi menimpa apa adanya akan menghapus pilihan orang yang sudah keburu mengetik.
 - Ancar-ancar nomor ikut ditampilkan di keempat layar, seperti layar nota — dipakai kasir untuk mencocokkan lembar fisik.
 
+## Struk penjualan (`pj.baca_nota` + `Kasir/NotaCetak.vue`)
+
+Satu blok `<pre>` monospace 40 kolom untuk Epson LX-310, `@page 241mm x 140mm`. Tabel/border/warna memaksa driver Windows masuk mode grafis — lambat, buram, boros pita — jadi seluruh tata letaknya spasi, bukan CSS.
+
+- **Kasir dari `m_userx`, pegawai dari `m_pegawai`, dan keduanya orang yang berbeda.** `kd_user` dan `kd_pegawai` ruang kode terpisah (`apps/auth_app/models.TautanUser`): terukur di server Testing, `LEFT JOIN m_pegawai ON kd_pegawai = h.kd_user` memulangkan **NULL di setiap nota**. Versi pertama menambal NULL itu dengan `kd_pegawai` baris detail PERTAMA, jadi struk mencetak nama SPG di bawah label "Kasir" — salah orang, tanpa satu pun galat. Kasir = `m_userx` (sama seperti `reports.py:286, 353, 430, 682`), Pegawai = `m_pegawai` lewat `t_penjualan_detail.kd_pegawai`.
+- **Kop toko dari `g_info_profile`, dan tabel itu bukan tabel master.** 16.581 baris di grosirPusat / 14.867 di testGudang, `COUNT(DISTINCT)` = 1 pada SETIAP kolom (seluruhnya duplikat), heap tanpa PK/identity/index. Karena itu `TOP 1` **wajib** ber-`ORDER BY`, dan jalur tulisnya `DELETE` + satu `INSERT` dalam satu transaksi — bukan `UPDATE` tanpa `WHERE`, yang sempat menulis ulang 16.581 baris tiap klik Simpan. `modal_awal` dibaca lalu ditulis kembali supaya tak ikut terhapus.
+- **Nama toko dari divisi NOTANYA** (`LEFT JOIN m_divisi ON kd_divisi = h.kd_divisi`), bukan `SELECT TOP 1 FROM m_divisi`. Gudang punya lima divisi.
+- **`m_divisi` TIDAK punya kolom `alamat` maupun `telepon`** di kedua dump skema. Alamat per-cabang tak bisa disimpan tanpa ubah skema; `kepala_nota` itu awalan nomor nota, bukan kop surat.
+- **`Diskon` satu angka, dan ia DITURUNKAN dari total:** `diskon = bruto + pajak_rp - total`. Dengan begitu `Sub Total - Diskon + Pajak = Total` selalu benar di kertas, berapa pun isi `t_penjualan_total.total`. Menjumlahkan diskon sendiri lalu meleset serupiah menghasilkan struk yang terbaca salah hitung — jauh lebih buruk daripada satu angka diskon yang meleset sendirian. Diverifikasi terhadap 11 nota nyata (berdiskon baris, berdiskon header, ber-`diskon_uang`, berpajak): 11 dari 11 menjumlah.
+- **Baris `Disc` wajib ada saat barisnya berdiskon.** 49.181 baris `t_penjualan_detail` punya diskon, jadi `harga x qty = total` justru BUKAN kasus normal. Labelnya menyebut satuannya (`3.000/PCS`) karena angka kiri potongan PER UNIT sementara angka kanan potongan SELURUH baris.
+- **`pajak` itu fraksi** (0,05 = 5%) dan cuma 2 nota di seluruh riwayat server yang memakainya, jadi barisnya disembunyikan saat nol.
+- **`bayar`/`kembali` tak ada kolomnya di `t_penjualan`** (lihat `_HEADER`). Angkanya dioper dari layar kasir lewat `?bayar=` ke `views_kasir.nota_cetak`, dan **kembaliannya dihitung di server** dari total versi server — bukan diterima dari layar — supaya tak bisa dikarang lewat URL. `Penjualan.vue` menahannya di `bayarTerakhir` karena `tutupTab()` menghapus keranjang begitu simpan berhasil. Cetak ulang lewat `/kasir/faktur` tak membawanya, jadi kedua baris itu **tidak dicetak** di sana: lebih baik kosong daripada angka palsu.
+- **Blok `Keterangan :` selalu dicetak**, dengan dua baris titik-titik saat kolomnya kosong — kasir menulis tangan di situ. Sentinel `-` (`KOSONG`) diperlakukan sebagai kosong, bukan dicetak apa adanya.
+
 ## Separasi menu kasir
 
 Section `pos` dipecah tiga: `pos_jual` / `pos_beli` / `pos_lain`, pola yang sama dengan Master Data. **Tetap satu tab navbar "Kasir"** (`NAV_GROUPS` di `useNav.js`) — menjadikannya tiga tab memaksa kasir berpindah tab untuk pekerjaan yang ia lakukan berselang-seling.

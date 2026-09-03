@@ -158,6 +158,9 @@ ALL_MENUS = [
     # Kelola Supplier buntu untuk kota/bank yang belum terdaftar — kolomnya
     # berkunci-asing dan menolak string kosong.
     {"key": "kelola_referensi", "label": "Kelola Data Referensi", "icon": "pencil", "href": "/admin-panel/master/referensi", "section": "master"},
+    # Kop struk penjualan berasal dari sini (g_info_profile), jadi ia duduk
+    # bersama master data lain dan bukan di menu pengaturan.
+    {"key": "informasi_perusahaan", "label": "Informasi Perusahaan", "icon": "store", "href": "/admin-panel/master-data/informasi-perusahaan", "section": "master"},
     # Master Data — sub-grup 2: harga & update barang
     # STRUKTUR barang: membuat barang, menambah satuan, menambah baris divisi.
     # Tanpa `butuh_tautan` (tabelnya tak punya kd_user), tapi service-nya menolak

@@ -7,6 +7,7 @@ Semantik yang ditiru ada di tiga UDF legacy, dan kembaran SQL-nya di
 `_ghb`/`_nota_net` (apps/transactions/reports.py). Diperiksa terhadap 300 nota
 SC nyata di server testing: 300 cocok, 0 beda.
 """
+import datetime as dt
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -107,6 +108,134 @@ class FakeCursor:
 
     def fetchone(self):
         return (None,)   # belum ada nomor untuk awalan ini
+
+
+class NotaPalsu:
+    """Cursor palsu yang menjawab tiga query `baca_nota` menurut urutannya.
+
+    MS SQL tak disentuh: yang diuji di sini aritmetika struk dan pemetaan
+    kolomnya, dan keduanya tak butuh server. Tes versi sebelumnya menembak
+    koneksi `Testing` sungguhan lewat `core.mssql.get_profile` — fungsi yang
+    tidak pernah ada — sehingga seluruh berkas ini gagal saat import.
+    """
+
+    def __init__(self, header, detail, profil):
+        self._jawab = [[header], detail, [profil]]
+        self.sql = []
+        self.connection = self
+
+    def execute(self, sql, params=None):
+        self.sql.append(" ".join(sql.split()))
+        self._hasil = self._jawab.pop(0)
+
+    def fetchone(self):
+        return self._hasil[0] if self._hasil else None
+
+    def fetchall(self):
+        return self._hasil
+
+
+PROFIL = ("SUKSES CROWN TOYS", "Jl. Selaparang 166", "0370-123")
+
+
+def _baca(header, detail, profil=PROFIL):
+    cur = NotaPalsu(header, detail, profil)
+    with patch.object(pj.mssql, "cursor", lambda *a, **k: _ctx(cur)):
+        return pj.baca_nota(object(), "SC2608140001"), cur
+
+
+class BacaNotaTests(SimpleTestCase):
+    """Header: no, tanggal, kd_customer, customer, kd_user, kasir, kd_jenis,
+    jenis_bayar, kd_divisi, divisi, no_bukti, keterangan, jatuh_tempo,
+    diskon1..4, diskon_uang, pajak, total."""
+
+    HEADER = ("SC2608140001", dt.datetime(2026, 8, 14, 10, 0), "CAA000", "UMUM",
+              "UAA034", "ADMIN6", "JAA000", "TUNAI", "DAA000", "GUDANG",
+              "-", "-", dt.datetime(2026, 9, 13), 0, 0, 0, 0, 0.0, 0.0, 539500.0)
+    # kd_barang, nama, kd_satuan, satuan, qty, harga, d1..d4, total, pegawai
+    DETAIL = [("BOLALA", "PERMEN BOLALA", "SAA002", "RTG", 120.0, 5000.0,
+               500.0, 0.0, 0.0, 0.0, 540000.0, "MAJDI")]
+
+    def test_kasir_dibaca_dari_m_userx_bukan_m_pegawai(self):
+        """`kd_user` dan `kd_pegawai` dua ruang kode berbeda: join m_pegawai
+        lewat kd_user memulangkan NULL di SETIAP nota (terukur di server
+        Testing), dan versi lama menambalnya dengan pegawai baris pertama —
+        struk mencetak nama SPG di bawah label Kasir."""
+        nota, cur = _baca(self.HEADER, self.DETAIL)
+        self.assertEqual(nota["kasir"], "ADMIN6")
+        self.assertEqual(nota["pegawai"], "MAJDI")
+        self.assertIn("LEFT JOIN m_userx u ON u.kd_user = h.kd_user", cur.sql[0])
+        self.assertNotIn("m_pegawai p ON p.kd_pegawai = h.kd_user", cur.sql[0])
+
+    def test_divisi_diambil_dari_nota_bukan_baris_pertama_m_divisi(self):
+        """Gudang punya lima divisi; `SELECT TOP 1 FROM m_divisi` mencetak kop
+        divisi yang bukan penerbit notanya."""
+        _, cur = _baca(self.HEADER, self.DETAIL)
+        self.assertIn("LEFT JOIN m_divisi dv ON dv.kd_divisi = h.kd_divisi", cur.sql[0])
+        self.assertNotIn("SELECT TOP 1 nama FROM m_divisi", " ".join(cur.sql))
+
+    def test_g_info_profile_dibaca_berurutan(self):
+        """Tabelnya heap tanpa kunci (16.581 baris di grosirPusat): TOP 1 tanpa
+        ORDER BY tak menjanjikan baris yang sama dua kali."""
+        _, cur = _baca(self.HEADER, self.DETAIL)
+        self.assertIn("FROM g_info_profile ORDER BY", cur.sql[2])
+
+    def test_ringkasan_uang_menjumlah(self):
+        """Sub Total - Diskon + Pajak = Total. Ini yang dilihat pelanggan; kalau
+        tak menjumlah, struknya terbaca sebagai salah hitung."""
+        nota, _ = _baca(self.HEADER, self.DETAIL)
+        self.assertAlmostEqual(nota["bruto"], 600000.0)
+        self.assertAlmostEqual(
+            nota["bruto"] - nota["diskon"] + nota["pajak_rp"], nota["total"], places=2)
+
+    def test_diskon_gabungan_termasuk_diskon_uang(self):
+        """diskon_uang dikurangi SETELAH pajak di total_nota, jadi ia tak bisa
+        cuma dijumlahkan ke diskon baris — `diskon` diturunkan dari total."""
+        h = list(self.HEADER)
+        h[17] = 500.0          # diskon_uang
+        nota, _ = _baca(tuple(h), self.DETAIL)
+        self.assertAlmostEqual(nota["diskon"], 60500.0)
+
+    def test_pajak_fraksi_jadi_rupiah(self):
+        """`pajak` disimpan sebagai fraksi (0,05 = 5%); struk lama mencetak
+        "0.05" apa adanya."""
+        h = list(self.HEADER)
+        h[18] = 0.05
+        h[19] = None           # tanpa t_penjualan_total, hitung sendiri
+        nota, _ = _baca(tuple(h), self.DETAIL)
+        self.assertAlmostEqual(nota["pajak_rp"], 27000.0)
+        self.assertAlmostEqual(nota["total"], 567000.0)
+        self.assertAlmostEqual(
+            nota["bruto"] - nota["diskon"] + nota["pajak_rp"], nota["total"], places=2)
+
+    def test_sentinel_strip_jadi_kosong(self):
+        """`keterangan`/`no_bukti` legacy berisi "-", bukan string kosong —
+        mencetaknya apa adanya membuat struk berisi "Ket: -"."""
+        nota, _ = _baca(self.HEADER, self.DETAIL)
+        self.assertEqual(nota["keterangan"], "")
+        self.assertEqual(nota["no_bukti"], "")
+
+    def test_bayar_tak_pernah_datang_dari_baca_nota(self):
+        """t_penjualan tak punya kolomnya; nilainya dioper dari layar kasir."""
+        nota, _ = _baca(self.HEADER, self.DETAIL)
+        self.assertNotIn("bayar", nota)
+        self.assertNotIn("kembali", nota)
+
+    def test_no_transaksi_kosong_tak_menyentuh_server(self):
+        self.assertIsNone(pj.baca_nota(object(), "   "))
+
+
+class LabelDiskonTests(SimpleTestCase):
+    def test_fraksi_jadi_persen(self):
+        self.assertEqual(pj._label_diskon([0.1, 0, 0, 0]), "10%")
+
+    def test_rupiah_diberi_satuan(self):
+        """Angka kiri potongan PER UNIT, angka kanan potongan SELURUH baris.
+        Tanpa "/PCS", "Disc 3.000 = 9.000" terbaca sebagai hitungan salah."""
+        self.assertEqual(pj._label_diskon([3000, 0, 0, 0], "PCS"), "3.000/PCS")
+
+    def test_diskon_nol_tak_muncul(self):
+        self.assertEqual(pj._label_diskon([0, 0, 0, 0]), "")
 
 
 class OrderTests(SimpleTestCase):

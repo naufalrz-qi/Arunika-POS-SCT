@@ -149,7 +149,9 @@ class UangBespoke(TestCase):
     TX_BARIS = {"tanggal": "2026-08-01", "transaksi": "Pembelian", "no_transaksi": "X",
                 "kd_barang": "A", "barang": "B", "masuk": 5.0, "keluar": 0.0,
                 "satuan": "PCS", "harga": 12_000.0}
-    PRODUK = {"kd_barang": "A", "nama": "B", "harga_jual": 9_000.0, "stok": 3.0}
+    # `stok` sengaja tak ada lagi: kolom itu dibaca dari m_barang_stok_akhir,
+    # cache legacy yang terlantar (22.592 dari 22.703 baris negatif).
+    PRODUK = {"kd_barang": "A", "nama": "B", "harga_jual": 9_000.0, "satuan": "PCS"}
 
     MENU = ["kas", "fmi_stok", "transaksi_barang", "products"]
 
@@ -202,11 +204,18 @@ class UangBespoke(TestCase):
              (v, "_opt_divisi", lambda p: [])])
 
     def _produk(self):
+        # Master Produk kini laporan spec-driven (prop `report`), bukan view
+        # bespoke ber-prop `products`: izin uangnya diturunkan otomatis dari
+        # `_FIELDS_BY_DATA_KEY`, tanpa panggilan `_uang_bespoke` sendiri.
         return self._props(
-            "/admin-panel/master/products", "Admin/MasterData/Products", "products",
+            "/admin-panel/master/products", "Admin/MasterData/Products", "report",
             [(v, "_active", lambda: object()),
-             (v.master, "list_products", lambda *a, **k: [dict(self.PRODUK)]),
-             (v.master, "list_categories", lambda *a, **k: [])])
+             (v.mssql, "report_read_profiles", lambda p: [p]),
+             (v.mssql, "report_cursor", _cursor()),
+             (v.reporting, "run_paged", lambda *a, **k: ([dict(self.PRODUK)], 1)),
+             (v.reporting, "one_row",
+              lambda cur: {"jml_baris": 1, "jml_aktif": 1, "jml_nonaktif": 0}),
+             (v, "_opt_master_produk", lambda p: {})])
 
     # --- akun yang izin uangnya dicabut -----------------------------------
     def test_kas_harian_rupiah_tak_ikut_di_respons(self):

@@ -80,7 +80,7 @@ Kolom **Sumber baca**: `replica` = bisa membaca replica laporan bila dikonfigura
 | Shift Kasir | `shift` | laporan-server | replica | — | Siap |
 | Biaya Operasional | `biaya_operasional` | laporan-server | replica | — | Siap |
 | Biaya per Kategori | `biaya_kategori` | laporan-server | replica | — | Siap |
-| Master Produk | `products` | khusus | primary | — (hanya baca) | Siap |
+| Master Produk | `products` | laporan-server | replica | — (hanya baca) | Siap |
 | Master Pelanggan | `customers` | khusus | primary | — (hanya baca) | Siap |
 | Master Supplier | `suppliers` | khusus | primary | — (hanya baca) | Siap |
 | Update Barang | `update_barang` | khusus | primary | **Ya** (harga, status, nama & keterangan—khusus gudang) | Siap |
@@ -139,7 +139,7 @@ menyaring:
 | Klasifikasi Pelanggan | `nominal` | halaman, panel detail, **kedua sheet** export |
 | Panel info kasir | `nominal` | `info-customer` (profil, piutang, histori) + `histori-user` |
 
-Halaman lain (FMI Stok, Mutasi Stok, Master Produk, laporan penjualan/pembelian) **masih
+Halaman lain (FMI Stok, Mutasi Stok) **masih
 menampilkan uang ke siapa pun yang boleh membukanya** — untuk membatasi seseorang, menu-menu itu
 harus dicabut, bukan sekadar mencabut kunci nilainya.
 

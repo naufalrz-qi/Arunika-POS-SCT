@@ -29,32 +29,106 @@ const tengah = (t) => {
   return " ".repeat(pad) + t;
 };
 
+// Bungkus per kata, jangan potong. Nama barang dan alamat sama-sama rutin
+// melewati 40 kolom; memotongnya membuang justru bagian yang membedakan
+// ("BONEKA BERUANG COKELAT BESAR" vs "... KECIL").
+const bungkus = (teks, lebar = LEBAR, indent = "") => {
+  const out = [];
+  let sisa = String(teks || "").trim();
+  while (sisa.length > lebar) {
+    let idx = sisa.lastIndexOf(" ", lebar);
+    if (idx <= 0) idx = lebar;
+    out.push(sisa.slice(0, idx).trim());
+    sisa = indent + sisa.slice(idx).trim();
+  }
+  if (sisa.length) out.push(sisa);
+  return out;
+};
+
+// Label metadata dirata supaya titik dua dan nilainya sejajar satu kolom.
+const LABEL = 13;
+const info = (label, nilai) => `${label.padEnd(LABEL)}: ${nilai}`;
+
+const tanggalJam = (v) => {
+  if (!v) return "";
+  const s = String(v).replace("T", " ");
+  const [tgl, jam = ""] = s.split(" ");
+  const [y, m, d] = tgl.split("-");
+  return y && m && d ? `${d}/${m}/${y} ${jam.slice(0, 5)}`.trim() : s.slice(0, 16);
+};
+
 const teks = computed(() => {
   const n = props.nota;
-  const baris = [];
-  baris.push(tengah(n.toko || "NOTA PENJUALAN"));
-  baris.push(garis("="));
-  baris.push(`No : ${n.no_transaksi}`);
-  baris.push(`Tgl: ${String(n.tanggal || "").replace("T", " ").slice(0, 16)}`);
-  baris.push(`Cus: ${(n.customer || n.kd_customer || "").slice(0, 33)}`);
-  baris.push(garis());
-  for (const b of n.baris || []) {
-    // Nama barang di barisnya sendiri: 40 kolom tak cukup untuk nama + angka.
-    baris.push((b.nama || b.kd_barang).slice(0, LEBAR));
-    baris.push(
-      kiriKanan(`  ${b.qty} ${b.satuan} x ${rp(b.harga)}`, rp(b.total)),
-    );
+  const L = [];
+
+  // 1. Kop toko — seluruhnya dari g_info_profile.
+  L.push(tengah((n.toko || "SUKSES CROWN TOYS").slice(0, LEBAR)));
+  for (const b of bungkus(n.alamat)) L.push(tengah(b));
+  if (n.telepon) L.push(tengah(`Telp : ${n.telepon}`.slice(0, LEBAR)));
+  L.push(garis("="));
+
+  // 2. Metadata. Baris yang nilainya kosong tidak dicetak sama sekali —
+  //    "No. Bukti :" yang menggantung cuma menambah tinggi struk.
+  L.push(info("Tanggal", tanggalJam(n.tanggal)));
+  L.push(info("No. Transaksi", n.no_transaksi || ""));
+  if (n.no_bukti) L.push(info("No. Bukti", n.no_bukti));
+  if (n.jenis_bayar) L.push(info("Jenis Bayar", n.jenis_bayar.slice(0, LEBAR - LABEL - 2)));
+  if (n.jatuh_tempo && n.kd_jenis && n.kd_jenis !== "JAA000")
+    L.push(info("Jatuh Tempo", tanggalJam(n.jatuh_tempo).split(" ")[0]));
+  {
+    // Kode pelanggan ikut karena nama saja tidak unik di m_customer, dan kasir
+    // memakai kodenya saat menelusuri piutang.
+    const nama = n.customer || n.kd_customer || "UMUM";
+    const kode = n.kd_customer && n.customer ? ` (${n.kd_customer})` : "";
+    L.push(info("Pelanggan", `${nama}${kode}`.slice(0, LEBAR - LABEL - 2)));
   }
-  baris.push(garis());
-  if (n.diskon_uang) baris.push(kiriKanan("Diskon (Rp)", rp(n.diskon_uang)));
-  if (n.pajak) baris.push(kiriKanan("Pajak", String(n.pajak)));
-  baris.push(kiriKanan("TOTAL", rp(n.total)));
-  baris.push(garis("="));
-  if (n.keterangan && n.keterangan !== "-") baris.push(`Ket: ${n.keterangan}`);
-  baris.push("");
-  baris.push(tengah("Terima kasih"));
-  baris.push("");
-  return baris.join("\n");
+  // Dua orang berbeda: Pegawai melayani, Kasir menulis notanya.
+  if (n.pegawai) L.push(info("Pegawai", n.pegawai.slice(0, LEBAR - LABEL - 2)));
+  if (n.kasir) L.push(info("Kasir", n.kasir.slice(0, LEBAR - LABEL - 2)));
+  L.push(garis());
+
+  // 3. Detail barang.
+  for (const b of n.baris || []) {
+    for (const t of bungkus(`${b.kd_barang} - ${b.nama}`)) L.push(t);
+    L.push(`     ${rp(b.qty)} ${b.satuan} x ${rp(b.harga)} = ${rp(b.bruto)}`);
+    // Tanpa baris ini, "2 x 2.500 = 5.000" di atas tidak akan menjumlah ke
+    // Sub Total pada 49.181 baris legacy yang memang berdiskon.
+    if (b.diskon)
+      L.push(`     Disc ${b.diskon_label || ""} = ${rp(b.diskon)}`.replace("  =", " ="));
+  }
+  L.push(garis());
+
+  // 4. Ringkasan. `Diskon` sudah digabung di server (diskon baris + diskon
+  //    header + diskon_uang) supaya kolom ini benar-benar menjumlah.
+  L.push(kiriKanan("Sub Total", rp(n.bruto)));
+  if (n.diskon) L.push(kiriKanan("Diskon", rp(n.diskon)));
+  // Hampir tak pernah terpakai (2 nota dari seluruh riwayat server) — baris
+  // "Pajak 0" cuma menambah tinggi struk.
+  if (n.pajak_rp) L.push(kiriKanan(`Pajak ${(Number(n.pajak) * 100).toFixed(2)}%`, rp(n.pajak_rp)));
+  L.push(kiriKanan("Total", rp(n.total)));
+  if (n.bayar != null) {
+    L.push(kiriKanan("Bayar", rp(n.bayar)));
+    L.push(kiriKanan("Kembali", rp(n.kembali)));
+  }
+  L.push(garis("="));
+
+  // 5. Keterangan. Selalu ada ruangnya, walau kolomnya kosong di database —
+  //    kasir menulis tangan di situ (catatan kirim, nama pengambil, dsb).
+  L.push("Keterangan :");
+  const ket = bungkus(n.keterangan);
+  for (const t of ket) L.push(t);
+  for (let i = ket.length; i < 2; i++) L.push(".".repeat(LEBAR));
+
+  // 6. Tanda tangan.
+  L.push("");
+  L.push("  Penerima,              Hormat kami,");
+  L.push("");
+  L.push("");
+  L.push(" ..............         ..............");
+  L.push(garis("="));
+  L.push(tengah("Terima kasih atas kunjungan Anda"));
+  L.push("");
+  return L.join("\n");
 });
 
 // Langsung buka dialog cetak: halaman ini hanya pernah dibuka untuk dicetak.

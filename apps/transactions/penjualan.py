@@ -628,35 +628,169 @@ def barang_persis(profile, kode: str) -> dict | None:
             "harga_jual": float(r[4] or 0)}
 
 
+def _label_diskon(nilai, satuan: str = "") -> str:
+    """Diskon baris jadi teks pendek untuk struk: "10%", "500/PCS", "10%+500/PCS".
+
+    Dua mode, sama seperti `ghb()`: nilai di (-1, 1) itu PERSEN, selebihnya
+    rupiah flat. Struk harus menyebut yang mana — "Disc 0,1" tak berarti apa-apa
+    di tangan pelanggan, dan "Disc 10%" untuk potongan Rp10 itu bohong.
+
+    Rupiah selalu diberi "/satuan" karena ia potongan PER UNIT, sementara angka
+    di kanannya potongan SELURUH BARIS. Tanpa itu baris "Disc 3.000 = 9.000"
+    terbaca sebagai hitungan yang salah, padahal 3.000 x 3 pcs memang 9.000.
+    """
+    bagian = []
+    for d in nilai:
+        d = float(d or 0)
+        if d == 0:
+            continue
+        if -1 < d < 1:
+            bagian.append(f"{d * 100:g}%")
+        else:
+            bagian.append(f"{d:,.0f}".replace(",", ".") + (f"/{satuan}" if satuan else ""))
+    return "+".join(bagian)
+
+
 def baca_nota(profile, no_transaksi: str) -> dict | None:
-    """Satu nota lengkap untuk dicetak."""
+    """Satu nota lengkap untuk dicetak: identitas toko, kasir, pegawai, member, uang.
+
+    Uangnya TIDAK dihitung dengan rumus baru. `bruto` dan `net` memakai `ghb()`
+    yang sama dengan jalur tulis dan dengan `_nota_net()` di reports.py; rumus
+    uang kedua akan menyimpang diam-diam pada nota berdiskon header (lihat
+    docstring `total_nota`).
+
+    `diskon` sengaja DITURUNKAN dari total, bukan dijumlahkan sendiri:
+
+        diskon = bruto + pajak_rp - total
+
+    sehingga `Sub Total - Diskon + Pajak = Total` selalu benar di kertas, berapa
+    pun yang tersimpan di `t_penjualan_total.total`. Kalau diskon dijumlah
+    sendiri dan ternyata meleset serupiah dari total legacy, yang terlihat
+    pelanggan adalah struk yang tidak menjumlah — dan itu jauh lebih buruk
+    daripada angka diskon yang meleset seorang diri.
+
+    `bayar`/`kembali` TIDAK ada di sini: `t_penjualan` tak punya kolomnya (lihat
+    `_HEADER`). Nilainya dioper dari layar kasir lewat query string ke
+    `views_kasir.nota_cetak`.
+    """
+    no_transaksi = (no_transaksi or "").strip()
+    if not no_transaksi:
+        return None
+
     with mssql.cursor(profile) as cur:
+        # Kasir lewat m_userx, BUKAN m_pegawai: `kd_user` dan `kd_pegawai` dua
+        # ruang kode berbeda — orang yang sama `UAA034`/"ADMIN6" di m_userx tak
+        # punya padanan di m_pegawai (terukur: join lewat kd_user memulangkan
+        # NULL di SETIAP nota server Testing). Versi sebelumnya menambal NULL itu
+        # dengan pegawai di baris detail pertama, jadi struk mencetak nama SPG
+        # di bawah label "Kasir". Lihat apps/auth_app/models.TautanUser.
         cur.execute(
-            "SELECT h.no_transaksi, h.tanggal, h.kd_customer, c.nama, h.kd_user, "
-            "h.keterangan, h.diskon_uang, h.pajak, t.total "
-            "FROM t_penjualan h LEFT JOIN m_customer c ON c.kd_customer = h.kd_customer "
+            "SELECT h.no_transaksi, h.tanggal, h.kd_customer, c.nama, "
+            "h.kd_user, u.nama, h.kd_jenis, jb.nama, "
+            "h.kd_divisi, dv.nama, h.no_bukti, h.keterangan, h.tanggal_jatuh_tempo, "
+            "h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.diskon_uang, h.pajak, "
+            "t.total "
+            "FROM t_penjualan h "
+            "LEFT JOIN m_customer c ON c.kd_customer = h.kd_customer "
+            "LEFT JOIN m_userx u ON u.kd_user = h.kd_user "
+            "LEFT JOIN m_jenis_bayar jb ON jb.kd_jenis = h.kd_jenis "
+            "LEFT JOIN m_divisi dv ON dv.kd_divisi = h.kd_divisi "
             "LEFT JOIN t_penjualan_total t ON t.no_transaksi = h.no_transaksi "
-            "WHERE h.no_transaksi = ?", [no_transaksi])
+            "WHERE h.no_transaksi = ?",
+            [no_transaksi],
+        )
         h = cur.fetchone()
         if not h:
             return None
+
         cur.execute(
-            "SELECT d.kd_barang, b.nama, d.kd_satuan, d.qty, d.harga_jual, d.total "
-            "FROM t_penjualan_detail d LEFT JOIN m_barang b ON b.kd_barang = d.kd_barang "
-            "WHERE d.no_transaksi = ?", [no_transaksi])
-        baris = [{"kd_barang": (r[0] or "").strip(), "nama": (r[1] or "").strip(),
-                  "satuan": (r[2] or "").strip(), "qty": float(r[3] or 0),
-                  "harga": float(r[4] or 0), "total": float(r[5] or 0)}
-                 for r in cur.fetchall()]
-        cur.execute("SELECT nama, kepala_nota FROM m_divisi")
-        d = cur.fetchone()
+            "SELECT d.kd_barang, b.nama, d.kd_satuan, s.nama, d.qty, d.harga_jual, "
+            "d.diskon1, d.diskon2, d.diskon3, d.diskon4, d.total, p.nama "
+            "FROM t_penjualan_detail d "
+            "LEFT JOIN m_barang b ON b.kd_barang = d.kd_barang "
+            "LEFT JOIN m_satuan s ON s.kd_satuan = d.kd_satuan "
+            "LEFT JOIN m_pegawai p ON p.kd_pegawai = d.kd_pegawai "
+            "WHERE d.no_transaksi = ?",
+            [no_transaksi],
+        )
+        detail = cur.fetchall()
+
+        # Kop toko. Query-nya kembar dengan master_data.services.baca_info_perusahaan
+        # — disalin, bukan dipanggil, supaya cetak nota tetap SATU koneksi:
+        # mssql.cursor() membuka sambungan baru tiap kali, dan di profil jauh
+        # ongkosnya perjalanan bolak-balik, bukan barisnya. ORDER BY-nya wajib,
+        # alasannya ada di fungsi itu (tabelnya heap tanpa kunci).
+        cur.execute(
+            "SELECT TOP 1 perusahaan, alamat, telp FROM g_info_profile "
+            "ORDER BY perusahaan, alamat, kota, telp"
+        )
+        prof = cur.fetchone()
+
+    dh = [float(h[13] or 0), float(h[14] or 0), float(h[15] or 0), float(h[16] or 0)]
+    diskon_uang = float(h[17] or 0)
+    pajak = float(h[18] or 0)
+
+    baris, items, bruto, net = [], [], 0.0, 0.0
+    for r in detail:
+        qty = float(r[4] or 0)
+        harga = float(r[5] or 0)
+        db = [float(r[6] or 0), float(r[7] or 0), float(r[8] or 0), float(r[9] or 0)]
+        bruto_baris = harga * qty
+        net_baris = ghb(ghb(harga, db), dh) * qty
+        bruto += bruto_baris
+        net += net_baris
+        baris.append({
+            "kd_barang": (r[0] or "").strip(),
+            "nama": (r[1] or "").strip() or (r[0] or "").strip(),
+            "kd_satuan": (r[2] or "").strip(),
+            "satuan": (r[3] or "").strip() or (r[2] or "").strip(),
+            "qty": qty,
+            "harga": harga,
+            "bruto": bruto_baris,
+            # Potongan baris SAJA (diskon header sengaja tak masuk sini — ia
+            # milik nota, bukan barangnya, dan mencantumkannya per baris membuat
+            # angkanya terhitung dua kali di mata pembaca struk).
+            "diskon": bruto_baris - ghb(harga, db) * qty,
+            "diskon_label": _label_diskon(db, (r[3] or "").strip() or (r[2] or "").strip()),
+            "total": float(r[10] or 0),
+            "pegawai": (r[11] or "").strip(),
+        })
+        items.append({"harga_jual": harga, "qty": qty, "diskon1": db[0],
+                      "diskon2": db[1], "diskon3": db[2], "diskon4": db[3]})
+
+    pajak_rp = net * pajak
+    total = float(h[19]) if h[19] is not None else total_nota(items, dh, diskon_uang, pajak)
+
+    ket = (h[11] or "").strip()
+    no_bukti = (h[10] or "").strip()
+    nama_toko = (prof[0] if prof and prof[0] else (h[9] or "")).strip() or "NOTA PENJUALAN"
+
     return {
-        "no_transaksi": (h[0] or "").strip(), "tanggal": h[1],
-        "kd_customer": (h[2] or "").strip(), "customer": (h[3] or "").strip(),
-        "kd_user": (h[4] or "").strip(), "keterangan": (h[5] or "").strip(),
-        "diskon_uang": float(h[6] or 0), "pajak": float(h[7] or 0),
-        "total": float(h[8] or 0), "baris": baris,
-        "toko": (d[0] if d else "") or "",
+        "no_transaksi": (h[0] or "").strip(),
+        "tanggal": h[1],
+        "kd_customer": (h[2] or "").strip(),
+        "customer": (h[3] or "").strip(),
+        "kd_user": (h[4] or "").strip(),
+        # Dua orang berbeda, dua kolom berbeda: `kasir` menulis notanya,
+        # `pegawai` melayani penjualannya.
+        "kasir": (h[5] or "").strip() or (h[4] or "").strip(),
+        "pegawai": next((b["pegawai"] for b in baris if b["pegawai"]), ""),
+        "kd_jenis": (h[6] or "").strip(),
+        "jenis_bayar": (h[7] or "").strip() or (h[6] or "").strip(),
+        "kd_divisi": (h[8] or "").strip(),
+        "divisi": (h[9] or "").strip(),
+        "no_bukti": "" if no_bukti == KOSONG else no_bukti,
+        "keterangan": "" if ket == KOSONG else ket,
+        "jatuh_tempo": h[12],
+        "bruto": bruto,
+        "diskon": bruto + pajak_rp - total,
+        "pajak": pajak,
+        "pajak_rp": pajak_rp,
+        "total": total,
+        "baris": baris,
+        "toko": nama_toko,
+        "alamat": ((prof[1] if prof else "") or "").strip(),
+        "telepon": ((prof[2] if prof else "") or "").strip(),
     }
 
 

@@ -15,6 +15,7 @@ urlpatterns = [
     path("users/<int:user_id>/toggle", views.users_toggle, name="users_toggle"),
     path("users/<int:user_id>/delete", views.users_delete, name="users_delete"),
     path("master/products", views.products_index, name="products"),
+    path("master/products/export", views.products_export, name="products_export"),
     path("master/customers", views.customers_index, name="customers"),
     path("master/suppliers", views.suppliers_index, name="suppliers"),
     path("master/sync-history", views.sync_history_index, name="sync_history"),
@@ -32,6 +33,8 @@ urlpatterns = [
          name="kelola_referensi_save"),
     path("master/kode-nota", views.kode_nota_index, name="kode_nota"),
     path("master/kode-nota/save", views.kode_nota_save, name="kode_nota_save"),
+    path("master-data/informasi-perusahaan", views.informasi_perusahaan, name="informasi_perusahaan"),
+
     # Alamat lama, dipertahankan SEMENTARA untuk masa peralihan. Halaman yang
     # sudah terbuka di tab orang lain masih memegang URL ini, dan
     # `query_string=True` menjaga `?search=` mereka ikut terbawa — tanpa itu

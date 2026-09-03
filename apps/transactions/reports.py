@@ -1750,3 +1750,90 @@ def transaksi_barang(*, jenis=None, date_from=None, date_to=None, kd_divisi=None
         + where_sql
     )
     return inner, params + outer_params
+
+
+# --- Master Produk --
+# Layar katalog, bukan laporan periode — `f["date_from"]/["date_to"]` sengaja
+# diabaikan seluruhnya, seperti voucher() di atas.
+#
+# Sebelum ini halaman Master Produk memakai `master_data.services.list_products`,
+# yang mengirim SELURUH katalog (~55.000 barang x 20 kunci) sebagai list-of-dict
+# lalu menyaringnya di peramban. Itu penyakit yang sama yang dulu membunuh Stok
+# Akhir (15,6 MB JSON, 123 MB heap, tak pernah selesai memuat di Firefox
+# Android) — lihat CLAUDE.md § columnar. Di sini ia diganti paginasi server.
+#
+# Kolom `stok` TIDAK ada di sini, dan itu perbaikan, bukan kelalaian:
+# `m_barang_stok_akhir` cache stok legacy yang terlantar — tak ada trigger di
+# `t_pembelian_detail` maupun `t_mutasi_stok_detail`, jadi ia hanya pernah turun
+# (22.592 dari 22.703 baris negatif, minimum -7.187.049 di grosirPusat). Angka
+# yang dulu tampil di kolom Stok layar ini selalu salah. Stok yang benar ada di
+# Stok Akhir / Stok per Divisi, yang memakai mesin pergerakan di
+# apps/inventory/services.py.
+SORTS_MASTER_PRODUK = {
+    "kd_barang": "kd_barang", "nama": "nama", "kategori": "kategori",
+    "jenis_bahan": "jenis_bahan", "departemen": "departemen",
+    "divisi_barang": "divisi_barang", "sub_kategori": "sub_kategori",
+    "ukuran": "ukuran", "pabrik": "pabrik", "satuan": "satuan",
+    "harga_jual": "harga_jual", "status": "status",
+}
+SUMMARY_MASTER_PRODUK = (
+    "COUNT(*) AS jml_baris, "
+    "COALESCE(SUM(CASE WHEN status = 'Aktif' THEN 1 ELSE 0 END), 0) AS jml_aktif, "
+    "COALESCE(SUM(CASE WHEN status <> 'Aktif' THEN 1 ELSE 0 END), 0) AS jml_nonaktif"
+)
+
+# Istilah layar mengikuti sebutan di toko, bukan nama tabelnya: m_model =
+# Departemen, m_merk = Divisi Barang, m_warna = Sub Kategori. Dipertahankan dari
+# versi list_products supaya operator tak perlu belajar ulang.
+_MASTER_PRODUK_FILTER = {
+    "kd_kategori": "b.kd_kategori", "kd_merk": "b.kd_merk",
+    "kd_model": "b.kd_model", "kd_warna": "b.kd_warna",
+    "kd_jenis_bahan": "b.kd_jenis_bahan",
+}
+
+
+def master_produk(f):
+    where, params = ["1=1"], []
+    _search(where, params, f, ["b.kd_barang", "b.nama", "b.pabrik"])
+
+    for key, kolom in _MASTER_PRODUK_FILTER.items():
+        nilai = (f.get(key) or "").strip()
+        if nilai:
+            where.append(f"{kolom} = ?")
+            params.append(nilai)
+    if (f.get("kd_satuan") or "").strip():
+        where.append("bs.kd_satuan = ?")
+        params.append(f["kd_satuan"].strip())
+    status = (f.get("status") or "").strip()
+    if status in ("0", "1"):
+        where.append("b.status = ?" if status == "1" else "b.status <> ?")
+        params.append(1)
+
+    # Satu satuan jual per barang. `list_products` dulu mengambil SELURUH
+    # m_barang_satuan lalu memilih baris pertama per barang di Python; di sini
+    # OUTER APPLY yang melakukannya, jadi tabelnya tak pernah dibawa utuh.
+    # Urutan `jumlah` menaik = satuan terkecil (pcs sebelum lusin/dus), yang
+    # memang harga acuan di layar katalog.
+    inner = (
+        "SELECT RTRIM(b.kd_barang) AS kd_barang, b.nama, "
+        "RTRIM(b.kd_kategori) AS kd_kategori, COALESCE(k.nama, '') AS kategori, "
+        "COALESCE(jb.nama, '') AS jenis_bahan, COALESCE(mo.nama, '') AS departemen, "
+        "COALESCE(mk.nama, '') AS divisi_barang, COALESCE(wr.nama, '') AS sub_kategori, "
+        "COALESCE(b.ukuran, '') AS ukuran, COALESCE(b.pabrik, '') AS pabrik, "
+        "COALESCE(st.nama, '') AS satuan, COALESCE(bs.harga_jual, 0) AS harga_jual, "
+        "CASE WHEN b.status = 1 THEN 'Aktif' ELSE 'Nonaktif' END AS status, "
+        "COALESCE(b.status_pinjam, '') AS status_pinjam, "
+        "COALESCE(b.keterangan, '') AS keterangan "
+        "FROM m_barang b "
+        "LEFT JOIN m_kategori k ON k.kd_kategori = b.kd_kategori "
+        "LEFT JOIN m_jenis_bahan jb ON jb.kd_jenis_bahan = b.kd_jenis_bahan "
+        "LEFT JOIN m_model mo ON mo.kd_model = b.kd_model "
+        "LEFT JOIN m_merk mk ON mk.kd_merk = b.kd_merk "
+        "LEFT JOIN m_warna wr ON wr.kd_warna = b.kd_warna "
+        "OUTER APPLY (SELECT TOP 1 x.kd_satuan, x.harga_jual FROM m_barang_satuan x "
+        "             WHERE x.kd_barang = b.kd_barang "
+        "             ORDER BY x.jumlah, x.kd_satuan) bs "
+        "LEFT JOIN m_satuan st ON st.kd_satuan = bs.kd_satuan "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params

@@ -470,39 +470,6 @@ def users_delete(request, user_id):
     return redirect("/admin-panel/users")
 
 
-# --- Master: produk (read-only) -------------------------------------------
-
-def products_index(request):
-    search = request.GET.get("search", "")
-    kd_kategori = request.GET.get("kd_kategori", "")
-    profile = _active()
-
-    # Deferred: katalog penuh (tanpa cap) bisa makan detik-an — shell (judul,
-    # kartu) tampil instan, tabel muncul begitu query selesai.
-    def load_products():
-        products, categories, conn_error = [], [], None
-        if profile:
-            try:
-                products = master.list_products(profile, search, kd_kategori)
-                categories = master.list_categories(profile)
-            except pyodbc.Error as exc:
-                conn_error = mssql.friendly_error(exc, "Gagal membaca master produk")
-        else:
-            conn_error = CONN_ERROR
-        # `harga_jual` di sini persis harga jual, jadi kunci izinnya yang tepat —
-        # bukan `nominal`. Akun yang cuma mencabut nominal tetap boleh melihat
-        # daftar harga, dan itu memang maksud ketiga kunci itu dipisah.
-        products = _tanpa_uang(
-            products, _uang_bespoke(request, {"harga_jual"}, kunci="harga_jual"))
-        return {"rows": products, "categories": categories, "conn_error": conn_error}
-
-    return render(
-        request,
-        "Admin/MasterData/Products",
-        props={"products": defer(load_products)},
-    )
-
-
 # --- Master: pelanggan (read-only) ----------------------------------------
 
 def customers_index(request):
@@ -1667,6 +1634,36 @@ def kode_nota_save(request):
     return redirect("/admin-panel/master/kode-nota")
 
 
+def informasi_perusahaan(request):
+    """Layar & handler simpan kelola informasi perusahaan."""
+    profile = _active()
+    if request.method == "POST":
+        if not profile:
+            request.session["flash_error"] = CONN_ERROR
+            return redirect("/admin-panel/master-data/informasi-perusahaan")
+        try:
+            data = get_data(request)
+            master.simpan_info_perusahaan(profile, data)
+            log_activity(request, "informasi_perusahaan", "Memperbarui profil informasi perusahaan")
+            request.session["flash_success"] = "Informasi Perusahaan berhasil disimpan."
+        except ValueError as exc:
+            request.session["flash_error"] = str(exc)
+        except pyodbc.Error as exc:
+            request.session["flash_error"] = mssql.friendly_error(exc, "Gagal menyimpan informasi perusahaan")
+        return redirect("/admin-panel/master-data/informasi-perusahaan")
+
+    def muat():
+        if not profile:
+            return {"info": {}, "conn_error": CONN_ERROR}
+        try:
+            return {"info": master.baca_info_perusahaan(profile), "conn_error": None}
+        except pyodbc.Error as exc:
+            return {"info": {}, "conn_error": mssql.friendly_error(exc, "Gagal membaca informasi perusahaan")}
+
+    return render(request, "Admin/MasterData/KelolaInformasiPerusahaan", props={"info": defer(muat)})
+
+
+
 def _deny_non_superadmin(request):
     if request.user.role != Role.SUPERADMIN:
         return ditolak(
@@ -2042,6 +2039,69 @@ def _report_export(spec):
 
 
 # Penjualan
+
+# --- Master: produk (read-only) -------------------------------------------
+# Laporan spec-driven, bukan view bespoke. Versi sebelumnya mengirim SELURUH
+# katalog (~55.000 barang) sebagai list-of-dict dan menyaringnya di peramban,
+# sementara panel filternya `@submit="() => {}"` — kosong — sehingga `?search=`
+# tak pernah sampai ke server dan tiap muat mengambil semuanya. Gejalanya di
+# layar cuma "memuat terus".
+#
+# Pindah ke `_report_view` sekalian menutup dua hal gratis: penyaringan izin
+# uang jadi otomatis (`harga_jual` sudah terdaftar di `_FIELDS_BY_DATA_KEY`,
+# jadi `_uang_bespoke` di sini tak diperlukan lagi) dan query-nya lewat
+# `report_cursor` (READ UNCOMMITTED), yang penting karena halaman ini memindai
+# tabel yang sedang ditulis POS.
+def _opt_master_produk(profile):
+    return {
+        "kategori": _opt_master(profile, "SELECT kd_kategori, nama FROM m_kategori ORDER BY nama"),
+        "merk": _opt_master(profile, "SELECT kd_merk, nama FROM m_merk ORDER BY nama"),
+        "model": _opt_master(profile, "SELECT kd_model, nama FROM m_model ORDER BY nama"),
+        "warna": _opt_master(profile, "SELECT kd_warna, nama FROM m_warna ORDER BY nama"),
+        "jenis_bahan": _opt_master(profile, "SELECT kd_jenis_bahan, nama FROM m_jenis_bahan ORDER BY nama"),
+        "satuan": _opt_master(profile, "SELECT kd_satuan, nama FROM m_satuan ORDER BY nama"),
+    }
+
+
+_MASTER_PRODUK = {
+    "component": "Admin/MasterData/Products",
+    "url": "/admin-panel/master/products",
+    "inner": rpt.master_produk,
+    "sorts": rpt.SORTS_MASTER_PRODUK,
+    "default_sort": "nama",
+    # Katalog dibaca A→Z. `desc` bawaan laporan cocok untuk tanggal, tidak untuk
+    # nama barang — ia menaruh huruf Z di halaman pertama.
+    "default_sort_dir": "asc",
+    "summary": rpt.SUMMARY_MASTER_PRODUK,
+    "filter_keys": ["kd_kategori", "kd_merk", "kd_model", "kd_warna",
+                    "kd_jenis_bahan", "kd_satuan", "status"],
+    "filters": {"harga_jual": ("harga_jual", "number_range")},
+    # Lambda, bukan rujukan langsung: spec ini dict tingkat-modul, jadi
+    # menaruh fungsinya apa adanya membekukan objeknya saat impor dan
+    # patch di tes tak pernah kena. Sama seperti spec laporan lain.
+    "options": lambda p: _opt_master_produk(p),
+    "filename": "produk",
+    "columns": [
+        {"key": "kd_barang", "label": "Kode"},
+        {"key": "nama", "label": "Nama Produk"},
+        {"key": "kategori", "label": "Kategori"},
+        {"key": "jenis_bahan", "label": "Jenis Bahan"},
+        {"key": "departemen", "label": "Departemen"},
+        {"key": "divisi_barang", "label": "Divisi Barang"},
+        {"key": "sub_kategori", "label": "Sub Kategori"},
+        {"key": "ukuran", "label": "Ukuran"},
+        {"key": "pabrik", "label": "Pabrik"},
+        {"key": "satuan", "label": "Satuan", "align": "center"},
+        {"key": "harga_jual", "label": "Harga", "align": "right", "format": "rupiah"},
+        {"key": "status", "label": "Status", "align": "center"},
+        {"key": "status_pinjam", "label": "Status Pinjam", "align": "center"},
+        {"key": "keterangan", "label": "Keterangan"},
+    ],
+}
+products_index = _report_view(_MASTER_PRODUK)
+products_export = _report_export(_MASTER_PRODUK)
+
+
 _PENJUALAN_ALL = {
     "component": "Admin/Reports/PenjualanAll",
     "url": "/admin-panel/laporan/penjualan",
