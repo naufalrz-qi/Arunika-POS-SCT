@@ -225,6 +225,28 @@ class BacaNotaTests(SimpleTestCase):
         self.assertIsNone(pj.baca_nota(object(), "   "))
 
 
+    def test_profil_contoh_installer_tak_pernah_jadi_kop(self):
+        """`g_info_profile` di SERVER-TOYS (18.927 baris) dan SERVER-GUDANG
+        (15.698) masih berisi teks contoh bawaan installer legacy. Mencetak
+        "PERUSAHAAN ANDA / ALAMAT PERUSAHAAN / Telp : 0" di struk pelanggan
+        lebih buruk daripada tak mencetak apa pun; nama divisi notanya dipakai
+        sebagai gantinya, karena di server itu ia satu-satunya nama yang nyata."""
+        nota, _ = _baca(self.HEADER, self.DETAIL,
+                        ("PERUSAHAAN ANDA", "ALAMAT PERUSAHAAN", "0"))
+        self.assertEqual(nota["toko"], "GUDANG")     # m_divisi.nama notanya
+        self.assertEqual(nota["alamat"], "")
+        self.assertEqual(nota["telepon"], "")
+
+    def test_profil_terisi_menang_atas_nama_divisi(self):
+        nota, _ = _baca(self.HEADER, self.DETAIL)
+        self.assertEqual(nota["toko"], "SUKSES CROWN TOYS")
+        self.assertEqual(nota["telepon"], "0370-123")
+
+    def test_profil_kosong_jatuh_ke_divisi(self):
+        nota, _ = _baca(self.HEADER, self.DETAIL, ("", "", ""))
+        self.assertEqual(nota["toko"], "GUDANG")
+
+
 class LabelDiskonTests(SimpleTestCase):
     def test_fraksi_jadi_persen(self):
         self.assertEqual(pj._label_diskon([0.1, 0, 0, 0]), "10%")

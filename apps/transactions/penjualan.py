@@ -628,6 +628,24 @@ def barang_persis(profile, kode: str) -> dict | None:
             "harga_jual": float(r[4] or 0)}
 
 
+# Teks contoh bawaan installer legacy, bukan identitas siapa pun. `g_info_profile`
+# di SERVER-TOYS (18.927 baris) dan SERVER-GUDANG (15.698) masih berisi ini apa
+# adanya — nama toko yang sebenarnya justru ada di `m_divisi.nama`. Mencetak
+# "PERUSAHAAN ANDA / ALAMAT PERUSAHAAN / Telp : 0" di kop struk pelanggan lebih
+# buruk daripada tidak mencetak apa-apa, jadi nilai-nilai ini diperlakukan sama
+# dengan kosong. Perbaikan sesungguhnya tetap mengisi layar Informasi Perusahaan.
+_PROFIL_CONTOH = {
+    "", "-", "0", "PERUSAHAAN ANDA", "NAMA PERUSAHAAN", "ALAMAT PERUSAHAAN",
+    "ALAMAT", "TELEPON", "NO TELEPON",
+}
+
+
+def _terisi(nilai) -> str:
+    """Nilai profil perusahaan, atau string kosong bila ia cuma teks contoh."""
+    v = (nilai or "").strip()
+    return "" if v.upper() in _PROFIL_CONTOH else v
+
+
 def _label_diskon(nilai, satuan: str = "") -> str:
     """Diskon baris jadi teks pendek untuk struk: "10%", "500/PCS", "10%+500/PCS".
 
@@ -763,7 +781,10 @@ def baca_nota(profile, no_transaksi: str) -> dict | None:
 
     ket = (h[11] or "").strip()
     no_bukti = (h[10] or "").strip()
-    nama_toko = (prof[0] if prof and prof[0] else (h[9] or "")).strip() or "NOTA PENJUALAN"
+    # Urutannya: profil perusahaan -> nama divisi notanya -> menyerah. Di server
+    # yang profilnya belum diisi, nama divisi adalah satu-satunya nama toko yang
+    # benar-benar ada di sana.
+    nama_toko = _terisi(prof[0] if prof else "") or (h[9] or "").strip() or "NOTA PENJUALAN"
 
     return {
         "no_transaksi": (h[0] or "").strip(),
@@ -789,8 +810,8 @@ def baca_nota(profile, no_transaksi: str) -> dict | None:
         "total": total,
         "baris": baris,
         "toko": nama_toko,
-        "alamat": ((prof[1] if prof else "") or "").strip(),
-        "telepon": ((prof[2] if prof else "") or "").strip(),
+        "alamat": _terisi(prof[1] if prof else ""),
+        "telepon": _terisi(prof[2] if prof else ""),
     }
 
 

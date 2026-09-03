@@ -119,12 +119,13 @@ const teks = computed(() => {
   for (const t of ket) L.push(t);
   for (let i = ket.length; i < 2; i++) L.push(".".repeat(LEBAR));
 
-  // 6. Tanda tangan.
+  // 6. Tanda tangan. Hanya penerima — struk ini bukti terima barang, dan
+  //    tanda tangan toko di atasnya tak pernah dibubuhkan siapa pun.
   L.push("");
-  L.push("  Penerima,              Hormat kami,");
+  L.push("  Penerima,");
   L.push("");
   L.push("");
-  L.push(" ..............         ..............");
+  L.push(" ..............");
   L.push(garis("="));
   L.push(tengah("Terima kasih atas kunjungan Anda"));
   L.push("");
