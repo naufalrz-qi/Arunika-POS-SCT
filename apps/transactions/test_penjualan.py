@@ -138,20 +138,35 @@ class NotaPalsu:
 PROFIL = ("SUKSES CROWN TOYS", "Jl. Selaparang 166", "0370-123")
 
 
-def _baca(header, detail, profil=PROFIL):
+class TanpaInfoArunika:
+    """`InfoPerusahaan` kosong — kop jatuh ke cadangan `g_info_profile`."""
+
+    class objects:
+        @staticmethod
+        def filter(**kw):
+            class Q:
+                @staticmethod
+                def first():
+                    return None
+            return Q
+
+
+def _baca(header, detail, profil=PROFIL, milik=TanpaInfoArunika):
     cur = NotaPalsu(header, detail, profil)
-    with patch.object(pj.mssql, "cursor", lambda *a, **k: _ctx(cur)):
+    import apps.core.models as core_models
+    with patch.object(pj.mssql, "cursor", lambda *a, **k: _ctx(cur)),             patch.object(core_models, "InfoPerusahaan", milik):
         return pj.baca_nota(object(), "SC2608140001"), cur
 
 
 class BacaNotaTests(SimpleTestCase):
     """Header: no, tanggal, kd_customer, customer, kd_user, kasir, kd_jenis,
     jenis_bayar, kd_divisi, divisi, no_bukti, keterangan, jatuh_tempo,
-    diskon1..4, diskon_uang, pajak, total."""
+    diskon1..4, diskon_uang, pajak, total, status_bayar, nominal_voucher."""
 
     HEADER = ("SC2608140001", dt.datetime(2026, 8, 14, 10, 0), "CAA000", "UMUM",
               "UAA034", "ADMIN6", "JAA000", "TUNAI", "DAA000", "GUDANG",
-              "-", "-", dt.datetime(2026, 9, 13), 0, 0, 0, 0, 0.0, 0.0, 539500.0)
+              "-", "-", dt.datetime(2026, 9, 13), 0, 0, 0, 0, 0.0, 0.0, 539500.0,
+              1, 0.0)
     # kd_barang, nama, kd_satuan, satuan, qty, harga, d1..d4, total, pegawai
     DETAIL = [("BOLALA", "PERMEN BOLALA", "SAA002", "RTG", 120.0, 5000.0,
                500.0, 0.0, 0.0, 0.0, 540000.0, "MAJDI")]
@@ -186,7 +201,8 @@ class BacaNotaTests(SimpleTestCase):
         nota, _ = _baca(self.HEADER, self.DETAIL)
         self.assertAlmostEqual(nota["bruto"], 600000.0)
         self.assertAlmostEqual(
-            nota["bruto"] - nota["diskon"] + nota["pajak_rp"], nota["total"], places=2)
+            nota["bruto"] - nota["diskon"] - nota["voucher"] + nota["pajak_rp"],
+            nota["total"], places=2)
 
     def test_diskon_gabungan_termasuk_diskon_uang(self):
         """diskon_uang dikurangi SETELAH pajak di total_nota, jadi ia tak bisa
@@ -206,7 +222,8 @@ class BacaNotaTests(SimpleTestCase):
         self.assertAlmostEqual(nota["pajak_rp"], 27000.0)
         self.assertAlmostEqual(nota["total"], 567000.0)
         self.assertAlmostEqual(
-            nota["bruto"] - nota["diskon"] + nota["pajak_rp"], nota["total"], places=2)
+            nota["bruto"] - nota["diskon"] - nota["voucher"] + nota["pajak_rp"],
+            nota["total"], places=2)
 
     def test_sentinel_strip_jadi_kosong(self):
         """`keterangan`/`no_bukti` legacy berisi "-", bukan string kosong —
@@ -245,6 +262,53 @@ class BacaNotaTests(SimpleTestCase):
     def test_profil_kosong_jatuh_ke_divisi(self):
         nota, _ = _baca(self.HEADER, self.DETAIL, ("", "", ""))
         self.assertEqual(nota["toko"], "GUDANG")
+
+
+    def test_voucher_dipisah_dari_diskon(self):
+        """`t_penjualan_total.total` SUDAH memotong nominal voucher — terukur di
+        SERVER-TOYS: pada tiga nota bervoucher, `bruto - total` persis sama
+        dengan nominalnya. Kalau tak dipisah, potongan itu tercetak sebagai
+        "Diskon" dan pelanggan yang menyerahkan voucher Rp50.000 tak punya bukti
+        vouchernya dipakai."""
+        h = list(self.HEADER)
+        h[19] = 540000.0 - 50000.0   # total sudah dipotong voucher
+        h[21] = 50000.0              # m_voucher.nominal
+        nota, _ = _baca(tuple(h), self.DETAIL)
+        self.assertAlmostEqual(nota["voucher"], 50000.0)
+        self.assertAlmostEqual(nota["diskon"], 60000.0)   # diskon baris saja
+        self.assertAlmostEqual(
+            nota["bruto"] - nota["diskon"] - nota["voucher"], nota["total"], places=2)
+
+    def test_status_bayar_dari_m_jenis_bayar_bukan_t_penjualan(self):
+        """`t_penjualan.status` praktis selalu 1 (523.878 baris berbanding 7),
+        jadi ia tak membedakan apa pun. Yang membedakan lunas dari piutang adalah
+        `m_jenis_bayar.status`: 1 untuk TUNAI/BON/DEBIT, 2 untuk BG/CEK/KREDIT."""
+        nota, _ = _baca(self.HEADER, self.DETAIL)
+        self.assertEqual(nota["status_bayar"], "LUNAS")
+        h = list(self.HEADER)
+        h[20] = 2
+        nota, _ = _baca(tuple(h), self.DETAIL)
+        self.assertEqual(nota["status_bayar"], "KREDIT")
+
+    def test_kop_dari_tabel_arunika_menang_atas_legacy(self):
+        """Identitas milik Arunika (`core.InfoPerusahaan`) mengalahkan
+        `g_info_profile`; yang legacy cuma cadangan."""
+        class Punya:
+            perusahaan, alamat, telp = "SCT PRAYA", "Jl. Sudirman 14", "0819"
+
+            class objects:
+                @staticmethod
+                def filter(**kw):
+                    class Q:
+                        @staticmethod
+                        def first():
+                            return Punya
+                    return Q
+
+        nota, _ = _baca(self.HEADER, self.DETAIL, milik=Punya)
+        self.assertEqual(nota["toko"], "SCT PRAYA")
+        self.assertEqual(nota["alamat"], "Jl. Sudirman 14")
+        self.assertEqual(nota["telepon"], "0819")
 
 
 class LabelDiskonTests(SimpleTestCase):

@@ -554,3 +554,40 @@ class HubPullState(models.Model):
         # ASCII, bukan panah: ini muncul di konsol Windows (cp1252), yang tak bisa
         # mengencode U+2192 dan melempar justru saat seseorang menelusuri kegagalan.
         return f"{self.source_profile_id}->{self.target_profile_id} arsip={bool(self.arsip_selesai_at)}"
+
+
+class InfoPerusahaan(models.Model):
+    """Identitas perusahaan untuk kop struk — SATU baris per koneksi.
+
+    Disimpan di SQLite, bukan di `g_info_profile` pada server legacy, dan itu
+    keputusan yang dibeli dengan pengukuran. Tabel legacy itu bukan tabel master:
+    16.581 baris di grosirPusat / 18.927 di SERVER-TOYS / 14.867 di testGudang,
+    `COUNT(DISTINCT)` = 1 pada SETIAP kolom (seluruhnya duplikat identik), dan
+    `sys.indexes` cuma memulangkan satu baris HEAP — tanpa primary key, tanpa
+    kolom identity, tanpa index. Tak ada `WHERE` yang bisa menunjuk satu baris di
+    sana, sehingga satu-satunya tulis yang benar adalah mengganti SELURUH isinya.
+    Menulis belasan ribu baris tiap klik Simpan, ke tabel milik aplikasi lama
+    yang masih membacanya, bukan harga yang pantas dibayar untuk tiga baris kop.
+
+    Di sini identitasnya milik Arunika sendiri: satu baris, punya kunci, dan
+    tidak menyentuh satu pun tabel legacy.
+
+    Per KONEKSI, bukan global — alasan yang sama seperti `TautanUser`: satu
+    Arunika melayani gudang dan delapan grosir, dan tiap server punya alamat dan
+    telepon sendiri.
+    """
+
+    profile = models.OneToOneField(
+        "connections.ServerProfile", on_delete=models.CASCADE, related_name="info_perusahaan")
+    perusahaan = models.CharField(max_length=200, blank=True, default="")
+    alamat = models.CharField(max_length=300, blank=True, default="")
+    kota = models.CharField(max_length=100, blank=True, default="")
+    telp = models.CharField(max_length=60, blank=True, default="")
+    hp = models.CharField(max_length=60, blank=True, default="")
+    email = models.CharField(max_length=120, blank=True, default="")
+    website = models.CharField(max_length=120, blank=True, default="")
+    nama_kontak = models.CharField(max_length=120, blank=True, default="")
+    diperbarui_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"{self.profile_id}: {self.perusahaan or '(belum diisi)'}"

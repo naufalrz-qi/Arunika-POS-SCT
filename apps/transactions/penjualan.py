@@ -707,12 +707,13 @@ def baca_nota(profile, no_transaksi: str) -> dict | None:
             "h.kd_user, u.nama, h.kd_jenis, jb.nama, "
             "h.kd_divisi, dv.nama, h.no_bukti, h.keterangan, h.tanggal_jatuh_tempo, "
             "h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.diskon_uang, h.pajak, "
-            "t.total "
+            "t.total, jb.status, vc.nominal "
             "FROM t_penjualan h "
             "LEFT JOIN m_customer c ON c.kd_customer = h.kd_customer "
             "LEFT JOIN m_userx u ON u.kd_user = h.kd_user "
             "LEFT JOIN m_jenis_bayar jb ON jb.kd_jenis = h.kd_jenis "
             "LEFT JOIN m_divisi dv ON dv.kd_divisi = h.kd_divisi "
+            "LEFT JOIN m_voucher vc ON vc.kd_voucher = h.kd_voucher "
             "LEFT JOIN t_penjualan_total t ON t.no_transaksi = h.no_transaksi "
             "WHERE h.no_transaksi = ?",
             [no_transaksi],
@@ -779,12 +780,31 @@ def baca_nota(profile, no_transaksi: str) -> dict | None:
     pajak_rp = net * pajak
     total = float(h[19]) if h[19] is not None else total_nota(items, dh, diskon_uang, pajak)
 
+    # Voucher dipisahkan dari Diskon, dan itu bukan kosmetik. `t_penjualan_total.total`
+    # SUDAH memotong nominal voucher (terukur di SERVER-TOYS: pada tiga nota
+    # bervoucher, `bruto - total` persis sama dengan nominalnya). Tanpa dipisah,
+    # potongan voucher tercetak sebagai "Diskon" — pelanggan yang menyerahkan
+    # voucher Rp50.000 melihat "Diskon 50.000" dan tak ada bukti vouchernya
+    # dipakai. `total_nota()` sendiri TIDAK mengurangkan voucher, jadi angka ini
+    # hanya benar selama `total` datang dari database.
+    voucher = float(h[21] or 0) if h[19] is not None else 0.0
+
     ket = (h[11] or "").strip()
     no_bukti = (h[10] or "").strip()
-    # Urutannya: profil perusahaan -> nama divisi notanya -> menyerah. Di server
-    # yang profilnya belum diisi, nama divisi adalah satu-satunya nama toko yang
-    # benar-benar ada di sana.
-    nama_toko = _terisi(prof[0] if prof else "") or (h[9] or "").strip() or "NOTA PENJUALAN"
+    # Identitas Arunika (SQLite) menang atas `g_info_profile`; yang legacy cuma
+    # cadangan untuk server yang sudah terlanjur mengisinya. Lihat
+    # `core.models.InfoPerusahaan` untuk alasan tabelnya dipindah.
+    from apps.core.models import InfoPerusahaan
+
+    milik = InfoPerusahaan.objects.filter(profile=profile).first()
+    p_nama = (milik.perusahaan if milik else "") or (prof[0] if prof else "")
+    p_alamat = (milik.alamat if milik else "") or (prof[1] if prof else "")
+    p_telp = (milik.telp if milik else "") or (prof[2] if prof else "")
+
+    # Urutannya: identitas perusahaan -> nama divisi notanya -> menyerah. Di
+    # server yang profilnya belum diisi, nama divisi adalah satu-satunya nama
+    # toko yang benar-benar ada di sana.
+    nama_toko = _terisi(p_nama) or (h[9] or "").strip() or "NOTA PENJUALAN"
 
     return {
         "no_transaksi": (h[0] or "").strip(),
@@ -804,14 +824,19 @@ def baca_nota(profile, no_transaksi: str) -> dict | None:
         "keterangan": "" if ket == KOSONG else ket,
         "jatuh_tempo": h[12],
         "bruto": bruto,
-        "diskon": bruto + pajak_rp - total,
+        "diskon": bruto + pajak_rp - total - voucher,
+        "voucher": voucher,
+        # `m_jenis_bayar.status`: 1 = tunai/langsung lunas (TUNAI, BON, DEBIT),
+        # 2 = belum lunas (BG, CEK, KREDIT). BUKAN `t_penjualan.status`, yang
+        # praktis selalu 1 (523.878 baris berbanding 7) dan tak membedakan apa pun.
+        "status_bayar": "LUNAS" if int(h[20] or 1) == 1 else "KREDIT",
         "pajak": pajak,
         "pajak_rp": pajak_rp,
         "total": total,
         "baris": baris,
         "toko": nama_toko,
-        "alamat": _terisi(prof[1] if prof else ""),
-        "telepon": _terisi(prof[2] if prof else ""),
+        "alamat": _terisi(p_alamat),
+        "telepon": _terisi(p_telp),
     }
 
 

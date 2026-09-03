@@ -172,71 +172,54 @@ def update_kepala_nota(profile, kd_divisi, kepala_nota) -> dict:
     return {"kd_divisi": kd_divisi, "lama": lama, "baru": kepala}
 
 
-# --- Informasi perusahaan (g_info_profile) ----------------------------------
-# Tabel ini bukan tabel master yang rapi, dan itu menentukan bentuk kedua fungsi
-# di bawah. Terukur di server Testing (grosirPusat) 2026-09-03:
+# --- Informasi perusahaan ---------------------------------------------------
+# Disimpan di SQLite (`core.InfoPerusahaan`), BUKAN di `g_info_profile` server
+# legacy. Alasannya ada di docstring model itu, singkatnya: tabel legacy tersebut
+# heap tanpa kunci berisi belasan ribu baris duplikat identik, jadi satu-satunya
+# tulis yang benar ke sana adalah mengganti seluruh isinya — belasan ribu baris
+# tiap klik Simpan, ke tabel yang masih dibaca aplikasi lama.
 #
-#   16.581 baris, tapi COUNT(DISTINCT) = 1 pada SETIAP kolom — seluruhnya
-#   duplikat identik. Tak ada primary key, tak ada kolom identity, tak ada index
-#   sama sekali (sys.indexes: satu baris HEAP). testGudang: 14.867 baris.
-#
-# Artinya tidak ada cara menunjuk "baris yang mana". Satu-satunya tulis yang
-# benar adalah mengganti seluruh isinya dengan satu baris, di dalam satu
-# transaksi. Yang lama memakai `UPDATE ... SET` TANPA `WHERE`: hasil akhirnya
-# kebetulan sama, tapi ia menulis ulang 16.581 baris tiap klik Simpan.
+# `g_info_profile` tetap DIBACA sebagai cadangan supaya server yang identitasnya
+# sudah terlanjur terisi di sana (Testing, RTL PUSAT) tidak mendadak kehilangan
+# kopnya. Dibaca, tidak pernah ditulis.
 _INFO_KOLOM = ("perusahaan", "alamat", "kota", "telp", "hp", "email", "website", "nama_kontak")
 
 
-def baca_info_perusahaan(profile) -> dict:
-    """Profil perusahaan dari `g_info_profile`, atau nilai kosong bila tabelnya kosong.
-
-    `ORDER BY` bukan hiasan: tanpa itu `TOP 1` atas sebuah heap tak menjanjikan
-    baris yang sama dua kali. Hari ini seluruh barisnya identik sehingga tak
-    tampak bedanya — tapi begitu tabel ini pernah terisi dua profil berbeda,
-    kop struk akan berganti-ganti sendiri tanpa ada yang mengubah apa pun.
-    """
-    with mssql.cursor(profile) as cur:
-        cur.execute(
-            f"SELECT TOP 1 {', '.join(_INFO_KOLOM)} FROM g_info_profile "
-            "ORDER BY perusahaan, alamat, kota, telp"
-        )
-        row = cur.fetchone()
+def _info_legacy(profile) -> dict:
+    """Cadangan dari `g_info_profile`. `ORDER BY` wajib: TOP 1 atas sebuah heap
+    tak menjanjikan baris yang sama dua kali."""
+    try:
+        with mssql.cursor(profile) as cur:
+            cur.execute(
+                f"SELECT TOP 1 {', '.join(_INFO_KOLOM)} FROM g_info_profile "
+                "ORDER BY perusahaan, alamat, kota, telp"
+            )
+            row = cur.fetchone()
+    except pyodbc.Error:
+        return {}
     if not row:
-        return {k: "" for k in _INFO_KOLOM}
+        return {}
     return {k: (v or "").strip() for k, v in zip(_INFO_KOLOM, row)}
 
 
+def baca_info_perusahaan(profile) -> dict:
+    """Identitas perusahaan koneksi ini: tabel Arunika dulu, legacy sebagai cadangan."""
+    from apps.core.models import InfoPerusahaan
+
+    baris = InfoPerusahaan.objects.filter(profile=profile).first()
+    if baris and (baris.perusahaan or "").strip():
+        return {k: (getattr(baris, k) or "").strip() for k in _INFO_KOLOM}
+    return {**{k: "" for k in _INFO_KOLOM}, **_info_legacy(profile)}
+
+
 def simpan_info_perusahaan(profile, data: dict) -> None:
-    """Ganti isi `g_info_profile` dengan SATU baris.
+    """Simpan identitas perusahaan koneksi ini. TIDAK menyentuh MS SQL sama sekali."""
+    from apps.core.models import InfoPerusahaan
 
-    DELETE + INSERT, bukan UPDATE: lihat catatan di atas — tabelnya heap tanpa
-    kunci, jadi tak ada `WHERE` yang bisa menunjuk satu baris. Sekalian ini
-    memampatkan tumpukan duplikat peninggalan aplikasi lama jadi satu baris,
-    tanpa kehilangan informasi apa pun (seluruh baris identik).
-
-    `nama_kontak` ikut ditulis. Sebelumnya ia dibaca tapi tak pernah bisa
-    diubah, dan jalur INSERT-nya mengisi `"-"` — jadi mengisi kolom itu di layar
-    diam-diam tak berefek.
-
-    `modal_awal` TIDAK ada di layar ini dan tak boleh hilang karena DELETE: ia
-    kolom akuntansi milik aplikasi lama. Nilainya dibaca dulu lalu ditulis
-    kembali apa adanya.
-    """
-    nilai = [(str(data.get(k) or "")).strip()[:1000] for k in _INFO_KOLOM]
-    if not nilai[0]:
+    nilai = {k: str(data.get(k) or "").strip() for k in _INFO_KOLOM}
+    if not nilai["perusahaan"]:
         raise ValueError("Nama perusahaan wajib diisi.")
-
-    kolom = (*_INFO_KOLOM, "modal_awal")
-    tanya = ", ".join("?" for _ in kolom)
-    with mssql.cursor(profile, autocommit=False) as cur:
-        cur.execute("SELECT TOP 1 modal_awal FROM g_info_profile WHERE modal_awal IS NOT NULL")
-        baris = cur.fetchone()
-        cur.execute("DELETE FROM g_info_profile")
-        cur.execute(
-            f"INSERT INTO g_info_profile ({', '.join(kolom)}) VALUES ({tanya})",
-            [*nilai, baris[0] if baris else None],
-        )
-        cur.connection.commit()
+    InfoPerusahaan.objects.update_or_create(profile=profile, defaults=nilai)
 
 
 

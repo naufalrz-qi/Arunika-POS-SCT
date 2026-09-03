@@ -1,22 +1,24 @@
-"""Informasi Perusahaan menulis ke tabel yang tak bisa menunjuk barisnya sendiri.
+"""Identitas perusahaan disimpan di tabel Arunika, bukan di tabel legacy.
 
-`g_info_profile` bukan tabel master yang rapi. Terukur di server Testing
-(grosirPusat, 2026-09-03): 16.581 baris, tapi `COUNT(DISTINCT)` = 1 pada SETIAP
-kolom — seluruhnya duplikat identik — dan `sys.indexes` cuma memulangkan satu
-baris HEAP: tanpa primary key, tanpa kolom identity, tanpa index. testGudang:
-14.867 baris. Tak ada `WHERE` yang bisa menunjuk satu baris di sana.
+`g_info_profile` bukan tabel master yang rapi. Terukur 2026-09-03: 16.581 baris
+di grosirPusat, 18.927 di SERVER-TOYS, 14.867 di testGudang — dan
+`COUNT(DISTINCT)` = 1 pada SETIAP kolom, seluruhnya duplikat identik.
+`sys.indexes` cuma memulangkan satu baris HEAP: tanpa primary key, tanpa kolom
+identity, tanpa index. Tak ada `WHERE` yang bisa menunjuk satu baris di sana.
 
-Versi pertama layar ini memakai `UPDATE ... SET` TANPA `WHERE`, jadi satu klik
-Simpan menulis ulang 16.581 baris; dan tesnya menembak koneksi sungguhan lewat
-`core.mssql.get_profile` — fungsi yang tidak pernah ada di `core/mssql.py`,
-sehingga berkas ini gagal saat import dan mematahkan `manage.py test` untuk
-SELURUH proyek. Keduanya dijaga di sini, tanpa menyentuh MS SQL.
+Versi pertama layar ini menulis ke sana dengan `UPDATE ... SET` TANPA `WHERE`,
+jadi satu klik Simpan menulis ulang belasan ribu baris milik aplikasi lama.
+Sekarang identitasnya milik Arunika sendiri (`core.InfoPerusahaan`, SQLite):
+punya kunci, satu baris per koneksi, dan tak menyentuh satu pun tabel legacy.
+Yang dijaga di sini persis itu.
 """
 from contextlib import contextmanager
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
+from django.test import TestCase
 
+from apps.connections.models import ServerProfile
+from apps.core.models import InfoPerusahaan
 from apps.master_data import services as master
 
 
@@ -26,111 +28,106 @@ def _ctx(cur):
 
 
 class KursorPalsu:
-    def __init__(self, modal_awal=None):
+    """Menjawab satu SELECT `g_info_profile` dan merekam SQL yang lewat."""
+
+    def __init__(self, row=None):
         self.sql = []
-        self.params = []
-        self.commits = 0
-        self.autocommit = None
-        self._modal = modal_awal
+        self._row = row
         self.connection = self
 
     def execute(self, sql, params=None):
         self.sql.append(" ".join(sql.split()))
-        self.params.append(list(params or []))
 
     def fetchone(self):
-        if "modal_awal" in self.sql[-1]:
-            return (self._modal,) if self._modal is not None else None
-        return ("SUKSES CROWN TOYS", "Jl. Selaparang 166", "MATARAM",
-                "0370-123", "0812", "a@b.c", "www", "-")
+        return self._row
 
     def commit(self):
-        self.commits += 1
+        self.sql.append("COMMIT")
 
 
-def _jalankan(fn, *a, modal_awal=None, **kw):
-    cur = KursorPalsu(modal_awal)
-
-    def palsu(profile, autocommit=True, query_timeout=None):
-        cur.autocommit = autocommit
-        return _ctx(cur)
-
-    with patch.object(master.mssql, "cursor", palsu):
-        hasil = fn(object(), *a, **kw)
-    return hasil, cur
+def _profil(nama="Testing"):
+    return ServerProfile.objects.create(
+        name=nama, host=f"host-{nama}", db_name="SOLID_SIM",
+        username="sa", password_encrypted="x")
 
 
 DATA = {
-    "perusahaan": "SUKSES CROWN TOYS", "alamat": "Jl. Selaparang 166/36",
-    "kota": "MATARAM", "telp": "0370-123456", "hp": "08123456789",
+    "perusahaan": "SUKSES CROWN TOYS PRAYA",
+    "alamat": "Jln. Jendral Sudirman PERTOKOAN DISPENDA NO. 14 PRAYA",
+    "kota": "PRAYA", "telp": "0819 9821 5758", "hp": "08123456789",
     "email": "sct@example.com", "website": "www.sct.co.id", "nama_kontak": "BUDI",
 }
 
 
-class SimpanInfoPerusahaanTest(SimpleTestCase):
-    def test_tidak_pernah_update_tanpa_where(self):
-        """Ini cacat yang paling mahal di layar ini: satu klik Simpan menulis
-        ulang 16.581 baris, dan tak ada satu pun gejala di layar."""
-        _, cur = _jalankan(master.simpan_info_perusahaan, DATA)
-        for sql in cur.sql:
-            if sql.upper().startswith("UPDATE"):
-                self.fail(f"UPDATE tanpa WHERE masih ada: {sql}")
+class SimpanInfoPerusahaanTest(TestCase):
+    def setUp(self):
+        self.p = _profil()
 
-    def test_ganti_seluruh_isi_dengan_satu_baris(self):
-        _, cur = _jalankan(master.simpan_info_perusahaan, DATA)
-        tulis = [s for s in cur.sql if s.upper().startswith(("DELETE", "INSERT"))]
-        self.assertEqual(len(tulis), 2)
-        self.assertTrue(tulis[0].startswith("DELETE FROM g_info_profile"))
-        self.assertTrue(tulis[1].startswith("INSERT INTO g_info_profile"))
+    def test_tidak_menyentuh_mssql_sama_sekali(self):
+        """Ini inti perubahannya: menyimpan identitas perusahaan tak lagi
+        mengirim satu perintah pun ke server legacy."""
+        cur = KursorPalsu()
+        with patch.object(master.mssql, "cursor", lambda *a, **k: _ctx(cur)):
+            master.simpan_info_perusahaan(self.p, DATA)
+        self.assertEqual(cur.sql, [], f"MS SQL tersentuh: {cur.sql}")
 
-    def test_delete_dan_insert_satu_transaksi(self):
-        """DELETE yang berhasil lalu INSERT yang gagal akan mengosongkan
-        identitas perusahaan di seluruh struk, diam-diam."""
-        _, cur = _jalankan(master.simpan_info_perusahaan, DATA)
-        self.assertIs(cur.autocommit, False)
-        self.assertEqual(cur.commits, 1)
+    def test_tersimpan_satu_baris_per_koneksi(self):
+        master.simpan_info_perusahaan(self.p, DATA)
+        master.simpan_info_perusahaan(self.p, {**DATA, "perusahaan": "GANTI"})
+        self.assertEqual(InfoPerusahaan.objects.filter(profile=self.p).count(), 1)
+        self.assertEqual(InfoPerusahaan.objects.get(profile=self.p).perusahaan, "GANTI")
+
+    def test_tiap_koneksi_punya_identitasnya_sendiri(self):
+        """Satu Arunika melayani gudang dan delapan grosir; alamat dan telepon
+        tiap server berbeda. Alasan yang sama seperti TautanUser."""
+        lain = _profil("GUDANG")
+        master.simpan_info_perusahaan(self.p, DATA)
+        master.simpan_info_perusahaan(lain, {**DATA, "perusahaan": "GUDANG SCT"})
+        self.assertEqual(master.baca_info_perusahaan(self.p)["perusahaan"],
+                         "SUKSES CROWN TOYS PRAYA")
+        self.assertEqual(master.baca_info_perusahaan(lain)["perusahaan"], "GUDANG SCT")
 
     def test_nama_kontak_ikut_tersimpan(self):
         """Sebelumnya ia dibaca di layar tapi jalur tulisnya mengisi "-", jadi
         mengetiknya tak pernah berefek."""
-        _, cur = _jalankan(master.simpan_info_perusahaan, DATA)
-        self.assertIn("BUDI", cur.params[-1])
+        master.simpan_info_perusahaan(self.p, DATA)
+        self.assertEqual(master.baca_info_perusahaan(self.p)["nama_kontak"], "BUDI")
 
-    def test_modal_awal_tidak_hilang_karena_delete(self):
-        """Kolom akuntansi milik aplikasi lama; ia tak ada di layar ini, jadi
-        DELETE polos akan membuangnya tanpa ada yang tahu."""
-        _, cur = _jalankan(master.simpan_info_perusahaan, DATA, modal_awal=1500.0)
-        self.assertEqual(cur.params[-1][-1], 1500.0)
-
-    def test_nama_perusahaan_kosong_ditolak_sebelum_menghapus(self):
-        cur_dipakai = []
-
-        def palsu(profile, autocommit=True, query_timeout=None):
-            cur = KursorPalsu()
-            cur_dipakai.append(cur)
-            return _ctx(cur)
-
-        with patch.object(master.mssql, "cursor", palsu):
-            with self.assertRaises(ValueError):
-                master.simpan_info_perusahaan(object(), {**DATA, "perusahaan": "  "})
-        self.assertEqual(cur_dipakai, [], "DELETE tak boleh sempat berjalan")
-
-    def test_nilai_dipangkas_ke_lebar_kolom(self):
-        """varchar(1000) NOT NULL. Nilai yang lebih panjang ditolak database
-        sebagai galat ODBC mentah, bukan pesan yang bisa dibaca operator."""
-        _, cur = _jalankan(master.simpan_info_perusahaan, {**DATA, "alamat": "x" * 2000})
-        self.assertEqual(len(cur.params[-1][1]), 1000)
+    def test_nama_perusahaan_kosong_ditolak(self):
+        with self.assertRaises(ValueError):
+            master.simpan_info_perusahaan(self.p, {**DATA, "perusahaan": "  "})
+        self.assertFalse(InfoPerusahaan.objects.exists())
 
 
-class BacaInfoPerusahaanTest(SimpleTestCase):
-    def test_top_1_selalu_berurutan(self):
+class BacaInfoPerusahaanTest(TestCase):
+    def setUp(self):
+        self.p = _profil()
+
+    def _baca_dengan_legacy(self, row):
+        cur = KursorPalsu(row)
+        with patch.object(master.mssql, "cursor", lambda *a, **k: _ctx(cur)):
+            return master.baca_info_perusahaan(self.p), cur
+
+    def test_jatuh_ke_legacy_saat_tabel_arunika_kosong(self):
+        """Server yang identitasnya terlanjur terisi di g_info_profile (Testing,
+        RTL PUSAT) tak boleh mendadak kehilangan kopnya."""
+        info, _ = self._baca_dengan_legacy(
+            ("CROWN TOYS", "JL. SELAPARANG", "MATARAM", "0370-1", "", "", "", ""))
+        self.assertEqual(info["perusahaan"], "CROWN TOYS")
+
+    def test_legacy_dibaca_berurutan(self):
         """Tanpa ORDER BY, TOP 1 atas sebuah heap tak menjanjikan baris yang
         sama dua kali — kop struk bisa berganti sendiri."""
-        _, cur = _jalankan(master.baca_info_perusahaan)
+        _, cur = self._baca_dengan_legacy(("X", "", "", "", "", "", "", ""))
         self.assertIn("ORDER BY", cur.sql[0])
 
+    def test_tabel_arunika_menang_atas_legacy(self):
+        master.simpan_info_perusahaan(self.p, DATA)
+        info, cur = self._baca_dengan_legacy(("LEGACY LAMA", "", "", "", "", "", "", ""))
+        self.assertEqual(info["perusahaan"], "SUKSES CROWN TOYS PRAYA")
+        self.assertEqual(cur.sql, [], "legacy tak perlu dibaca kalau sudah ada isinya")
+
     def test_memulangkan_seluruh_kunci_layar(self):
-        info, _ = _jalankan(master.baca_info_perusahaan)
-        for k in ("perusahaan", "alamat", "kota", "telp", "hp", "email",
-                  "website", "nama_kontak"):
+        info, _ = self._baca_dengan_legacy(None)
+        for k in master._INFO_KOLOM:
             self.assertIn(k, info)
