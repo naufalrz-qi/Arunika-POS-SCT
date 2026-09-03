@@ -162,7 +162,7 @@ onMounted(() => {
 }
 /* Satu-satunya penebalan di seluruh struk, dan itu disengaja. Pada LX-310 bold
    jatuh ke double-strike (kepala mengetuk dua kali) — tetap TEKS, cuma sedikit
-   lebih lambat per baris. Yang memaksa seluruh halaman jadi grafis adalah
+   lebih lambat per baris. Yang memaksa halaman jadi grafis adalah
    tabel/border/warna, bukan ini. Menebalkan banyak baris membuat cetaknya
    terasa lambat tanpa menambah kejelasan. */
 .kop {
