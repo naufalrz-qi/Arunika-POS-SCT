@@ -197,6 +197,7 @@ def sync_health(profile) -> dict:
         "feed_waktu": None,
         "aktivitas_menit": None,
         "bukti": "",
+        "penyebab": "",
         "status": STATUS_OFFLINE,
         "status_label": LABEL[STATUS_OFFLINE],
         "error": "",
@@ -237,11 +238,24 @@ def sync_health(profile) -> dict:
     else:
         hasil["bukti"] = "aktif"         # ada perubahan baru DAN antrean bersih
 
-    status = _terburuk(
-        _nilai_status(umur_antre, ANTRE_OK_MENIT, ANTRE_LAMBAT_MENIT),
-        _nilai_status(umur_watermark, WATERMARK_OK_MENIT, WATERMARK_LAMBAT_MENIT),
-        _stuck(profile, mentah),
-    )
+    status_antre = _nilai_status(umur_antre, ANTRE_OK_MENIT, ANTRE_LAMBAT_MENIT)
+    status_watermark = _nilai_status(umur_watermark, WATERMARK_OK_MENIT, WATERMARK_LAMBAT_MENIT)
+    status_stuck = _stuck(profile, mentah)
+    status = _terburuk(status_antre, status_watermark, status_stuck)
+
+    # Sumbu mana pun yang serendah status akhir ikut disebut — bisa lebih dari
+    # satu kalau seri (antre DAN watermark sama-sama mati). Ini yang membuat
+    # badge "Mati" tidak perlu ditebak: user tak lagi harus membandingkan dua
+    # kolom angka terhadap ambang sendiri untuk tahu penyebabnya.
+    penyebab = []
+    if status_antre and _PERINGKAT[status_antre] == _PERINGKAT[status]:
+        penyebab.append("tertunggak")
+    if status_watermark and _PERINGKAT[status_watermark] == _PERINGKAT[status]:
+        penyebab.append("tarik terakhir")
+    if status_stuck and _PERINGKAT[status_stuck] == _PERINGKAT[status]:
+        penyebab.append("macet")
+    hasil["penyebab"] = ", ".join(penyebab)
+
     hasil["status"] = status
     hasil["status_label"] = LABEL[status]
     return hasil
