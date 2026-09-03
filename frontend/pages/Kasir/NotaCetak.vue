@@ -75,16 +75,13 @@ const semua = computed(() => {
   if (n.jenis_bayar) L.push(info("Jenis Bayar", n.jenis_bayar.slice(0, LEBAR - LABEL - 2)));
   if (n.jatuh_tempo && n.kd_jenis && n.kd_jenis !== "JAA000")
     L.push(info("Jatuh Tempo", tanggalJam(n.jatuh_tempo).split(" ")[0]));
-  {
-    // Kode pelanggan ikut karena nama saja tidak unik di m_customer, dan kasir
-    // memakai kodenya saat menelusuri piutang.
-    const nama = n.customer || n.kd_customer || "UMUM";
-    const kode = n.kd_customer && n.customer ? ` (${n.kd_customer})` : "";
-    L.push(info("Pelanggan", `${nama}${kode}`.slice(0, LEBAR - LABEL - 2)));
-  }
-  // Dua orang berbeda: Pegawai melayani, Kasir menulis notanya.
+  // Kode pelanggan TIDAK dicetak, alasan yang sama dengan kode barang: ia kode
+  // internal, dan yang memegang kertas ini pembelinya.
+  L.push(info("Pelanggan", (n.customer || n.kd_customer || "UMUM").slice(0, LEBAR - LABEL - 2)));
+  // Hanya yang MELAYANI. `kasir` (pemilik akun yang menulis nota) tetap ada di
+  // payload dan di laporan Penjualan per User untuk jejak audit — dua nama orang
+  // di struk tak berarti apa-apa bagi pembeli.
   if (n.pegawai) L.push(info("Pegawai", n.pegawai.slice(0, LEBAR - LABEL - 2)));
-  if (n.kasir) L.push(info("Kasir", n.kasir.slice(0, LEBAR - LABEL - 2)));
   L.push(garis());
 
   // 3. Detail barang.
@@ -102,6 +99,12 @@ const semua = computed(() => {
 
   // 4. Ringkasan. `Diskon` sudah digabung di server (diskon baris + diskon
   //    header + diskon_uang) supaya kolom ini benar-benar menjumlah.
+  // Pembeli menghitung barang saat menerima, apalagi nota grosir yang belasan
+  // baris. Yang dijumlah adalah BARISNYA, bukan qty-nya: satuan tiap baris bisa
+  // berbeda (PCS, LUSIN, RTG), jadi menjumlahkan angkanya menghasilkan bilangan
+  // tanpa satuan yang justru menyesatkan.
+  const jml = (n.baris || []).length;
+  if (jml) L.push(kiriKanan("Jumlah", `${jml} barang`));
   L.push(kiriKanan("Sub Total", rp(n.bruto)));
   if (n.diskon) L.push(kiriKanan("Diskon", rp(n.diskon)));
   // Hampir tak pernah terpakai (2 nota dari seluruh riwayat server) — baris
