@@ -1,13 +1,14 @@
 <script setup>
-import { computed, onMounted } from "vue";
+import { computed, onMounted, onUnmounted, ref, watchEffect } from "vue";
 
-// Faktur untuk Epson LX-310 (dot matrix 9-pin).
+// Faktur kasir. Tiga kertas dipakai bergantian di toko, dan lebarnya berbeda
+// jauh — jadi tata letaknya TIDAK bisa satu ukuran.
 //
 // Yang dicetak dot matrix dengan cepat dan benar adalah TEKS monospace pada
 // lebar kolom tetap. Kalau halaman ini memakai tabel/border/warna, driver
-// Windows mengirimnya sebagai GRAFIS — hasilnya lambat, buram, dan boros pita.
-// Karena itu seluruh isi di bawah dibangun sebagai teks selebar LEBAR karakter,
-// dan CSS cetaknya membuang segala hiasan.
+// Windows mengirimnya sebagai GRAFIS — lambat, buram, boros pita. Karena itu
+// seluruh isi dibangun sebagai teks selebar `lebar` karakter.
+//
 // `auto` mati saat berkas ini dipakai sebagai komponen di layar Cetak Faktur:
 // di sana kasir mengetik nomor dulu, dan dialog cetak yang menyembul sendiri
 // tiap kali hasil muncul membuat nomor berikutnya tak bisa diketik.
@@ -16,36 +17,76 @@ const props = defineProps({
   auto: { type: Boolean, default: true },
 });
 
-// LX-310 mencetak 80 kolom pada 10 CPI, dan `@page` di bawah memang continuous
-// form 9,5". Tata letak dua kolom (metadata kiri/kanan, keterangan berdampingan
-// dengan blok total) hanya muat pada lebar ini — versi 40 kolom sebelumnya
-// memaksa semuanya bertumpuk ke bawah. Ini SATU angka: mengecilkannya kembali
-// ke 40 membuat seluruh tata letak mengalir ulang tanpa mengubah kode lain.
-const LEBAR = 80;
-const KIRI = 41; // lebar kolom kiri pada bagian dua-kolom
+// Lebar kolom dihitung dari lebar cetak, bukan ditebak: Courier lebarnya 0,6 ×
+// ukuran font, jadi `kolom x 0,6 x pt x 0,3528mm` harus muat di dalam kertas
+// dikurangi margin. Angka `pt` di bawah sudah dicocokkan begitu.
+//
+// UKUR DULU SEBELUM PERCAYA: ketiga ukuran kertas ini dari keterangan operator,
+// bukan dari mengukur kertasnya sendiri. Kalau hasil cetak membungkus atau
+// terlalu renggang, yang diubah cuma `kolom`/`pt` di sini — seluruh tata letak
+// mengalir ulang sendiri, tak ada kode lain yang perlu disentuh.
+const KERTAS = {
+  thermal: {
+    label: "Struk thermal 76 mm (TM-U220)",
+    kolom: 40, pt: 8.5, halaman: "76mm auto", margin: "2mm",
+  },
+  nota: {
+    label: "Nota 12 x 14 cm (LX-310)",
+    kolom: 48, pt: 11, halaman: "120mm 140mm", margin: "4mm",
+  },
+  a5: {
+    label: "1/2 A4 potrait 14,8 x 21 cm (LX-310)",
+    kolom: 64, pt: 10, halaman: "148mm 210mm", margin: "5mm",
+  },
+};
+const SIMPANAN = "arunika.kertas-nota";
+
+// Pilihan kertas melekat pada MESINNYA, bukan pada akun atau nota: satu PC
+// kasir punya satu printer, dan yang di meja sebelah bisa lain. Karena itu
+// localStorage, bukan setelan server. `?kertas=` tetap menang supaya bisa
+// dicoba sekali tanpa mengubah setelan mesin itu.
+const bawaan = () => {
+  const dariUrl = new URLSearchParams(window.location.search).get("kertas");
+  if (dariUrl && KERTAS[dariUrl]) return dariUrl;
+  try {
+    const disimpan = localStorage.getItem(SIMPANAN);
+    if (disimpan && KERTAS[disimpan]) return disimpan;
+  } catch { /* mode privat: pakai bawaan, jangan menahan kasir */ }
+  return "nota";
+};
+const kertas = ref(typeof window === "undefined" ? "nota" : bawaan());
+watchEffect(() => {
+  try {
+    localStorage.setItem(SIMPANAN, kertas.value);
+  } catch { /* kuota/mode privat: pilihannya cuma tak awet */ }
+});
+
+const setelan = computed(() => KERTAS[kertas.value] || KERTAS.nota);
+const lebar = computed(() => setelan.value.kolom);
+// Di bawah 60 kolom, dua kolom berdampingan tak cukup ruang: label dan angkanya
+// mulai bertabrakan. Yang sempit dituruni ke bawah, bukan dipaksakan.
+const duaKolomMuat = computed(() => lebar.value >= 60);
+const kiriLebar = computed(() => Math.floor(lebar.value * 0.52));
 
 const rp = (v) =>
   new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Number(v) || 0);
 
-const kiriKanan = (kiri, kanan, lebar = LEBAR) => {
-  const sisa = Math.max(1, lebar - kiri.length - kanan.length);
+const kiriKanan = (kiri, kanan, w) => {
+  const sisa = Math.max(1, w - kiri.length - kanan.length);
   return kiri + " ".repeat(sisa) + kanan;
 };
-const garis = (ch = "-") => ch.repeat(LEBAR);
-const tengah = (t) => {
-  const pad = Math.max(0, Math.floor((LEBAR - t.length) / 2));
-  return " ".repeat(pad) + t;
-};
+const garis = (ch, w) => ch.repeat(w);
+const tengah = (t, w) => " ".repeat(Math.max(0, Math.floor((w - t.length) / 2))) + t;
 
-// Bungkus per kata, jangan potong. Nama barang dan alamat sama-sama bisa
-// melewati satu baris; memotongnya membuang justru bagian yang membedakan
-// ("BONEKA BERUANG COKELAT BESAR" vs "... KECIL").
-const bungkus = (teks, lebar = LEBAR) => {
+// Bungkus per kata, jangan potong. Nama barang dan alamat rutin melewati satu
+// baris; memotongnya membuang justru bagian yang membedakan ("BONEKA BERUANG
+// COKELAT BESAR" vs "... KECIL").
+const bungkus = (teks, w) => {
   const out = [];
   let sisa = String(teks || "").trim();
-  while (sisa.length > lebar) {
-    let idx = sisa.lastIndexOf(" ", lebar);
-    if (idx <= 0) idx = lebar;
+  while (sisa.length > w) {
+    let idx = sisa.lastIndexOf(" ", w);
+    if (idx <= 0) idx = w;
     out.push(sisa.slice(0, idx).trim());
     sisa = sisa.slice(idx).trim();
   }
@@ -53,12 +94,7 @@ const bungkus = (teks, lebar = LEBAR) => {
   return out;
 };
 
-// Label berlabuh di kolom yang sama supaya titik duanya sejajar satu garis.
-const info = (label, nilai, lebarLabel) =>
-  `${label.padEnd(lebarLabel)}: ${nilai}`;
-
-// Satu baris dari dua kolom yang berdiri berdampingan.
-const duaKolom = (kiri, kanan) => (kiri.padEnd(KIRI) + kanan).trimEnd();
+const info = (label, nilai, lw) => `${label.padEnd(lw)}: ${nilai}`;
 
 const tanggalJam = (v) => {
   if (!v) return "";
@@ -70,88 +106,102 @@ const tanggalJam = (v) => {
 
 const semua = computed(() => {
   const n = props.nota;
+  const w = lebar.value;
   const L = [];
+  const dua = (kiri, kanan) => (kiri.padEnd(kiriLebar.value) + kanan).trimEnd();
 
   // 1. Kop — identitas perusahaan koneksi ini (core.InfoPerusahaan, dengan
-  //    g_info_profile sebagai cadangan). Nama perusahaannya ditebalkan di
-  //    template; lihat `kop` di bawah.
-  L.push(tengah((n.toko || "SUKSES CROWN TOYS").slice(0, LEBAR)));
-  for (const b of bungkus(n.alamat)) L.push(tengah(b));
-  if (n.telepon) L.push(tengah(`Telp. ${n.telepon}`.slice(0, LEBAR)));
-  L.push(garis("="));
+  //    g_info_profile sebagai cadangan). Nama perusahaannya ditebalkan.
+  L.push(tengah((n.toko || "SUKSES CROWN TOYS").slice(0, w), w));
+  for (const b of bungkus(n.alamat, w)) L.push(tengah(b, w));
+  if (n.telepon) L.push(tengah(`Telp. ${n.telepon}`.slice(0, w), w));
+  L.push(garis("=", w));
 
-  // 2. Metadata dua kolom. Kiri identitas notanya, kanan identitas pihaknya.
-  //    Label "Kasir" sengaja diisi PEGAWAI yang melayani, mengikuti template —
-  //    nama pemilik akun yang menulis nota (`n.kasir`) tetap ada di payload dan
-  //    di laporan Penjualan per User untuk jejak audit, tapi tak dicetak.
-  const kanan = [];
-  kanan.push(info("Status", n.status_bayar || "LUNAS", 6));
-  kanan.push(info("Cust", n.customer || n.kd_customer || "UMUM", 6));
+  // 2. Metadata. Label "Kasir" sengaja diisi PEGAWAI yang melayani, mengikuti
+  //    template cetak toko — nama pemilik akun yang menulis nota tetap ada di
+  //    payload dan di laporan Penjualan per User untuk jejak audit.
+  const kanan = [
+    info("Status", n.status_bayar || "LUNAS", 6),
+    info("Cust", n.customer || n.kd_customer || "UMUM", 6),
+  ];
   if (n.pegawai) kanan.push(info("Kasir", n.pegawai, 6));
   if (n.jatuh_tempo && n.kd_jenis && n.kd_jenis !== "JAA000")
     kanan.push(info("Tempo", tanggalJam(n.jatuh_tempo).split(" ")[0], 6));
 
-  const kiri = [];
-  kiri.push(info("Date", tanggalJam(n.tanggal), 12));
-  kiri.push(info("No Transaksi", n.no_transaksi || "", 12));
+  const kiri = [
+    info("Date", tanggalJam(n.tanggal), 12),
+    info("No Transaksi", n.no_transaksi || "", 12),
+  ];
   if (n.no_bukti) kiri.push(info("No Bukti", n.no_bukti, 12));
 
-  for (let i = 0; i < Math.max(kiri.length, kanan.length); i++)
-    L.push(duaKolom(kiri[i] || "", kanan[i] || ""));
+  if (duaKolomMuat.value) {
+    for (let i = 0; i < Math.max(kiri.length, kanan.length); i++)
+      L.push(dua(kiri[i] || "", kanan[i] || ""));
+  } else {
+    // Sempit: label dipendekkan supaya nilainya tak terdorong ke luar kertas.
+    L.push(info("Tgl", tanggalJam(n.tanggal), 6));
+    L.push(info("No", n.no_transaksi || "", 6));
+    if (n.no_bukti) L.push(info("Bukti", n.no_bukti, 6));
+    for (const b of kanan) L.push(b);
+  }
 
   L.push("Item & Desc");
-  L.push(garis());
+  L.push(garis("-", w));
 
   // 3. Detail barang. Kode barang TIDAK dicetak: ini struk untuk pelanggan, dan
   //    kode seperti `TY-001333` cuma berarti bagi orang dalam toko.
+  const jorok = duaKolomMuat.value ? "          " : "  ";
   for (const b of n.baris || []) {
-    for (const t of bungkus(b.nama)) L.push(t);
-    L.push(kiriKanan(`          ${rp(b.qty)} ${b.satuan} x ${rp(b.harga)}`, rp(b.bruto)));
+    for (const t of bungkus(b.nama, w)) L.push(t);
+    L.push(kiriKanan(`${jorok}${rp(b.qty)} ${b.satuan} x ${rp(b.harga)}`, rp(b.bruto), w));
     // Tanpa baris ini, "4 PCS x 5.600" di atas tidak akan menjumlah ke Sub
     // Total pada 49.181 baris legacy yang memang berdiskon.
     if (b.diskon)
-      L.push(kiriKanan(`          Disc ${b.diskon_label || ""}`, `-${rp(b.diskon)}`));
+      L.push(kiriKanan(`${jorok}Disc ${b.diskon_label || ""}`, `-${rp(b.diskon)}`, w));
   }
-  L.push(garis());
+  L.push(garis("-", w));
 
-  // 4. Dua kolom: keterangan & tanda tangan di kiri, uang di kanan.
+  // 4. Blok uang.
+  const lebarUang = duaKolomMuat.value ? w - kiriLebar.value : w;
   const uang = [];
-  const jml = (n.baris || []).length;
+  const baris = (label, nilai) => uang.push(kiriKanan(label, nilai, lebarUang));
   // Yang dijumlah BARISNYA, bukan qty-nya: satuan tiap baris bisa berbeda
   // (PCS, LUSIN, RTG), jadi menjumlahkan angka qty menghasilkan bilangan tanpa
   // satuan yang justru menyesatkan.
-  if (jml) uang.push(info("Jumlah", `${jml} barang`.padStart(20), 13));
-  uang.push(info("Sub Total", rp(n.bruto).padStart(20), 13));
-  uang.push(info("Diskon", rp(n.diskon).padStart(20), 13));
-  // Voucher berdiri sendiri, bukan dilebur ke Diskon: pelanggan yang menyerahkan
-  // voucher Rp50.000 berhak melihat vouchernya tercatat.
-  if (n.voucher) uang.push(info("Klaim Vou", rp(n.voucher).padStart(20), 13));
+  const jml = (n.baris || []).length;
+  if (jml) baris("Jumlah", `${jml} barang`);
+  baris("Sub Total", rp(n.bruto));
+  baris("Diskon", rp(n.diskon));
+  // Voucher berdiri sendiri: `t_penjualan_total.total` sudah memotongnya, jadi
+  // tanpa dipisah ia tercetak sebagai "Diskon" dan pelanggan yang menyerahkan
+  // voucher Rp50.000 tak punya bukti vouchernya dipakai.
+  if (n.voucher) baris("Klaim Vou", rp(n.voucher));
   // Hampir tak pernah terpakai (2 nota dari seluruh riwayat server).
-  if (n.pajak_rp)
-    uang.push(info(`Pajak ${(Number(n.pajak) * 100).toFixed(2)}%`, rp(n.pajak_rp).padStart(20), 13));
-  uang.push(info("Total", rp(n.total).padStart(20), 13));
+  if (n.pajak_rp) baris(`Pajak ${(Number(n.pajak) * 100).toFixed(2)}%`, rp(n.pajak_rp));
+  baris("Total", rp(n.total));
   if (n.bayar != null) {
-    uang.push(info("Bayar", rp(n.bayar).padStart(20), 13));
-    uang.push(info("Kembali", rp(n.kembali).padStart(20), 13));
+    baris("Bayar", rp(n.bayar));
+    baris("Kembali", rp(n.kembali));
   }
 
-  // Kolom kiri: keterangan lalu ruang tanda tangan. Keterangan selalu punya
-  // tempat walau kolomnya kosong di database — kasir menulis tangan di situ.
+  // 5. Keterangan & tanda tangan. Keterangan selalu punya tempat walau kolomnya
+  //    kosong di database — kasir menulis tangan di situ.
+  const sisiLebar = duaKolomMuat.value ? kiriLebar.value : w;
   const sisi = ["Keterangan :"];
-  const ket = bungkus(n.keterangan, KIRI - 2);
+  const ket = bungkus(n.keterangan, sisiLebar - 2);
   sisi.push(...ket);
-  for (let i = ket.length; i < 2; i++) sisi.push(".".repeat(KIRI - 4));
-  sisi.push("");
-  sisi.push("   Penerima,");
-  sisi.push("");
-  sisi.push("");
-  sisi.push("   " + ".".repeat(24));
+  for (let i = ket.length; i < 2; i++) sisi.push(".".repeat(Math.max(10, sisiLebar - 4)));
+  sisi.push("", "   Penerima,", "", "", "   " + ".".repeat(Math.max(10, sisiLebar - 16)));
 
-  for (let i = 0; i < Math.max(sisi.length, uang.length); i++)
-    L.push(duaKolom(sisi[i] || "", uang[i] || ""));
+  if (duaKolomMuat.value) {
+    for (let i = 0; i < Math.max(sisi.length, uang.length); i++)
+      L.push(dua(sisi[i] || "", uang[i] || ""));
+  } else {
+    L.push(...uang, garis("-", w), ...sisi);
+  }
 
-  L.push(garis("="));
-  L.push(tengah("- TERIMA KASIH ATAS KUNJUNGAN ANDA -"));
+  L.push(garis("=", w));
+  L.push(tengah("- TERIMA KASIH ATAS KUNJUNGAN ANDA -".slice(0, w), w));
   L.push("");
   return L;
 });
@@ -161,7 +211,26 @@ const semua = computed(() => {
 const kop = computed(() => semua.value[0] || "");
 const badan = computed(() => semua.value.slice(1).join("\n"));
 
-// Langsung buka dialog cetak: halaman ini hanya pernah dibuka untuk dicetak.
+// `@page` tak bisa ditulis di CSS scoped yang nilainya berubah-ubah, jadi satu
+// elemen <style> dikelola sendiri. Ukuran halaman WAJIB ikut berganti: kalau
+// tidak, kertas thermal dicetak pada bidang A4 dan tiap struk memakan satu
+// lembar penuh.
+let elGaya = null;
+watchEffect(() => {
+  if (typeof document === "undefined") return;
+  if (!elGaya) {
+    elGaya = document.createElement("style");
+    document.head.appendChild(elGaya);
+  }
+  const s = setelan.value;
+  elGaya.textContent =
+    `@media print { @page { size: ${s.halaman}; margin: ${s.margin}; } }`;
+});
+onUnmounted(() => {
+  elGaya?.remove();
+  elGaya = null;
+});
+
 const cetakUlang = () => window.print();
 onMounted(() => {
   if (props.auto) setTimeout(cetakUlang, 300);
@@ -170,7 +239,13 @@ onMounted(() => {
 
 <template>
   <div class="cetak">
-    <pre><b class="kop">{{ kop }}</b>
+    <label class="sembunyi-cetak pemilih">
+      Kertas:
+      <select v-model="kertas">
+        <option v-for="(k, kunci) in KERTAS" :key="kunci" :value="kunci">{{ k.label }}</option>
+      </select>
+    </label>
+    <pre :style="{ fontSize: setelan.pt + 'pt' }"><b class="kop">{{ kop }}</b>
 {{ badan }}</pre>
     <button class="sembunyi-cetak" @click="cetakUlang">Cetak ulang</button>
   </div>
@@ -182,29 +257,25 @@ onMounted(() => {
   color: #000;
   padding: 8px;
 }
+.pemilih {
+  display: block;
+  margin-bottom: 8px;
+  font: 13px system-ui, sans-serif;
+  color: #000;
+}
 /* Satu-satunya penebalan di seluruh struk, dan itu disengaja. Pada LX-310 bold
    jatuh ke double-strike (kepala mengetuk dua kali) — tetap TEKS, bukan grafis;
-   yang memaksa halaman jadi grafis adalah tabel/border/warna. Menebalkan banyak
-   baris membuat cetaknya terasa lambat tanpa menambah kejelasan. */
+   yang memaksa halaman jadi grafis adalah tabel/border/warna. */
 .kop {
   font-weight: 700;
 }
 pre {
   font-family: "Courier New", Courier, monospace;
-  /* 80 kolom harus muat di lebar cetak 8" LX-310. 10pt Courier ≈ 6pt per
-     karakter ≈ 169mm untuk 80 kolom — masih di dalam 241mm dikurangi margin. */
-  font-size: 10pt;
   line-height: 1.15;
   margin: 0;
   white-space: pre;
 }
 @media print {
-  /* Continuous form 9,5". Tanpa margin bawaan browser, kertas tak bergeser
-     antar-nota — pada continuous form pergeseran itu menumpuk. */
-  @page {
-    size: 241mm 140mm;
-    margin: 4mm;
-  }
   .sembunyi-cetak {
     display: none;
   }
