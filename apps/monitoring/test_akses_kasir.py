@@ -88,10 +88,10 @@ class MenuKhususAdminTests(TestCase):
     layar mana pun yang bisa menariknya kembali.
     """
 
-    # Tiga layar tulis kas ikut di sini dengan alasan yang sama: uang keluar
-    # dari kas begitu disimpan, dan tak ada layar yang bisa menariknya kembali.
+    # Empat layar tulis kas ikut di sini dengan alasan yang sama: uang bergerak
+    # begitu disimpan, dan tak ada layar yang bisa menariknya kembali.
     KUNCI = ("opname", "koreksi_stok",
-             "kas_biaya_input", "kas_penambahan", "kas_mutasi")
+             "kas_biaya_input", "kas_pendapatan", "kas_penambahan", "kas_mutasi")
 
     def setUp(self):
         self.spv = User.objects.create_user("spv7", password="rahasia-kuat-123", role=Role.SUPERVISOR)

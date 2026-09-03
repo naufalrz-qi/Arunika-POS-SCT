@@ -15,6 +15,7 @@ urlpatterns = [
     path("users/<int:user_id>/toggle", views.users_toggle, name="users_toggle"),
     path("users/<int:user_id>/delete", views.users_delete, name="users_delete"),
     path("master/products", views.products_index, name="products"),
+    path("master/products/export", views.products_export, name="products_export"),
     path("master/customers", views.customers_index, name="customers"),
     path("master/suppliers", views.suppliers_index, name="suppliers"),
     path("master/sync-history", views.sync_history_index, name="sync_history"),
@@ -32,6 +33,8 @@ urlpatterns = [
          name="kelola_referensi_save"),
     path("master/kode-nota", views.kode_nota_index, name="kode_nota"),
     path("master/kode-nota/save", views.kode_nota_save, name="kode_nota_save"),
+    path("master-data/informasi-perusahaan", views.informasi_perusahaan, name="informasi_perusahaan"),
+
     # Alamat lama, dipertahankan SEMENTARA untuk masa peralihan. Halaman yang
     # sudah terbuka di tab orang lain masih memegang URL ini, dan
     # `query_string=True` menjaga `?search=` mereka ikut terbawa — tanpa itu
@@ -92,6 +95,8 @@ urlpatterns = [
     path("laporan/retur-penjualan/export", views.retur_penjualan_export, name="retur_penjualan_export"),
     path("laporan/piutang", views.piutang, name="piutang"),
     path("laporan/piutang/export", views.piutang_export, name="piutang_export"),
+    path("laporan/order-penjualan", views.order_penjualan, name="order_penjualan"),
+    path("laporan/order-penjualan/export", views.order_penjualan_export, name="order_penjualan_export"),
     path("laporan/pembelian", views.pembelian, name="pembelian"),
     path("laporan/pembelian/export", views.pembelian_export, name="pembelian_export"),
     path("laporan/pembelian-supplier", views.pembelian_supplier, name="pembelian_supplier"),
@@ -100,6 +105,13 @@ urlpatterns = [
     path("laporan/pembelian-periode/export", views.pembelian_periode_export, name="pembelian_periode_export"),
     path("laporan/retur-pembelian", views.retur_pembelian, name="retur_pembelian"),
     path("laporan/retur-pembelian/export", views.retur_pembelian_export, name="retur_pembelian_export"),
+    path("laporan/order-pembelian", views.order_pembelian, name="order_pembelian"),
+    path("laporan/order-pembelian/export", views.order_pembelian_export, name="order_pembelian_export"),
+    path("laporan/hutang", views.hutang, name="hutang"),
+    path("laporan/hutang/export", views.hutang_export, name="hutang_export"),
+    # Akuntansi
+    path("laporan/laba-rugi", views.laba_rugi, name="laba_rugi"),
+    path("laporan/laba-rugi/export", views.laba_rugi_export, name="laba_rugi_export"),
     # Analitik (FMI)
     path("analitik/fmi-penjualan", views.fmi_penjualan, name="fmi_penjualan"),
     path("analitik/fmi-penjualan/export", views.fmi_penjualan_export, name="fmi_penjualan_export"),

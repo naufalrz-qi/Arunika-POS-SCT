@@ -73,6 +73,22 @@ class SyncHealthProfilTests(TestCase):
         })
         self.assertEqual(hasil["status"], svc.STATUS_MATI)
         self.assertEqual(hasil["antre"], 1_043_804)
+        # Antre DAN watermark sama-sama beku di sini — keduanya harus disebut.
+        self.assertEqual(hasil["penyebab"], "tertunggak, tarik terakhir")
+
+    def test_antrean_mati_watermark_sehat_penyebab_tertunggak_saja(self):
+        """Kebalikan kasus GUDANG: hanya sumbu antre yang mati, watermark dan
+        feed segar. Penyebab tidak boleh ikut menyebut sumbu yang sehat."""
+        hasil = self._jalankan({
+            "antre": 50,
+            "antre_tertua": dt.datetime(2022, 5, 13, 12, 43),
+            "antre_terbaru": svc._now_naive(),
+            "watermark_get": svc._now_naive(),
+            "feed_id": 1_044_172,
+            "feed_waktu": svc._now_naive(),
+        })
+        self.assertEqual(hasil["status"], svc.STATUS_MATI)
+        self.assertEqual(hasil["penyebab"], "tertunggak")
 
     def test_antrean_kosong_sehat_walau_baris_tertua_kosong(self):
         """Antrean kosong = tak ada yang tertunggak. Umur baris tertua tak
@@ -100,6 +116,7 @@ class SyncHealthProfilTests(TestCase):
             "feed_waktu": svc._now_naive(),
         })
         self.assertEqual(hasil["status"], svc.STATUS_MATI)
+        self.assertEqual(hasil["penyebab"], "tarik terakhir")
 
     def test_antrean_kosong_dengan_aktivitas_baru_adalah_bukti_terkirim(self):
         """Baris antrean DIHAPUS begitu terkirim, jadi kosong sendirian tak

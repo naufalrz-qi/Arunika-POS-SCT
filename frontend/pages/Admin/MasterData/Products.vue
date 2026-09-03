@@ -1,144 +1,142 @@
 <script setup>
-import { computed, reactive } from "vue";
-import { Deferred } from "@inertiajs/vue3";
+import { computed } from "vue";
 import AdminLayout from "@/layouts/AdminLayout.vue";
-import Card from "@/components/ui/Card.vue";
-import Input from "@/components/ui/Input.vue";
-import Select from "@/components/ui/Select.vue";
-import Badge from "@/components/ui/Badge.vue";
-import Banner from "@/components/ui/Banner.vue";
-import DataTable from "@/components/ui/DataTable.vue";
-import ExportButton from "@/components/ui/ExportButton.vue";
+import ReportPage from "@/components/report/ReportPage.vue";
 import FilterPanel from "@/components/ui/FilterPanel.vue";
 import FilterSection from "@/components/ui/FilterSection.vue";
-import LoadingCard from "@/components/ui/LoadingCard.vue";
+import Input from "@/components/ui/Input.vue";
+import SelectSearch from "@/components/ui/SelectSearch.vue";
+import Select from "@/components/ui/Select.vue";
+import NumberRangeField from "@/components/ui/NumberRangeField.vue";
+import { useServerReport } from "@/composables/useServerReport.js";
 
+// Katalog ini ~55.000 barang. Versi sebelumnya mengirim semuanya sekaligus dan
+// menyaring di peramban — penyakit yang sama yang dulu membunuh Stok Akhir —
+// dan panel filternya `@submit="() => {}"`, jadi tak ada satu pun filter yang
+// benar-benar sampai ke server. Sekarang cari/urut/saring semuanya dikerjakan
+// server; paginasinya sudah dibawa ServerTable.
 const props = defineProps({
-  products: { type: Object, default: null },
+  report: { type: Object, default: null },
+  filters: { type: Object, default: () => ({}) },
 });
 
-const data = computed(() => props.products || {});
-const rows = computed(() => data.value.rows || []);
-const categories = computed(() => data.value.categories || []);
-
-const rupiah = (n) =>
-  new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n || 0);
-
-function distinctOptions(list, key) {
-  const values = new Set(list.map((r) => r[key]).filter((v) => v !== "" && v != null));
-  return Array.from(values).map((v) => ({ value: v, label: v }));
-}
-
-const categoryOptions = computed(() =>
-  categories.value.map((c) => ({ value: c.kd_kategori, label: c.nama })),
+const URL = "/admin-panel/master/products";
+const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerReport(
+  URL,
+  props.filters,
+  ["f_harga_jual_min", "f_harga_jual_max"],
 );
-const satuanOptions = computed(() => distinctOptions(rows.value, "satuan"));
-const statusPinjamOptions = computed(() => distinctOptions(rows.value, "status_pinjam"));
 
-const filters = reactive({
-  search: "",
-  kategori: "",
-  status: "",
-  status_pinjam: "",
-  satuan: "",
-});
-
-function resetFilters() {
-  filters.search = "";
-  filters.kategori = "";
-  filters.status = "";
-  filters.status_pinjam = "";
-  filters.satuan = "";
-}
-
-const filtered = computed(() => {
-  const q = filters.search.toLowerCase().trim();
-  return rows.value.filter((p) => {
-    const matchQ =
-      !q ||
-      p.nama.toLowerCase().includes(q) ||
-      p.kd_barang.toLowerCase().includes(q) ||
-      (p.pabrik || "").toLowerCase().includes(q);
-    const matchKategori = !filters.kategori || p.kd_kategori === filters.kategori;
-    const matchStatus = filters.status === "" || (filters.status === "1" ? p.status : !p.status);
-    const matchStatusPinjam = !filters.status_pinjam || p.status_pinjam === filters.status_pinjam;
-    const matchSatuan = !filters.satuan || p.satuan === filters.satuan;
-    return matchQ && matchKategori && matchStatus && matchStatusPinjam && matchSatuan;
-  });
-});
+const opsi = computed(() => props.report?.options || {});
 
 const columns = [
-  { key: "kd_barang", label: "Kode", sortable: true },
-  { key: "nama", label: "Nama Produk", sortable: true },
-  { key: "kategori", label: "Kategori", sortable: true },
+  { key: "kd_barang", label: "Kode" },
+  { key: "nama", label: "Nama Produk" },
+  { key: "kategori", label: "Kategori" },
   // Nama, bukan kode. Kolom ini dulu berlabel manusiawi tapi terikat ke kunci
   // kd_* sehingga yang tampil MAA003, bukan namanya.
-  { key: "jenis_bahan", label: "Jenis Bahan", sortable: true },
-  { key: "departemen", label: "Departemen", sortable: true },
-  { key: "divisi_barang", label: "Divisi Barang", sortable: true },
-  { key: "sub_kategori", label: "Sub Kategori", sortable: true },
+  { key: "jenis_bahan", label: "Jenis Bahan" },
+  { key: "departemen", label: "Departemen" },
+  { key: "divisi_barang", label: "Divisi Barang" },
+  { key: "sub_kategori", label: "Sub Kategori" },
   { key: "ukuran", label: "Ukuran" },
   { key: "pabrik", label: "Pabrik" },
   { key: "satuan", label: "Satuan", align: "center" },
-  { key: "harga_jual", label: "Harga", sortable: true, align: "right" },
-  { key: "stok", label: "Stok", sortable: true, align: "right" },
+  { key: "harga_jual", label: "Harga", align: "right", format: "rupiah" },
   { key: "status", label: "Status", align: "center" },
   { key: "status_pinjam", label: "Status Pinjam", align: "center" },
   { key: "keterangan", label: "Keterangan" },
 ];
 
-const exportColumns = columns.map(({ key, label }) => ({ key, label }));
+const summaryItems = computed(() => {
+  const s = props.report?.summary || {};
+  const nf = new Intl.NumberFormat("id-ID");
+  return [
+    { label: "Jumlah Produk", value: nf.format(s.jml_baris || 0) },
+    { label: "Aktif", value: nf.format(s.jml_aktif || 0) },
+    { label: "Nonaktif", value: nf.format(s.jml_nonaktif || 0) },
+  ];
+});
 </script>
 
 <template>
   <AdminLayout title="Master Produk">
-    <Card class="mb-4">
-      <FilterPanel :form="filters" @submit="() => {}" @reset="resetFilters">
-        <FilterSection>
-          <Input v-model="filters.search" label="Cari" placeholder="Kode / nama / pabrik…" />
-          <Select v-model="filters.kategori" label="Kategori" :options="categoryOptions" placeholder="Semua kategori" />
-        </FilterSection>
-        <template #lanjutan>
-          <FilterSection title="Filter Lanjutan">
+    <ReportPage
+      deferred-key="report"
+      :data="report"
+      :columns="columns"
+      row-key="kd_barang"
+      :page="Number(form.page)"
+      :per-page="Number(form.per_page)"
+      :sort-key="form.sort"
+      :sort-dir="form.sort_dir"
+      :export-href="exportHref"
+      :summary-items="summaryItems"
+      @page-change="onPage"
+      @sort-change="onSort"
+      @per-page-change="onPerPage"
+    >
+      <template #filters>
+        <FilterPanel :form="form" @submit="apply({ page: 1 })" @reset="reset">
+          <FilterSection title="Pencarian">
+            <Input v-model="form.search" label="Cari" placeholder="kode / nama / pabrik" />
+            <SelectSearch
+              v-model="form.kd_kategori"
+              label="Kategori"
+              :options="opsi.kategori || []"
+              placeholder="Semua kategori"
+            />
             <Select
-              v-model="filters.status"
+              v-model="form.status"
               label="Status"
-              :options="[{ value: '1', label: 'Aktif' }, { value: '0', label: 'Nonaktif' }]"
+              :options="[
+                { value: '1', label: 'Aktif' },
+                { value: '0', label: 'Nonaktif' },
+              ]"
               placeholder="Semua status"
             />
-            <Select
-              v-model="filters.status_pinjam"
-              label="Status Pinjam"
-              :options="statusPinjamOptions"
-              placeholder="Semua"
-            />
-            <Select v-model="filters.satuan" label="Satuan" :options="satuanOptions" placeholder="Semua satuan" />
           </FilterSection>
-        </template>
-      </FilterPanel>
-    </Card>
-
-    <Deferred data="products">
-      <template #fallback>
-        <LoadingCard message="Mengambil data produk…" />
+          <template #lanjutan>
+            <FilterSection title="Filter Lanjutan">
+              <SelectSearch
+                v-model="form.kd_merk"
+                label="Divisi Barang"
+                :options="opsi.merk || []"
+                placeholder="Semua"
+              />
+              <SelectSearch
+                v-model="form.kd_model"
+                label="Departemen"
+                :options="opsi.model || []"
+                placeholder="Semua"
+              />
+              <SelectSearch
+                v-model="form.kd_warna"
+                label="Sub Kategori"
+                :options="opsi.warna || []"
+                placeholder="Semua"
+              />
+              <SelectSearch
+                v-model="form.kd_jenis_bahan"
+                label="Jenis Bahan"
+                :options="opsi.jenis_bahan || []"
+                placeholder="Semua"
+              />
+              <SelectSearch
+                v-model="form.kd_satuan"
+                label="Satuan"
+                :options="opsi.satuan || []"
+                placeholder="Semua satuan"
+              />
+              <NumberRangeField
+                v-model:min="form.f_harga_jual_min"
+                v-model:max="form.f_harga_jual_max"
+                label="Harga Jual"
+              />
+            </FilterSection>
+          </template>
+        </FilterPanel>
       </template>
-
-      <Banner v-if="data.conn_error" variant="warning" :message="data.conn_error" />
-
-      <div class="mb-3 flex items-center justify-between">
-        <span class="text-sm text-ink-muted">{{ filtered.length.toLocaleString("id-ID") }} produk</span>
-        <ExportButton mode="client" filename="produk" :columns="exportColumns" :rows="filtered" sheet-name="Produk" />
-      </div>
-
-      <DataTable :columns="columns" row-key="kd_barang" :rows="filtered" empty-message="Produk tidak ditemukan.">
-        <template #cell-harga_jual="{ value }">{{ rupiah(value) }}</template>
-        <template #cell-stok="{ value }">
-          <span :class="value === 0 ? 'font-medium text-danger-fg' : ''">{{ value }}</span>
-        </template>
-        <template #cell-status="{ value }">
-          <Badge :variant="value ? 'success' : 'danger'">{{ value ? "Aktif" : "Nonaktif" }}</Badge>
-        </template>
-      </DataTable>
-    </Deferred>
+    </ReportPage>
   </AdminLayout>
 </template>

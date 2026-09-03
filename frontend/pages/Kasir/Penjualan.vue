@@ -438,6 +438,12 @@ const menyimpan = ref(false);
 // nota milik orang lain.
 const notaTerakhir = ref(props.nota_terakhir || "");
 watch(() => props.nota_terakhir, (v) => { if (v) notaTerakhir.value = v; });
+// Uang yang diterima, ditahan di sini karena `t_penjualan` tak punya kolomnya
+// dan `tutupTab()` menghapus keranjangnya begitu simpan berhasil — saat Cetak
+// ditekan, `tab.value.bayar` sudah tidak ada. Sengaja TIDAK dipulihkan dari
+// props: setelah halaman dimuat ulang, nomor nota masih ada tapi uangnya tidak,
+// dan struk tanpa baris Bayar lebih benar daripada struk dengan angka tebakan.
+const bayarTerakhir = ref(0);
 // Syaratnya kd_user + kd_divisi, TANPA kd_pegawai — sama persis dengan
 // tautan_wajib() di server. Dulu di sini kd_pegawai ikut wajib, jadi akun yang
 // bertautan lengkap tapi tak dipasangi pegawai melihat tombol Simpan mati
@@ -453,6 +459,7 @@ function simpan() {
   const jam = new Date();
   const hh = (n) => String(n).padStart(2, "0");
   menyimpan.value = true;
+  bayarTerakhir.value = angka(t.bayar);
   router.post(`${props.base}/save`, {
     kd_customer: t.kd_customer, kd_jenis: t.kd_jenis, kd_kas: t.kd_kas,
     kd_voucher: t.kd_voucher, kd_pegawai: props.kd_pegawai,
@@ -482,7 +489,8 @@ function simpan() {
 }
 function cetak() {
   if (notaTerakhir.value && !order.value) {
-    window.open(`/kasir/penjualan/${notaTerakhir.value}/cetak`, "_blank");
+    const q = bayarTerakhir.value > 0 ? `?bayar=${bayarTerakhir.value}` : "";
+    window.open(`/kasir/penjualan/${notaTerakhir.value}/cetak${q}`, "_blank");
   }
 }
 

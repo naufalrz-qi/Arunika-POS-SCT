@@ -9,8 +9,13 @@ from django.test import SimpleTestCase, TestCase
 
 from apps.auth_app.models import DATA_KEY_SET, Role, User
 from apps.monitoring.views import (
+    _BUKAN_UANG,
+    _FIELDS_BY_DATA_KEY,
     _KLASIFIKASI_UANG,
+    _UANG_HUTANG_ORDER,
     _UANG_INFO_KASIR,
+    _UANG_LAPORAN,
+    _UANG_MODAL,
     _hidden_fields,
     _tanpa_kolom,
 )
@@ -78,7 +83,11 @@ class HiddenFields(TestCase):
     def test_satu_izin_menutup_beberapa_field(self):
         u = User.objects.create_user("u1", role=Role.ADMIN, hidden_data_keys=["harga_beli"])
         self.assertEqual(
-            _hidden_fields(_Req(u)), {"harga_average", "harga_beli_akhir"})
+            _hidden_fields(_Req(u)),
+            # _UANG_MODAL ikut: harga_pokok/laba/margin adalah modal atau turunan
+            # langsungnya. Menutup harga_pokok tapi membiarkan laba tidak menutup
+            # apa pun — modalnya bisa dihitung mundur dari omset yang terlihat.
+            {"harga_average", "harga_beli_akhir"} | _UANG_MODAL)
 
     def test_nominal_ikut_menutup_omset_dan_nilai_fast_moving(self):
         # `nilai` sempat terlewat: omset di kartu ringkasan sudah hilang, tapi
@@ -88,7 +97,8 @@ class HiddenFields(TestCase):
         self.assertEqual(
             _hidden_fields(_Req(u)),
             {"nominal", "revenue", "nilai"}
-            | _UANG_KLASIFIKASI | _UANG_INFO_KASIR,
+            | _UANG_KLASIFIKASI | _UANG_INFO_KASIR | _UANG_HUTANG_ORDER
+            | _UANG_LAPORAN | _UANG_MODAL,
         )
 
     def test_nominal_menutup_kolom_uang_panel_info_kasir(self):
@@ -169,3 +179,87 @@ class MenusSaveDataKeys(TestCase):
         self._save(["harga_jual", "ngawur"])
         self.staf.refresh_from_db()
         self.assertNotIn("ngawur", self.staf.hidden_data_keys)
+
+
+class KolomRupiahTerdaftar(SimpleTestCase):
+    """Setiap kolom yang DIRENDER sebagai rupiah harus punya namanya di
+    `_FIELDS_BY_DATA_KEY`, kalau tidak ia lolos dari pencabutan izin.
+
+    Acuan kebenarannya diambil dari cara nilainya DIRENDER — `format: "rupiah"`
+    untuk kolom tabel, `rp.format(s.xxx)` untuk kartu ringkasan. Keduanya ditulis
+    oleh orang yang membuat kolomnya. Itu jauh lebih jujur daripada daftar yang
+    dijiplak ke dalam test: daftar jiplakan tetap hijau justru pada saat seseorang
+    menambah kolom uang baru dan lupa mendaftarkannya — persis yang sudah terjadi
+    dua kali di sini (ekspor Klasifikasi Pelanggan, lalu seluruh laporan
+    penjualan/pembelian + Piutang).
+
+    Kunci RINGKASAN wajib ikut diperiksa dan bukan tambahan: `total_sisa_piutang`
+    lolos justru karena ia hanya ada di ringkasan, tak pernah jadi kolom tabel.
+    """
+
+    # Nama yang SENGAJA tak ada di peta, tapi kolomnya tetap tertutup — lewat
+    # `_uang_bespoke()` di view masing-masing, yang memeriksa KUNCI IZIN alih-alih
+    # nama kolom. Semuanya milik Kas Harian dan FMI Stok, dan alasannya sama:
+    # `masuk`/`keluar`/`total_masuk`/`total_keluar` adalah KUANTITAS di Mutasi
+    # Stok, Opname Stok, dan Transaksi Barang. Mendaftarkannya di peta nama akan
+    # mengosongkan tiga laporan yang tak menyebut rupiah sama sekali.
+    #
+    # Bukan daftar gap: yang menjaga ketiganya benar-benar tertutup ada di
+    # `apps/monitoring/test_uang_e2e.py` kelas `UangBespoke`.
+    DI_LUAR_PETA_NAMA = {"masuk", "keluar", "saldo", "total_masuk", "total_keluar",
+                         "saldo_awal", "saldo_akhir", "nilai_stok"}
+
+    @staticmethod
+    def _kolom_rupiah() -> dict:
+        """{nama kolom/kunci ringkasan -> berkas} untuk semua nilai rupiah."""
+        import pathlib
+        import re
+
+        from django.conf import settings
+
+        from apps.monitoring import views as v
+
+        keluar: dict = {}
+        kolom = re.compile(r'key:\s*"([^"]+)"[^}\n]*format:\s*"rupiah"')
+        ringkas = re.compile(r"rp\.format\(\s*s\.(\w+)")
+        akar = pathlib.Path(settings.BASE_DIR)
+        for f in (akar / "frontend" / "pages" / "Admin").rglob("*.vue"):
+            teks = f.read_text(encoding="utf-8")
+            for pola in (kolom, ringkas):
+                for k in pola.findall(teks):
+                    keluar.setdefault(k, set()).add(f.name)
+        # Spec backend juga membawa `format` untuk sebagian laporan.
+        for nama, spec in vars(v).items():
+            if not (nama.startswith("_") and isinstance(spec, dict) and "columns" in spec):
+                continue
+            for c in spec["columns"]:
+                if isinstance(c, dict) and c.get("format") == "rupiah":
+                    keluar.setdefault(c["key"], set()).add(nama)
+        return keluar
+
+    def test_semua_kolom_rupiah_punya_nama_terdaftar(self):
+        terdaftar = set().union(*_FIELDS_BY_DATA_KEY.values())
+        rupiah = self._kolom_rupiah()
+        # Penjaga bagi penjaganya: kalau regexnya berhenti cocok (mis. gaya
+        # penulisan kolom berubah), test ini akan hijau tanpa memeriksa apa pun.
+        self.assertGreater(len(rupiah), 40, "regex kolom rupiah nyaris tak menemukan apa pun — polanya berubah?")
+        self.assertIn("total_sisa_piutang", rupiah, "kunci ringkasan tak ikut terbaca")
+        lolos = {k: sorted(v) for k, v in rupiah.items()
+                 if k not in terdaftar and k not in self.DI_LUAR_PETA_NAMA}
+        self.assertEqual(
+            lolos, {},
+            "kolom rupiah tanpa nama di _FIELDS_BY_DATA_KEY dan tanpa penyaring "
+            "bespoke — nilainya tetap terkirim ke akun yang izin uangnya dicabut")
+
+    def test_nama_bespoke_tetap_di_luar_peta(self):
+        """Justru harus TIDAK terdaftar: `masuk`/`total_masuk` dan kawan-kawannya
+        adalah kuantitas di Mutasi Stok, Opname Stok, dan Transaksi Barang.
+        Memasukkannya ke peta akan mengosongkan tiga laporan tanpa rupiah."""
+        terdaftar = set().union(*_FIELDS_BY_DATA_KEY.values())
+        self.assertEqual(self.DI_LUAR_PETA_NAMA & terdaftar, set())
+
+    def test_kuantitas_tak_ikut_tertutup(self):
+        """Menutup kolom kuantitas membuat Opname Stok kehilangan isinya tanpa
+        alasan — `total_masuk` di sana jumlah barang, bukan rupiah."""
+        terdaftar = set().union(*_FIELDS_BY_DATA_KEY.values())
+        self.assertEqual(_BUKAN_UANG & terdaftar, set())

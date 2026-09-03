@@ -1,14 +1,37 @@
-"""Self-check: SQL-side movement aggregation == Python-side aggregation.
-
-Run against the active connection after schema/data changes on the legacy DB:
+"""Self-check mesin stok, dijalankan terhadap koneksi aktif:
     python manage.py check_stock_agg
+
+Tiga pemeriksaan: agregasi SQL == agregasi Python, snapshot+delta == hitung ulang
+penuh, dan SATUAN harga rata-rata. Yang ketiga ada karena satuan tak punya gejala
+di layar — sebuah harga yang salah faktor kemasan tetap tampil sebagai rupiah
+yang masuk akal, dan itu lolos sampai ada yang membandingkannya dengan nota.
 """
 import datetime as dt
 
 from django.core.management.base import BaseCommand, CommandError
 
-from apps.inventory.services import _f, _fetch_movements, _k, _movement_sums, _unit_factors
+from apps.inventory.services import (
+    _f,
+    _fetch_movements,
+    _k,
+    _movement_sums,
+    _purchase_prices,
+    _unit_factors,
+)
 from core import mssql
+
+# Harga beli TERTINGGI per satuan terkecil untuk tiap barang. Rata-rata tertimbang
+# tak mungkin melampauinya — kecuali kalau satuannya keliru.
+_SQL_HARGA_MAKS = """
+SELECT pd.kd_barang, MAX(pd.harga_beli / NULLIF(COALESCE(bs.jumlah, 1), 0)) AS maks
+FROM t_pembelian_detail pd
+INNER JOIN t_pembelian p ON pd.no_transaksi = p.no_transaksi
+LEFT JOIN (SELECT kd_barang, kd_satuan, MAX(jumlah) AS jumlah
+           FROM m_barang_satuan GROUP BY kd_barang, kd_satuan) bs
+  ON bs.kd_barang = pd.kd_barang AND bs.kd_satuan = pd.kd_satuan
+WHERE CONVERT(DATE, p.tanggal) <= ? AND p.status IN (0, 1)
+GROUP BY pd.kd_barang
+"""
 
 
 class Command(BaseCommand):
@@ -70,3 +93,40 @@ class Command(BaseCommand):
                 self.stderr.write(f"  {k}: snapshot={snap.get(k)} full={full.get(k)}")
             raise CommandError(f"Snapshot: {len(bad2)} key beda vs recompute penuh (dari {len(full)}).")
         self.stdout.write(self.style.SUCCESS(f"Snapshot OK: {len(full)} key identik (snapshot+delta == penuh)."))
+
+        self._cek_satuan_harga(profile, date_to)
+
+    def _cek_satuan_harga(self, profile, date_to):
+        """`harga_average` harus per satuan TERKECIL, sama seperti `stok_akhir`
+        yang mengalikannya.
+
+        Rata-rata tertimbang tak pernah melampaui harga tertinggi penyusunnya,
+        jadi `harga_average > MAX(harga per satuan terkecil)` hanya bisa berarti
+        satuannya salah. Persis itu yang terjadi: rumus lama membagi pembilang DAN
+        penyebut dengan `bs.jumlah` sehingga menghasilkan harga per satuan BELI,
+        dan kolom `nominal` di Stok Akhir menggelembung sebesar faktor kemasan.
+        Diukur ulang saat cek ini ditulis: rumus lama melanggar pada 181 dari
+        26.118 barang di testgudang (sampai 12x), rumus sekarang nol pelanggaran
+        di testgudang, PUSAT, dan PAGESANGAN.
+
+        Batas BAWAH sengaja tak diperiksa: pembelian berharga 0 ada di data nyata
+        dan menarik rata-rata di bawah harga terendah yang bukan nol — itu benar,
+        dan memeriksanya hanya akan menghasilkan kegagalan palsu.
+        """
+        with mssql.cursor(profile) as cur:
+            avg_map, _, _ = _purchase_prices(cur, date_to)
+            cur.execute(_SQL_HARGA_MAKS, [date_to.date()])
+            maks = {_k(r[0]): _f(r[1]) for r in cur.fetchall()}
+
+        # Toleransi 0,1% untuk pembulatan money/float, bukan untuk selisih satuan:
+        # faktor kemasan terkecil yang mungkin adalah 2x.
+        langgar = [(k, v, maks[k]) for k, v in avg_map.items()
+                   if k in maks and maks[k] > 0 and v > maks[k] * 1.001]
+        if langgar:
+            for k, v, m in sorted(langgar, key=lambda x: -x[1] / x[2])[:10]:
+                self.stderr.write(f"  {k}: harga_average={v:,.2f} > maks/satuan-terkecil={m:,.2f} ({v / m:.2f}x)")
+            raise CommandError(
+                f"Satuan harga: {len(langgar)} dari {len(avg_map)} barang melampaui harga beli "
+                "tertinggi per satuan terkecil — harga_average kemungkinan per satuan BELI.")
+        self.stdout.write(self.style.SUCCESS(
+            f"Satuan harga OK: {len(avg_map)} barang, harga_average per satuan terkecil."))

@@ -11,6 +11,7 @@ const SECTION_LABELS = {
   ringkasan: "Ringkasan",
   penjualan: "Penjualan",
   pembelian: "Pembelian",
+  akuntansi: "Akuntansi",
   stok: "Inventori & Stok",
   analitik: "Analitik",
   promo: "Promo & Voucher",
@@ -29,7 +30,7 @@ const NAV_GROUPS = [
   // kasir berpindah tab untuk pekerjaan yang ia lakukan berselang-seling.
   { key: "pos", label: "Kasir", sections: ["pos_jual", "pos_beli", "pos_lain"] },
   { key: "ringkasan", label: "Ringkasan", sections: ["ringkasan"] },
-  { key: "laporan", label: "Laporan", sections: ["penjualan", "pembelian", "analitik"] },
+  { key: "laporan", label: "Laporan", sections: ["penjualan", "pembelian", "akuntansi", "analitik"] },
   { key: "operasional", label: "Operasional", sections: ["stok", "promo", "kas"] },
   { key: "master", label: "Master Data", sections: ["master", "master_harga", "master_sync"] },
   { key: "admin", label: "Administrasi", sections: ["admin"] },

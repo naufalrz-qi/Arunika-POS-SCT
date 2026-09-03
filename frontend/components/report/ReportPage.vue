@@ -103,6 +103,10 @@ function cariSeluruhData() {
         variant="info"
         message="Menampilkan 100 data terbaru. Gunakan filter untuk melihat data lain."
       />
+      <!-- Peringatan milik halaman yang baru bisa dinilai SESUDAH datanya tiba
+           (mis. Hutang: kolom cicilan nol karena tak pernah dicatat). Di dalam
+           Deferred, jadi ia tak sempat berkedip saat data belum ada. -->
+      <slot name="peringatan" />
       <SummaryStrip :items="summaryItems" />
 
       <!-- Satu baris alat di atas tabel — sama seperti halaman Operasional:

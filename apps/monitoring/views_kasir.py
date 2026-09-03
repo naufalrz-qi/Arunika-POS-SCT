@@ -544,10 +544,27 @@ def nota_cetak(request, no_transaksi):
     kolom monospace 40 karakter, tanpa warna dan tanpa bingkai — supaya driver
     Windows LX-310 mengeluarkannya apa adanya dan cepat, alih-alih merender
     grafis baris demi baris.
+
+    `?bayar=` — uang yang diterima kasir. `t_penjualan` TIDAK punya kolom untuk
+    itu (lihat `penjualan._HEADER`), jadi satu-satunya tempat angkanya ada
+    adalah layar yang baru saja menerimanya. Ia dioper lewat query string, dan
+    kembaliannya dihitung DI SINI dari total versi server — bukan diterima dari
+    layar — supaya angka di struk tak bisa dikarang lewat URL.
+
+    Cetak ulang lewat /kasir/faktur tak membawa `bayar`, jadi di sana kedua
+    baris itu tidak tercetak sama sekali. Itu disengaja: lebih baik kosong
+    daripada "Kembali: 0" yang tidak benar.
     """
     profile = _active()
     nota = pj.baca_nota(profile, no_transaksi) if profile else None
     if not nota:
         request.session["flash_error"] = f"Nota {no_transaksi} tidak ditemukan."
         return redirect("/kasir/penjualan")
+    try:
+        bayar = float(request.GET.get("bayar") or "")
+    except ValueError:
+        bayar = None
+    if bayar is not None and bayar > 0:
+        nota["bayar"] = bayar
+        nota["kembali"] = max(0.0, bayar - float(nota["total"]))
     return render(request, "Kasir/NotaCetak", props={"nota": nota})

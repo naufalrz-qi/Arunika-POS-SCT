@@ -858,16 +858,54 @@ def _stok_min_map(cur) -> dict:
     return {(_k(r["kd_divisi"]), _k(r["kd_barang"])): _f(r["stok_min"]) for r in _dictify(cur)}
 
 
+# `jumlah` lewat subquery ber-MAX, bukan join langsung ke m_barang_satuan:
+# (kd_barang, kd_satuan) bisa ganda di sana, dan join langsung akan menggandakan
+# baris pembelian sehingga bobot rata-ratanya ikut ganda. Pola yang sama dengan
+# _movement_sums. LEFT JOIN + COALESCE(...,1) supaya baris yang satuannya tak
+# terdaftar tetap ikut dihitung — sisi KUANTITAS sudah menghitungnya, jadi
+# menjatuhkannya di sisi harga membuat keduanya bicara tentang barang berbeda.
+_JUMLAH_SATUAN = (
+    "LEFT JOIN (SELECT kd_barang, kd_satuan, MAX(jumlah) AS jumlah "
+    "FROM m_barang_satuan GROUP BY kd_barang, kd_satuan) bs "
+    "ON bs.kd_barang = pd.kd_barang AND bs.kd_satuan = pd.kd_satuan"
+)
+
+
 def _purchase_prices(cur, tanggal) -> tuple[dict, dict, dict]:
-    """(harga_average_map, harga_beli_akhir_map, harga_beli_awal_map) — kd_barang -> float."""
+    """(harga_average_map, harga_beli_akhir_map, harga_beli_awal_map) — kd_barang -> float.
+
+    Ketiganya **per satuan TERKECIL**, karena yang mengalikannya (`stok_akhir` di
+    `stok_akhir_per_tanggal`) juga dalam satuan terkecil.
+
+    Satuannya adalah keseluruhan isi fungsi ini, dan pernah salah: rumus lama
+    membagi pembilang DAN penyebut dengan `bs.jumlah`, sehingga faktornya saling
+    menghilangkan dan yang keluar harga per satuan BELI. Kolom `nominal` di layar
+    Stok Akhir karena itu menggelembung sebesar faktor kemasan tiap barang —
+    terukur 2,25x (PAGESANGAN) sampai 3,89x (testgudang) atas seluruh katalog,
+    dan tepat 10,00x pada `AMP013` yang dibeli per satuan berisi 10.
+
+    Yang membuatnya lolos lama: `harga_beli_akhir` di fungsi yang SAMA membagi
+    dengan benar, jadi dua kolom bertetangga memakai satuan berbeda tanpa ada
+    yang mencolok di layar. Invarian yang menahannya sekarang ada di
+    `manage.py check_stock_agg`: harga_average wajib berada di antara harga beli
+    per satuan terkecil terendah dan tertinggi milik barang itu.
+
+    Ini BUKAN rata-rata tertimbang PSAK 14 seperti `_harga_pokok_rata` (dipakai
+    Laba Rugi): tak berjangkar tutup buku, harga bruto, retur pembelian tak
+    dikurangkan. Sengaja: layar ini mendaftar seluruh katalog, dan versi PSAK
+    menilai Rp 0 untuk barang tanpa pembelian sejak tutup buku — 1.602 dari
+    12.930 baris di PUSAT. Keduanya diukur berselisih <=3% (PUSAT +2,9%,
+    testgudang -1,7%, PAGESANGAN -0,4%), jadi total di layar ini dan persediaan
+    di Laba Rugi memang berbeda tipis, dan itu bukan cacat.
+    """
     cur.execute(
-        """
+        f"""
         SELECT pd.kd_barang,
-            SUM(pd.qty * pd.harga_beli / NULLIF(bs.jumlah, 0))
-                / NULLIF(SUM(pd.qty / NULLIF(bs.jumlah, 0)), 0) AS harga_avg
+            SUM(pd.qty * pd.harga_beli)
+                / NULLIF(SUM(pd.qty * COALESCE(bs.jumlah, 1)), 0) AS harga_avg
         FROM t_pembelian_detail pd
         INNER JOIN t_pembelian p ON pd.no_transaksi = p.no_transaksi
-        INNER JOIN m_barang_satuan bs ON pd.kd_barang = bs.kd_barang AND pd.kd_satuan = bs.kd_satuan
+        {_JUMLAH_SATUAN}
         WHERE CONVERT(DATE, p.tanggal) <= ? AND p.status IN (0, 1)
         GROUP BY pd.kd_barang
         """,
@@ -878,14 +916,14 @@ def _purchase_prices(cur, tanggal) -> tuple[dict, dict, dict]:
     # Last purchase price per base unit — picked in SQL (ROW_NUMBER, still a plain
     # SELECT) instead of streaming every purchase row to Python.
     cur.execute(
-        """
+        f"""
         SELECT x.kd_barang, x.harga_per_unit FROM (
             SELECT pd.kd_barang,
-                pd.harga_beli / NULLIF(bs.jumlah, 0) AS harga_per_unit,
+                pd.harga_beli / NULLIF(COALESCE(bs.jumlah, 1), 0) AS harga_per_unit,
                 ROW_NUMBER() OVER (PARTITION BY pd.kd_barang ORDER BY p.tanggal DESC, p.no_transaksi DESC) AS rn
             FROM t_pembelian_detail pd
             INNER JOIN t_pembelian p ON pd.no_transaksi = p.no_transaksi
-            INNER JOIN m_barang_satuan bs ON pd.kd_barang = bs.kd_barang AND pd.kd_satuan = bs.kd_satuan
+            {_JUMLAH_SATUAN}
             WHERE CONVERT(DATE, p.tanggal) <= ? AND p.status IN (0, 1)
         ) x WHERE x.rn = 1
         """,
@@ -899,6 +937,120 @@ def _purchase_prices(cur, tanggal) -> tuple[dict, dict, dict]:
         init_map.setdefault(_k(r["kd_barang"]), _f(r["harga_beli_awal"]))
 
     return avg_map, last_map, init_map
+
+
+def _harga_pokok_rata(cur, tanggal) -> dict:
+    """Harga pokok rata-rata tertimbang per barang s.d. `tanggal` — kd_barang -> float.
+
+    Rata-rata tertimbang (PSAK 14 / IAS 2), dihitung HANYA atas arus yang membawa
+    biaya perolehan: saldo awal, pembelian, dikurangi retur pembelian.
+
+        harga = (stok_awal*harga_beli_awal + Σ qty_beli*harga_netto - Σ qty_retur*harga_retur)
+                / (stok_awal + Σ qty_beli - Σ qty_retur)
+
+    **Opname, mutasi, dan retur penjualan sengaja TIDAK ikut.** Ketiganya menggeser
+    kuantitas tanpa menimbulkan biaya, jadi mereka mengubah stok on-hand tapi bukan
+    dasar harganya — unitnya otomatis dinilai pada rata-rata yang sama. Ini bedanya
+    dengan legacy `GetHargaAverageBarangPerTanggal`, yang menelusuri lapisan secara
+    LIFO (dilarang PSAK 14) dan menilai stok hasil opname masuk Rp 0 — di GUDANG itu
+    14,3 juta unit, bukan kasus pinggiran.
+
+    Harga beli dipakai NETTO (diskon1-4 baris, diskon1-4 nota, pajak, ppnbm) lewat
+    `_ghb` yang sama dengan laporan pembelian, karena biaya perolehan memang termasuk
+    pajak yang tak terpulihkan. Semua kuantitas dikonversi ke satuan terkecil.
+
+    Bukan `_purchase_prices()`: fungsi itu membagi pembilang DAN penyebutnya dengan
+    `bs.jumlah` sehingga faktornya saling menghilangkan, dan hasilnya harga per satuan
+    BELI — sementara kuantitas yang mengalikannya dalam satuan terkecil.
+    """
+    from apps.transactions.reports import _ghb  # noqa: PLC0415 — hindari impor silang di modul
+
+    beli_netto = _ghb(
+        _ghb("d.harga_beli", [f"COALESCE(d.diskon{i}, 0)" for i in (1, 2, 3, 4)]),
+        [f"COALESCE(t.diskon{i}, 0)" for i in (1, 2, 3, 4)],
+        pajak="COALESCE(t.pajak, 0)", ppnbm="COALESCE(t.ppnbm, 0)",
+    )
+    closing = _closing_date(cur)
+    cur.execute(
+        # `jumlah` lewat subquery ber-MAX supaya (kd_barang, kd_satuan) ganda tak
+        # menggandakan baris pembelian — pola yang sama dengan _movement_sums.
+        f"""
+        SELECT kd_barang, SUM(qty) AS qty, SUM(nilai) AS nilai FROM (
+            SELECT bd.kd_barang,
+                   SUM(COALESCE(bd.stok_awal, 0)) AS qty,
+                   SUM(COALESCE(bd.stok_awal, 0) * COALESCE(bd.harga_beli_awal, 0)) AS nilai
+            FROM m_barang_divisi bd WHERE bd.stok_awal > 0 GROUP BY bd.kd_barang
+            UNION ALL
+            SELECT d.kd_barang,
+                   SUM(COALESCE(bs.jumlah, 1) * d.qty),
+                   SUM(d.qty * ({beli_netto}))
+            FROM t_pembelian_detail d
+            INNER JOIN t_pembelian t ON d.no_transaksi = t.no_transaksi
+            LEFT JOIN (SELECT kd_barang, kd_satuan, MAX(jumlah) AS jumlah
+                       FROM m_barang_satuan GROUP BY kd_barang, kd_satuan) bs
+              ON bs.kd_barang = d.kd_barang AND bs.kd_satuan = d.kd_satuan
+            WHERE t.tanggal > ? AND t.tanggal <= ? AND t.status IN (0, 1)
+            GROUP BY d.kd_barang
+            UNION ALL
+            SELECT d.kd_barang,
+                   -SUM(COALESCE(bs.jumlah, 1) * d.qty),
+                   -SUM(d.qty * d.harga)
+            FROM t_pembelian_retur_detail d
+            INNER JOIN t_pembelian_retur t ON d.no_retur = t.no_retur
+            LEFT JOIN (SELECT kd_barang, kd_satuan, MAX(jumlah) AS jumlah
+                       FROM m_barang_satuan GROUP BY kd_barang, kd_satuan) bs
+              ON bs.kd_barang = d.kd_barang AND bs.kd_satuan = d.kd_satuan
+            WHERE t.tanggal > ? AND t.tanggal <= ?
+            GROUP BY d.kd_barang
+        ) perolehan
+        GROUP BY kd_barang
+        HAVING SUM(qty) > 0
+        """,
+        [closing, tanggal, closing, tanggal],
+    )
+    return {_k(r["kd_barang"]): _f(r["nilai"]) / _f(r["qty"])
+            for r in _dictify(cur) if _f(r["qty"])}
+
+
+def nilai_persediaan(profile, tanggal, kd_divisi=None) -> dict:
+    """Nilai persediaan per `tanggal`: kuantitas dari mesin pergerakan × harga rata-rata.
+
+    Mengembalikan {"nilai", "unit", "barang", "tanpa_harga", "stok_negatif"}.
+
+    Kuantitas disaring divisi, **harga TIDAK**: satu barang punya satu biaya perolehan
+    bagi perusahaan, tak berubah karena disimpan di gudang mana. Efek yang memang
+    diinginkan — nilai persediaan tiap divisi menjumlah tepat ke nilai seluruh server.
+    Ini kebalikan dari `stock_levels`, yang angkanya memang bergeser saat difilter.
+
+    Saldo negatif (cacat data, bukan keadaan fisik) tetap dinilai supaya identitas
+    HPP = awal + beli - akhir tidak diam-diam meleset; jumlahnya dilaporkan di
+    `stok_negatif` agar terlihat, bukan tersembunyi.
+    """
+    with mssql.cursor(profile) as cur:
+        sums = _movement_sums(cur, kd_divisi=kd_divisi, date_to=tanggal)
+        harga = _harga_pokok_rata(cur, tanggal)
+
+    saldo: dict = {}
+    for r in sums:
+        kb = _k(r["kd_barang"])
+        saldo[kb] = saldo.get(kb, 0.0) + _f(r["stok_awal"]) + _f(r["masuk"]) - _f(r["keluar"])
+
+    nilai = unit = 0.0
+    barang = tanpa = negatif = 0
+    for kb, s in saldo.items():
+        if not s:
+            continue
+        barang += 1
+        unit += s
+        if s < 0:
+            negatif += 1
+        h = harga.get(kb)
+        if h is None:
+            tanpa += 1
+            continue
+        nilai += s * h
+    return {"nilai": round(nilai, 2), "unit": round(unit, 3), "barang": barang,
+            "tanpa_harga": tanpa, "stok_negatif": negatif}
 
 
 def _barang_universe(cur, kd_divisi=None) -> list[tuple]:

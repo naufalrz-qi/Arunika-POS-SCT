@@ -40,6 +40,7 @@ from apps.core.models import (
 from apps.inventory import services as inv
 from apps.master_data import barang, master_crud
 from apps.transactions import kas as kas_tulis
+from apps.transactions import laba_rugi as lr
 from apps.transactions import opname as opname_tulis
 from apps.transactions.penjualan import opsi_nota as _opsi_nota
 from apps.transactions.penjualan import satuan_banyak as _satuan_banyak
@@ -79,11 +80,54 @@ CONN_ERROR = "Tidak ada koneksi aktif, atau server tidak dapat dihubungi. Pilih 
 _UANG_INFO_KASIR = {"sisa_piutang", "total_cicilan", "total_penjualan",
                     "limit_kredit"}
 
+# Kolom rupiah milik Hutang Supplier (baris + ringkasan) dan kedua laporan Order.
+_UANG_HUTANG_ORDER = {"total_pembelian", "sisa_hutang", "total_sisa_hutang",
+                      "total_bersih"}
+
+# Kolom rupiah laporan spec-driven lainnya: baris DAN alias ringkasannya, karena
+# `_report_view` menyaring keduanya dari dict yang sama.
+#
+# `harga` ada di sini dan BUKAN di harga_jual/harga_beli walau ia harga satuan:
+# namanya tak menyebut sisi mana, dan artinya memang berbeda antar-laporan —
+# harga jual di Penjualan (Detail), harga beli di Pembelian, campur keduanya di
+# Transaksi Barang. `nominal` ("tak boleh melihat nilai uang apa pun") adalah
+# satu-satunya kunci yang benar untuk ketiganya sekaligus. Akibatnya: akun yang
+# HANYA mencabut harga_beli tetap melihat kolom "Harga" di laporan Pembelian.
+# Menutupnya butuh nama kolom yang menyebut sisinya, bukan tambalan di sini.
+#
+# `pajak`/`ppnbm` di Pembelian adalah TARIF, bukan rupiah — ikut tertutup sebagai
+# efek samping. Dibiarkan: menutup tarif pajak bagi akun yang tak boleh melihat
+# uang tidak merugikan siapa pun, sedangkan memisahkannya butuh rename kolom.
+_UANG_LAPORAN = {
+    # subtotal & total lintas laporan
+    "subtotal", "total", "total_kotor", "total_diskon", "total_pajak",
+    "total_potongan", "total_sisa_piutang",
+    # Penjualan per Nota
+    "potongan", "voucher", "total_setelah_voucher", "pajak", "pajak2",
+    # Voucher
+    "nilai_dipakai", "total_nominal", "total_nilai_dipakai",
+    # harga satuan yang namanya tak menyebut sisi mana — lihat catatan di atas
+    "harga",
+    # Kolom diskon per baris & per nota. Nilainya dual-mode (persen ATAU rupiah
+    # flat), tapi layar merendernya sebagai rupiah tanpa syarat — jadi bagi
+    # pembacanya ia memang angka rupiah, dan ikut ditutup.
+    *(f"dd{i}" for i in (1, 2, 3, 4)),
+    *(f"dt{i}" for i in (1, 2, 3, 4)),
+    *(f"diskon_item{i}" for i in (1, 2, 3, 4)),
+    *(f"diskon_total{i}" for i in (1, 2, 3, 4)),
+}
+
+# Turunan modal: hilang bila SALAH SATU dari harga_beli atau nominal dicabut.
+# `laba`/`margin` ikut karena modal bisa dihitung mundur darinya bila omsetnya
+# terlihat — menutup harga_pokok tapi membiarkan laba tidak menutup apa pun.
+_UANG_MODAL = {"harga_pokok", "total_harga_pokok", "laba", "total_laba",
+               "margin", "margin_total"}
+
 # Satu kunci izin menutup beberapa field. `harga_average` ikut harga_beli
 # karena ia rata-rata harga perolehan — modal, bukan harga jual.
 _FIELDS_BY_DATA_KEY = {
-    "harga_jual": {"harga_jual"},
-    "harga_beli": {"harga_average", "harga_beli_akhir"},
+    "harga_jual": {"harga_jual", "harga_bersih", "harga_promo"},
+    "harga_beli": {"harga_average", "harga_beli_akhir"} | _UANG_MODAL,
     # `nilai` = kolom Nilai di kartu Fast Moving dashboard. Sempat terlewat pada
     # rilis pertama: omset di kartu ringkasan sudah hilang, tapi rupiah per
     # barang di tabel bawahnya masih tampil.
@@ -93,8 +137,16 @@ _FIELDS_BY_DATA_KEY = {
     # halaman itu memang berisi belanja per orang, jadi tanpa ini kunci `nominal`
     # jadi hiasan justru di halaman yang paling terang soal uang.
     "nominal": {"nominal", "revenue", "nilai", "total_belanja", "rata_nota",
-                "tier_nilai", "total_nilai", "rata_nota_semua"} | _UANG_INFO_KASIR,
+                "tier_nilai", "total_nilai", "rata_nota_semua"}
+    | _UANG_INFO_KASIR | _UANG_HUTANG_ORDER | _UANG_LAPORAN | _UANG_MODAL,
 }
+
+# Nama kolom yang TIDAK boleh masuk daftar di atas walau bunyinya seperti uang.
+# Didaftar eksplisit supaya penambahan berikutnya menabrak tes, bukan menabrak
+# laporan: ketiganya kuantitas di Opname Stok (`total_masuk`/`total_keluar` juga
+# dipakai Kas Harian sebagai rupiah, tapi layar itu bukan laporan spec-driven).
+_BUKAN_UANG = {"total_qty", "total_masuk", "total_keluar", "total_diferensi",
+               "koreksi_masuk", "koreksi_keluar", "diferensi", "qty", "jml_baris"}
 
 
 def _hidden_fields(request) -> set[str]:
@@ -116,10 +168,38 @@ def _kolom_tanpa_uang(request, spec, columns=None):
     memori datar), jadi yang dicabut adalah DAFTAR KOLOM-nya. Efeknya sama —
     nilainya tak pernah sampai ke sel."""
     columns = spec["columns"] if columns is None else columns
-    hidden = _hidden_fields(request) & set(spec.get("money_fields", ()))
+    hidden = _hidden_fields(request)
     if not hidden:
         return columns
     return [c for c in columns if c["key"] not in hidden]
+
+
+def _uang_bespoke(request, kolom, kunci="nominal") -> set:
+    """Nama kolom uang yang harus dibuang di view BESPOKE — atau himpunan kosong.
+
+    View bespoke tak bisa memakai `_hidden_fields()`, karena peta nama global
+    tak sanggup menyatakan kolom yang artinya berbeda antar-layar:
+
+        masuk / keluar              rupiah di Kas Harian, KUANTITAS di Mutasi Stok
+        total_masuk / total_keluar  rupiah di Kas Harian, KUANTITAS di Opname Stok
+                                    dan di Transaksi Barang
+
+    Mendaftarkan nama-nama itu akan mengosongkan laporan yang sama sekali tak
+    menyebut rupiah — karena itu semuanya ada di `_BUKAN_UANG`. Jadi di sini
+    KUNCI IZIN-nya yang diperiksa langsung, dan tiap layar menyebut sendiri
+    kolom mana miliknya yang berisi uang.
+    """
+    user = getattr(request, "user", None)
+    if user and user.is_authenticated and not user.can_see(kunci):
+        return set(kolom)
+    return set()
+
+
+def _tanpa_uang(rows, buang: set) -> list:
+    """Baris list-of-dict tanpa kolom yang dibuang (salinan dangkal per baris)."""
+    if not buang:
+        return rows
+    return [{k: v for k, v in r.items() if k not in buang} for r in rows]
 
 log = logging.getLogger(__name__)
 
@@ -388,34 +468,6 @@ def users_delete(request, user_id):
     log_activity(request, "user", f"User {username} dihapus permanen")
     request.session["flash_success"] = f"User {username} dihapus."
     return redirect("/admin-panel/users")
-
-
-# --- Master: produk (read-only) -------------------------------------------
-
-def products_index(request):
-    search = request.GET.get("search", "")
-    kd_kategori = request.GET.get("kd_kategori", "")
-    profile = _active()
-
-    # Deferred: katalog penuh (tanpa cap) bisa makan detik-an — shell (judul,
-    # kartu) tampil instan, tabel muncul begitu query selesai.
-    def load_products():
-        products, categories, conn_error = [], [], None
-        if profile:
-            try:
-                products = master.list_products(profile, search, kd_kategori)
-                categories = master.list_categories(profile)
-            except pyodbc.Error as exc:
-                conn_error = mssql.friendly_error(exc, "Gagal membaca master produk")
-        else:
-            conn_error = CONN_ERROR
-        return {"rows": products, "categories": categories, "conn_error": conn_error}
-
-    return render(
-        request,
-        "Admin/MasterData/Products",
-        props={"products": defer(load_products)},
-    )
 
 
 # --- Master: pelanggan (read-only) ----------------------------------------
@@ -1582,6 +1634,36 @@ def kode_nota_save(request):
     return redirect("/admin-panel/master/kode-nota")
 
 
+def informasi_perusahaan(request):
+    """Layar & handler simpan kelola informasi perusahaan."""
+    profile = _active()
+    if request.method == "POST":
+        if not profile:
+            request.session["flash_error"] = CONN_ERROR
+            return redirect("/admin-panel/master-data/informasi-perusahaan")
+        try:
+            data = get_data(request)
+            master.simpan_info_perusahaan(profile, data)
+            log_activity(request, "informasi_perusahaan", "Memperbarui profil informasi perusahaan")
+            request.session["flash_success"] = "Informasi Perusahaan berhasil disimpan."
+        except ValueError as exc:
+            request.session["flash_error"] = str(exc)
+        except pyodbc.Error as exc:
+            request.session["flash_error"] = mssql.friendly_error(exc, "Gagal menyimpan informasi perusahaan")
+        return redirect("/admin-panel/master-data/informasi-perusahaan")
+
+    def muat():
+        if not profile:
+            return {"info": {}, "conn_error": CONN_ERROR}
+        try:
+            return {"info": master.baca_info_perusahaan(profile), "conn_error": None}
+        except pyodbc.Error as exc:
+            return {"info": {}, "conn_error": mssql.friendly_error(exc, "Gagal membaca informasi perusahaan")}
+
+    return render(request, "Admin/MasterData/KelolaInformasiPerusahaan", props={"info": defer(muat)})
+
+
+
 def _deny_non_superadmin(request):
     if request.user.role != Role.SUPERADMIN:
         return ditolak(
@@ -1884,12 +1966,19 @@ def _report_view(spec):
                     conn_error = "Filter yang dipilih tidak bisa diproses. Kembalikan filter ke bawaan."
             else:
                 conn_error = CONN_ERROR
-            # Izin nilai uang (User.hidden_data_keys). Opt-in per spec lewat
-            # `money_fields`: laporan yang tak menyebutkannya tak berubah
-            # perilakunya. Dijatuhkan DI SINI, setelah SQL — bukan dengan
-            # membangun SELECT lain — supaya cuma ada satu query untuk dirawat,
-            # dan tak mungkin ada jalur yang lupa menyaring.
-            hidden = _hidden_fields(request) & set(spec.get("money_fields", ()))
+            # Izin nilai uang (User.hidden_data_keys). Dijatuhkan DI SINI, setelah
+            # SQL — bukan dengan membangun SELECT lain — supaya cuma ada satu
+            # query untuk dirawat.
+            #
+            # Berlaku untuk SEMUA laporan spec-driven, tanpa opt-in per spec.
+            # Dulu ia disaring lagi dengan `spec["money_fields"]`, dan bentuk
+            # opt-in itulah sumber kebocorannya: laporan yang lupa mendaftar tetap
+            # mengirim rupiah, dan itu terjadi diam-diam DUA KALI (ekspor
+            # Klasifikasi Pelanggan, lalu seluruh laporan penjualan/pembelian +
+            # Piutang). Kebijakannya kini hidup di satu tempat — nama kolom di
+            # `_FIELDS_BY_DATA_KEY` — sehingga laporan baru ikut terlindungi
+            # tanpa penulisnya perlu ingat apa pun.
+            hidden = _hidden_fields(request)
             if hidden:
                 rows = [{k: v for k, v in r.items() if k not in hidden} for r in rows]
                 summary = {k: v for k, v in summary.items() if k not in hidden}
@@ -1950,6 +2039,69 @@ def _report_export(spec):
 
 
 # Penjualan
+
+# --- Master: produk (read-only) -------------------------------------------
+# Laporan spec-driven, bukan view bespoke. Versi sebelumnya mengirim SELURUH
+# katalog (~55.000 barang) sebagai list-of-dict dan menyaringnya di peramban,
+# sementara panel filternya `@submit="() => {}"` — kosong — sehingga `?search=`
+# tak pernah sampai ke server dan tiap muat mengambil semuanya. Gejalanya di
+# layar cuma "memuat terus".
+#
+# Pindah ke `_report_view` sekalian menutup dua hal gratis: penyaringan izin
+# uang jadi otomatis (`harga_jual` sudah terdaftar di `_FIELDS_BY_DATA_KEY`,
+# jadi `_uang_bespoke` di sini tak diperlukan lagi) dan query-nya lewat
+# `report_cursor` (READ UNCOMMITTED), yang penting karena halaman ini memindai
+# tabel yang sedang ditulis POS.
+def _opt_master_produk(profile):
+    return {
+        "kategori": _opt_master(profile, "SELECT kd_kategori, nama FROM m_kategori ORDER BY nama"),
+        "merk": _opt_master(profile, "SELECT kd_merk, nama FROM m_merk ORDER BY nama"),
+        "model": _opt_master(profile, "SELECT kd_model, nama FROM m_model ORDER BY nama"),
+        "warna": _opt_master(profile, "SELECT kd_warna, nama FROM m_warna ORDER BY nama"),
+        "jenis_bahan": _opt_master(profile, "SELECT kd_jenis_bahan, nama FROM m_jenis_bahan ORDER BY nama"),
+        "satuan": _opt_master(profile, "SELECT kd_satuan, nama FROM m_satuan ORDER BY nama"),
+    }
+
+
+_MASTER_PRODUK = {
+    "component": "Admin/MasterData/Products",
+    "url": "/admin-panel/master/products",
+    "inner": rpt.master_produk,
+    "sorts": rpt.SORTS_MASTER_PRODUK,
+    "default_sort": "nama",
+    # Katalog dibaca A→Z. `desc` bawaan laporan cocok untuk tanggal, tidak untuk
+    # nama barang — ia menaruh huruf Z di halaman pertama.
+    "default_sort_dir": "asc",
+    "summary": rpt.SUMMARY_MASTER_PRODUK,
+    "filter_keys": ["kd_kategori", "kd_merk", "kd_model", "kd_warna",
+                    "kd_jenis_bahan", "kd_satuan", "status"],
+    "filters": {"harga_jual": ("harga_jual", "number_range")},
+    # Lambda, bukan rujukan langsung: spec ini dict tingkat-modul, jadi
+    # menaruh fungsinya apa adanya membekukan objeknya saat impor dan
+    # patch di tes tak pernah kena. Sama seperti spec laporan lain.
+    "options": lambda p: _opt_master_produk(p),
+    "filename": "produk",
+    "columns": [
+        {"key": "kd_barang", "label": "Kode"},
+        {"key": "nama", "label": "Nama Produk"},
+        {"key": "kategori", "label": "Kategori"},
+        {"key": "jenis_bahan", "label": "Jenis Bahan"},
+        {"key": "departemen", "label": "Departemen"},
+        {"key": "divisi_barang", "label": "Divisi Barang"},
+        {"key": "sub_kategori", "label": "Sub Kategori"},
+        {"key": "ukuran", "label": "Ukuran"},
+        {"key": "pabrik", "label": "Pabrik"},
+        {"key": "satuan", "label": "Satuan", "align": "center"},
+        {"key": "harga_jual", "label": "Harga", "align": "right", "format": "rupiah"},
+        {"key": "status", "label": "Status", "align": "center"},
+        {"key": "status_pinjam", "label": "Status Pinjam", "align": "center"},
+        {"key": "keterangan", "label": "Keterangan"},
+    ],
+}
+products_index = _report_view(_MASTER_PRODUK)
+products_export = _report_export(_MASTER_PRODUK)
+
+
 _PENJUALAN_ALL = {
     "component": "Admin/Reports/PenjualanAll",
     "url": "/admin-panel/laporan/penjualan",
@@ -2193,6 +2345,90 @@ _PIUTANG = {
 }
 piutang = _report_view(_PIUTANG)
 piutang_export = _report_export(_PIUTANG)
+
+# Hutang Supplier — cermin Piutang. `t_hutang_cicilan` nol baris di setiap
+# server, jadi kolom cicilan selalu nol; layarnya yang menjelaskan (lihat
+# catatan di rpt.hutang).
+_HUTANG = {
+    "component": "Admin/Reports/Hutang",
+    "url": "/admin-panel/laporan/hutang",
+    "inner": rpt.hutang,
+    "sorts": rpt.SORTS_HUTANG,
+    "default_sort": "sisa_hutang",
+    "summary": rpt.SUMMARY_HUTANG,
+    "filter_keys": ["kd_divisi", "kd_supplier"],
+    "filters": rpt.FILTERS_HUTANG,
+    "enable_recent": True,
+    "recent_sort": "tanggal",
+    "options": lambda p: {"divisi": _opt_divisi(p), "supplier": _opt_supplier(p)},
+    "filename": "hutang",
+    "columns": [
+        {"key": "no_transaksi", "label": "No. Nota"},
+        {"key": "tanggal", "label": "Tanggal"},
+        {"key": "supplier", "label": "Supplier"},
+        {"key": "jatuh_tempo", "label": "Jatuh Tempo"},
+        {"key": "total_pembelian", "label": "Total Pembelian"},
+        {"key": "total_cicilan", "label": "Total Cicilan"},
+        {"key": "sisa_hutang", "label": "Sisa Hutang"},
+        {"key": "hari_terlambat", "label": "Hari Terlambat"},
+    ],
+}
+hutang = _report_view(_HUTANG)
+hutang_export = _report_export(_HUTANG)
+
+# Order Penjualan & Order Pembelian — jalur tulisnya sudah ada sejak lama, jalur
+# bacanya baru di sini. Grain per order; "Terbuka" = belum jadi nota.
+_KOLOM_ORDER = [
+    {"key": "no_order", "label": "No. Order"},
+    {"key": "tanggal", "label": "Tanggal"},
+    {"key": "tanggal_terima", "label": "Tgl. Terima"},
+    {"key": "divisi", "label": "Divisi"},
+    {"key": "status", "label": "Status"},
+    {"key": "no_transaksi", "label": "No. Nota"},
+    {"key": "jml_item", "label": "Jml Item"},
+    {"key": "total_qty", "label": "Total Qty"},
+    {"key": "total_bersih", "label": "Total Bersih"},
+]
+_OPSI_STATUS_ORDER = [{"value": "Terbuka", "label": "Terbuka"},
+                      {"value": "Jadi Nota", "label": "Jadi Nota"}]
+
+_ORDER_PENJUALAN = {
+    "component": "Admin/Reports/OrderPenjualan",
+    "url": "/admin-panel/laporan/order-penjualan",
+    "inner": rpt.order_penjualan,
+    "sorts": rpt.SORTS_ORDER_PENJUALAN,
+    "default_sort": "tanggal",
+    "summary": rpt.SUMMARY_ORDER,
+    "filter_keys": ["kd_divisi", "kd_customer", "status_order"],
+    "filters": rpt.FILTERS_ORDER_PENJUALAN,
+    "enable_recent": True,
+    "recent_sort": "tanggal",
+    "options": lambda p: {"divisi": _opt_divisi(p), "customer": _opt_customer(p),
+                          "status_order": _OPSI_STATUS_ORDER},
+    "filename": "order-penjualan",
+    "columns": [*_KOLOM_ORDER[:3], {"key": "mitra", "label": "Customer"}, *_KOLOM_ORDER[3:]],
+}
+order_penjualan = _report_view(_ORDER_PENJUALAN)
+order_penjualan_export = _report_export(_ORDER_PENJUALAN)
+
+_ORDER_PEMBELIAN = {
+    "component": "Admin/Reports/OrderPembelian",
+    "url": "/admin-panel/laporan/order-pembelian",
+    "inner": rpt.order_pembelian,
+    "sorts": rpt.SORTS_ORDER_PEMBELIAN,
+    "default_sort": "tanggal",
+    "summary": rpt.SUMMARY_ORDER,
+    "filter_keys": ["kd_divisi", "kd_supplier", "status_order"],
+    "filters": rpt.FILTERS_ORDER_PEMBELIAN,
+    "enable_recent": True,
+    "recent_sort": "tanggal",
+    "options": lambda p: {"divisi": _opt_divisi(p), "supplier": _opt_supplier(p),
+                          "status_order": _OPSI_STATUS_ORDER},
+    "filename": "order-pembelian",
+    "columns": [*_KOLOM_ORDER[:3], {"key": "mitra", "label": "Supplier"}, *_KOLOM_ORDER[3:]],
+}
+order_pembelian = _report_view(_ORDER_PEMBELIAN)
+order_pembelian_export = _report_export(_ORDER_PEMBELIAN)
 
 # Pembelian
 _PEMBELIAN = {
@@ -2457,6 +2693,12 @@ _TRANSAKSI_COLUMNS = [
     {"key": "harga", "label": "Harga"},
 ]
 
+# `harga` di sini BERCAMPUR: harga beli untuk baris pembelian, harga jual untuk
+# baris penjualan, 0 untuk opname/mutasi. Karena itu ia ditutup oleh kunci
+# `nominal` ("tak boleh melihat nilai uang apa pun"), bukan harga_jual/harga_beli
+# yang salah satunya pasti keliru untuk separuh barisnya.
+_TRANSAKSI_UANG = {"harga"}
+
 
 def _transaksi_params(request):
     """Parse param laporan transaksi barang (semantik tanggal/closing custom)."""
@@ -2538,6 +2780,10 @@ def transaksi_barang(request):
         # f["warning"] — nama yang tak pernah ada di scope ini, jadi setiap
         # pemuatan prop deferred halaman ini berakhir NameError (500), bukan
         # tabel.
+        # Cuma `harga` yang rupiah di sini. `masuk`/`keluar` dan kedua kunci
+        # ringkasannya KUANTITAS — menutupnya akan mengosongkan laporan
+        # pergerakan barang tanpa satu pun rupiah ikut terlindungi.
+        rows = _tanpa_uang(rows, _uang_bespoke(request, _TRANSAKSI_UANG))
         return {"rows": rows, "total": total, "summary": summary, "options": options,
                 "conn_error": conn_error, "notice": None}
 
@@ -2572,7 +2818,9 @@ def transaksi_barang_export(request):
         try:
             with mssql.report_cursor(read_profile) as cur:
                 cur.execute(order_sql, params)
-                resp = reporting.xlsx_stream_response("transaksi-barang", _TRANSAKSI_COLUMNS, cur)
+                kolom = [c for c in _TRANSAKSI_COLUMNS
+                         if c["key"] not in _uang_bespoke(request, _TRANSAKSI_UANG)]
+                resp = reporting.xlsx_stream_response("transaksi-barang", kolom, cur)
             break
         except pyodbc.Error as exc:
             last_exc = exc
@@ -2828,6 +3076,11 @@ _FMI_STOK_COLUMNS = [
     {"key": "status", "label": "Status"},
 ]
 
+# `nilai_stok` = qty x harga_average. Tidak didaftar di `_FIELDS_BY_DATA_KEY`
+# karena layar ini bespoke: mendaftarkan namanya di sana tak akan menyaring
+# apa pun, dan justru membuat peta itu tampak menutupi sesuatu yang tidak.
+_FMI_STOK_UANG = {"nilai_stok", "total_nilai"}
+
 
 def _fmi_stok_rows(profile, f):
     """Baris FMI Stok terurut sesuai f — stok real per tanggal f['date_to'],
@@ -2916,6 +3169,12 @@ def fmi_stok(request):
                 conn_error = mssql.friendly_error(exc, "Gagal membaca FMI stok")
         else:
             conn_error = CONN_ERROR
+        # FmiStok.vue kebetulan tak MERENDER nilai_stok, tapi baris payloadnya
+        # tetap membawanya — dan kartu ringkasan memang menampilkan total_nilai.
+        # "Tak tampil di layar" bukan pembatasan; yang menahan adalah ini.
+        buang = _uang_bespoke(request, _FMI_STOK_UANG)
+        rows = _tanpa_uang(rows, buang)
+        summary = {k: v for k, v in summary.items() if k not in buang}
         return {"rows": rows, "total": total, "summary": summary,
                 "options": options, "conn_error": conn_error,
                 "notice": f["warning"] or None}
@@ -2944,8 +3203,10 @@ def fmi_stok_export(request):
     except pyodbc.Error as exc:
         request.session["flash_error"] = mssql.friendly_error(exc, "Gagal export")
         return redirect("/admin-panel/analitik/fmi-stok")
+    buang = _uang_bespoke(request, _FMI_STOK_UANG)
+    kolom = [c for c in _FMI_STOK_COLUMNS if c["key"] not in buang]
     log_activity(request, "export", f"Export fmi-stok: {len(rows)} baris")
-    return reporting.xlsx_response("fmi-stok", _FMI_STOK_COLUMNS, rows)
+    return reporting.xlsx_response("fmi-stok", kolom, rows)
 
 
 # --- Klasifikasi Pelanggan (untuk follow-up) --------------------------------
@@ -2996,7 +3257,6 @@ _KLASIFIKASI_PELANGGAN = {
     "default_sort_dir": "asc",
     "max_range_days": None,
     "default_from_days": 730,
-    "money_fields": _KLASIFIKASI_UANG,
     "options": lambda p: {"divisi": _opt_divisi(p)},
     "filename": "klasifikasi-pelanggan",
     "columns": _KLASIFIKASI_COLUMNS,
@@ -3170,6 +3430,12 @@ _KAS_COLUMNS = [
     {"key": "saldo", "label": "Saldo"},
 ]
 
+# Kolom + kunci ringkasan berisi rupiah di Kas Harian. Disebut di sini dan bukan
+# di `_FIELDS_BY_DATA_KEY` karena `masuk`/`keluar`/`total_masuk`/`total_keluar`
+# adalah KUANTITAS di layar lain — lihat `_uang_bespoke`.
+_KAS_UANG = {"masuk", "keluar", "saldo",
+             "total_masuk", "total_keluar", "saldo_awal", "saldo_akhir"}
+
 
 def kas_harian(request):
     f = reporting.parse_report_params(request, rpt.SORTS_KAS, "tanggal")
@@ -3194,6 +3460,12 @@ def kas_harian(request):
                 conn_error = mssql.friendly_error(exc, "Gagal membaca kas")
         else:
             conn_error = CONN_ERROR
+        # Kas Harian rupiah seluruhnya kecuali tanggal/kas/keterangan. Dibuang
+        # DI SINI, bukan disembunyikan di Vue: payload-nya tetap sampai ke
+        # peramban dan terbaca di tab Network.
+        buang = _uang_bespoke(request, _KAS_UANG)
+        rows = _tanpa_uang(rows, buang)
+        summary = {k: v for k, v in summary.items() if k not in buang}
         return {"rows": rows, "total": total, "summary": summary, "options": options,
                 "conn_error": conn_error, "notice": f["warning"] or None}
 
@@ -3219,10 +3491,16 @@ def kas_harian_export(request):
         return redirect("/admin-panel/kas/harian")
     inner, params = rpt.kas_harian(f)
     order_sql = f"SELECT TOP {reporting.EXPORT_CAP} * FROM ({inner}) AS q ORDER BY {f['order_by']}"
+    # Penjagaan yang SAMA dengan layar. `_fill_sheet` memetakan kolom lewat nama
+    # dari cur.description, jadi mencabut kolom di sini aman — tak ada pergeseran
+    # indeks. Pembatasan yang lupa dipasang di export membuat pembatasan di layar
+    # tak berarti apa-apa.
+    buang = _uang_bespoke(request, _KAS_UANG)
+    kolom = [c for c in _KAS_COLUMNS if c["key"] not in buang]
     try:
         with mssql.cursor(profile) as cur:
             cur.execute(order_sql, params)
-            resp = reporting.xlsx_stream_response("kas-harian", _KAS_COLUMNS, cur)
+            resp = reporting.xlsx_stream_response("kas-harian", kolom, cur)
     except pyodbc.Error as exc:
         request.session["flash_error"] = mssql.friendly_error(exc, "Gagal export")
         return redirect("/admin-panel/kas/harian")
@@ -3664,3 +3942,92 @@ def kas_input_save(request, jenis: str):
     log_activity(request, "kas", f"{hasil['label']} {hasil['nomor']}")
     request.session["flash_success"] = f"{hasil['label']} tersimpan: {hasil['nomor']}."
     return redirect(kembali)
+
+
+# --- Laba Rugi (Akuntansi) -------------------------------------------------
+# BUKAN _report_view: keluarannya daftar baris berlabel, bukan tabel berhalaman.
+# Alasan lengkap kenapa GetRekapHarian legacy tidak dipanggil ada di
+# apps/transactions/laba_rugi.py — ringkasnya: 171 dtk, dan metodenya LIFO.
+_LABA_RUGI_URL = "/admin-panel/laporan/laba-rugi"
+
+# Seluruh isi laporan ini rupiah. Menyaring per-field menyisakan halaman kosong
+# yang membingungkan, jadi halamannya menolak sekalian — dan mengatakan sebabnya.
+_LABA_RUGI_DITOLAK = (
+    "Laba Rugi berisi nilai uang seluruhnya, dan izin melihat nominal tidak "
+    "diberikan untuk akun Anda. Hubungi pengelola aplikasi bila Anda memang "
+    "membutuhkannya."
+)
+
+
+def _laba_rugi_boleh(request) -> bool:
+    return "nominal" not in _hidden_fields(request)
+
+
+def _laba_rugi_params(request):
+    """(date_from, date_to, kd_divisi) — bawaan: bulan berjalan.
+
+    Tanpa clamp 92 hari: pertanyaan laba rugi memang bisa setahun, dan biayanya
+    tidak tumbuh dengan panjang periode (persediaan dihitung 2x, titik).
+    """
+    f = reporting.parse_report_params(
+        request, {"tanggal": "tanggal"}, "tanggal", max_range_days=None)
+    return f["date_from"], f["date_to"], (request.GET.get("kd_divisi") or "").strip()
+
+
+def laba_rugi(request):
+    date_from, date_to, kd_divisi = _laba_rugi_params(request)
+
+    def muat():
+        profile = _active()
+        if not profile:
+            return {"conn_error": CONN_ERROR}
+        if not _laba_rugi_boleh(request):
+            return {"ditolak": _LABA_RUGI_DITOLAK}
+        try:
+            hasil = lr.hitung(profile, date_from, date_to, kd_divisi or None)
+            hasil["divisi"] = _opt_divisi(profile)
+            hasil["conn_error"] = None
+            return hasil
+        except lr.PeriodeTertutup as exc:
+            # Bukan kegagalan koneksi: periode yang diminta memang tak bisa
+            # dilaporkan. Dipisah supaya tak dirender sebagai banner error merah.
+            return {"ditolak": str(exc), "divisi": _opt_divisi(profile)}
+        except pyodbc.Error as exc:
+            return {"conn_error": mssql.friendly_error(exc, "Gagal menyusun laba rugi")}
+
+    return render(request, "Admin/Reports/LabaRugi", props={
+        "laporan": defer(muat),
+        "filters": {
+            "date_from": date_from.strftime("%Y-%m-%d"),
+            "date_to": date_to.strftime("%Y-%m-%d"),
+            "kd_divisi": kd_divisi,
+        },
+    })
+
+
+_LABA_RUGI_KOLOM = [{"key": "label", "label": "Keterangan"}, {"key": "nilai", "label": "Nilai"}]
+
+
+def laba_rugi_export(request):
+    # Penjagaan yang SAMA dengan layar. Pembatasan yang lupa dipasang di export
+    # membuat pembatasan di layar tak berarti apa-apa — sudah terjadi dua kali.
+    if not _laba_rugi_boleh(request):
+        request.session["flash_error"] = _LABA_RUGI_DITOLAK
+        return redirect(_LABA_RUGI_URL)
+    date_from, date_to, kd_divisi = _laba_rugi_params(request)
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect(_LABA_RUGI_URL)
+    try:
+        hasil = lr.hitung(profile, date_from, date_to, kd_divisi or None)
+    except lr.PeriodeTertutup as exc:
+        request.session["flash_error"] = str(exc)
+        return redirect(_LABA_RUGI_URL)
+    except pyodbc.Error as exc:
+        request.session["flash_error"] = mssql.friendly_error(exc, "Gagal export laba rugi")
+        return redirect(_LABA_RUGI_URL)
+    baris = [b for b in hasil["baris"] if b["jenis"] != lr.PEMISAH]
+    baris += [{"label": "", "nilai": ""}, {"label": "MEMO", "nilai": ""}] + hasil["memo"]
+    log_activity(request, "export", "Export laba-rugi")
+    return reporting.xlsx_response("laba-rugi", _LABA_RUGI_KOLOM, baris)

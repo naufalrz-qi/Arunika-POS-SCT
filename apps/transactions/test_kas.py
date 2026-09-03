@@ -1,4 +1,4 @@
-"""Jalur tulis kas: biaya operasional, penambahan kas, mutasi kas.
+"""Jalur tulis kas: biaya operasional, pendapatan lain-lain, penambahan kas, mutasi kas.
 
 MS SQL tidak disentuh — cursor di-fake dan SQL yang dieksekusi direkam. Bentuknya
 mengikuti test_opname_koreksi.py, karena jalur tulisnya memang sekeluarga.
@@ -60,6 +60,9 @@ LENGKAP = {
     "biaya": {"kd_divisi": "DAA000", "kd_biaya": "BAA001", "kd_jenis": "JAA000",
               "kd_kas": "KAA000", "nominal": "230000", "no_bukti": "",
               "keterangan": "lampu 30 watt"},
+    "pendapatan": {"kd_divisi": "DAA000", "kd_pendapatan": "PAA000",
+                   "kd_jenis": "JAA000", "kd_kas": "KAA000", "nominal": "90054",
+                   "no_bukti": "", "keterangan": "bunga tabungan"},
     "penambahan": {"kd_divisi": "DAA000", "kd_kas": "KAA000", "nominal": "500000",
                    "keterangan": "setor modal"},
     "mutasi": {"kd_divisi": "DAA000", "kd_kas_sumber": "KAA000",
@@ -120,13 +123,17 @@ class KolomTests(SimpleTestCase):
             self.assertEqual(len([s for s in cur.sql if s.startswith("INSERT")]), 1)
 
     def test_tanggal_server_ditulis_di_yang_punya(self):
-        """Tak ada default constraint; aplikasi lama menulisnya sendiri."""
-        for jenis in ("biaya", "mutasi"):
+        """Tak ada default constraint; aplikasi lama menulisnya sendiri.
+
+        Jenisnya diturunkan dari SPEC, bukan didaftar di sini — jenis kas baru
+        ikut terjaga tanpa menyentuh test ini."""
+        punya = [j for j, s in kas.SPEC.items() if "tanggal_server" in s["kolom"]]
+        self.assertTrue(punya)
+        for jenis in punya:
             cur = FakeCursor()
             _simpan(jenis, cur)
             ins = next(i for i, s in enumerate(cur.sql) if s.startswith("INSERT"))
             kolom = kas.SPEC[jenis]["kolom"]
-            self.assertIn("tanggal_server", kolom)
             self.assertIsNotNone(cur.params[ins][kolom.index("tanggal_server")])
 
     def test_penambahan_kas_tak_punya_tanggal_server(self):
@@ -219,6 +226,20 @@ class SpecTests(SimpleTestCase):
         for jenis, s in kas.SPEC.items():
             self.assertIn(s["jenis_nomor"], penomoran.JENIS, jenis)
             self.assertEqual(penomoran.JENIS[s["jenis_nomor"]][0], s["tabel"])
+
+    def test_setiap_opsi_pilih_punya_sumber_lookup(self):
+        """Opsi tanpa entri LOOKUP baru meledak saat layarnya dibuka, bukan di sini."""
+        for jenis, medan in kas.FORM.items():
+            for f in medan:
+                if f["tipe"] == "pilih":
+                    self.assertIn(f["opsi"], kas.LOOKUP, f"{jenis}.{f['name']}")
+
+    def test_pendapatan_kembaran_biaya(self):
+        """Kas Harian sudah membaca t_pendapatan jauh sebelum ada jalur tulisnya;
+        bentuknya harus sama dengan biaya operasional supaya barisnya menyatu."""
+        beda = set(kas.SPEC["pendapatan"]["kolom"]) ^ set(kas.SPEC["biaya"]["kolom"])
+        self.assertEqual(beda, {"kd_pendapatan", "kd_biaya"})
+        self.assertTrue(kas.SPEC["pendapatan"]["divisi_dari_layar"])
 
     def test_kas_tujuan_menunjuk_m_kas(self):
         """Tipenya varchar(10)/JR_KODE_ACCOUNT, tapi tiga VIEW legacy

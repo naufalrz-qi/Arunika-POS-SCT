@@ -15,11 +15,11 @@ Ringkasan arsitektur + status untuk planning lanjutan. Django + Inertia.js + Vue
 - **Prod-asset (lintas device/Tailscale)**: `.env` `DJANGO_VITE_DEV=0` + `npm run build`, Django serve aset dari origin sendiri (`:8000/static/assets/...`). Akses dari device manapun yang bisa jangkau `:8000`. **Setelah tiap edit frontend wajib `npm run build`.**
 - Produksi Windows: `waitress-serve --threads=32 --listen=0.0.0.0:8000 config.wsgi:application` (1 proses → cache per-proses konsisten). Lihat `PRODUCTION.md`.
 
-## Peta menu (42) → sumber data
+## Peta menu → sumber data
 
 Route prefix `/admin-panel/`. View di `apps/monitoring/views.py` (kecuali connections di `apps/connections/views.py`). Menu def: `apps/core/menus.py`.
 
-Jumlahnya **58 per 2026-08-09** (`len(ALL_MENUS)`), naik dari 42 saat audit kesiapan ditulis — hitung ulang dari `ALL_MENUS`, jangan dari angka di paragraf ini atau di `KESIAPAN-FITUR.md`.
+Jumlahnya **67 per 2026-08-11** (`len(ALL_MENUS)`, diukur), naik dari 42 saat audit kesiapan ditulis. Angka di paragraf ini sudah dua kali tertinggal dari kenyataan (tertulis 42, lalu 58, aslinya 62 sebelum lima menu terakhir) — **hitung ulang dari `ALL_MENUS`**, jangan percaya angka di sini maupun di `KESIAPAN-FITUR.md`.
 
 **SEMUA menu sudah REAL** (migrasi Fase 3-7 selesai) — `frontend/mock/*.js` sudah dihapus total, tidak ada lagi import `@/mock` di `frontend/pages`. Laporan penjualan/pembelian pakai `apps/transactions/reports.py` (SQL builder per laporan + pagination server-side + export XLSX via `openpyxl`).
 
@@ -267,7 +267,9 @@ Tiga jalur tulis baru, semuanya diukur di server sebelum ditulis.
 
 **`t_mutasi_kas.kd_kas_tujuan` itu KAS, walau tipenya berkata lain.** Ia `varchar(10)` bertipe `JR_KODE_ACCOUNT` (sama dengan `m_jurnal.kd_index`) sedangkan `kd_kas_sumber` `char(6)` — semuanya mengarah ke "tujuannya sebuah akun", dan itu keliru. Tiga VIEW legacy (`v_t_mutasi_kas`, `mon_t_mutasi_kas`, `v_g_kas_histori_detail`) sama-sama join `= m_kas.kd_kas`. **Pelajaran yang sama dengan empat jenis koreksi opname: arti kolom legacy ada di `sys.sql_modules`, bukan di skema tabelnya.**
 
-**Bukti nyata cuma ada untuk biaya operasional.** `t_biaya_operasional` punya 9.563 baris di grosirPusat (`SC2603200006` = `{kepala_nota}{YYMMDD}{NNNN}`, `no_bukti` yang kosong ditulis `-`). `t_penambahan_kas` dan `t_mutasi_kas` **nol baris di setiap server yang bisa dijangkau** — bentuk nomornya mengikuti konvensi tetangga, sama seperti Order Pembelian dulu.
+**Bukti nyata ada untuk biaya operasional dan pendapatan.** `t_biaya_operasional` punya 9.563 baris di grosirPusat (`SC2603200006` = `{kepala_nota}{YYMMDD}{NNNN}`, `no_bukti` yang kosong ditulis `-`), dan `t_pendapatan` 6 baris berbentuk sama persis (`SC2203310001`). `t_penambahan_kas` dan `t_mutasi_kas` **nol baris di setiap server yang bisa dijangkau** — bentuk nomornya mengikuti konvensi tetangga, sama seperti Order Pembelian dulu.
+
+**Pendapatan Lain-Lain ditambahkan belakangan untuk menutup asimetri.** Kas Harian sudah membaca `t_pendapatan` di dalam `_kas_union` sejak lama, tapi `kas.py` cuma bisa menulis tiga dari empat dokumen kas — angka pendapatan bisa dilihat, tak bisa dimasukkan. Karena mesin kas digerakkan `SPEC`/`FORM` dan route-nya sudah generik (`kas/input/<jenis>`), penambahannya **tak butuh view atau route baru**: satu entri `SPEC`, satu `FORM`, satu `LOOKUP`, satu `penomoran.JENIS`, satu menu. Kolomnya kembaran `biaya` kecuali `kd_biaya` → `kd_pendapatan`, dan `m_pendapatan` cuma berisi satu baris (`PAA000` "UMUM") di semua server. Ia **bertrigger `insert_temp_m_t_pendapatan`** seperti biaya operasional, jadi barisnya masuk antrean kirim ke pusat seketika — itu alasan menunya `admin_only` + `butuh_tautan`.
 
 **Kelola Barang khusus gudang** (dulu "Tambah Barang"; layar Update Barang berganti nama jadi **Update Harga**, key menunya ikut berganti sehingga ada migrasi `auth_app/0008` yang menulis ulang `User.allowed_menu_keys` — tanpa itu menunya lenyap diam-diam dari akun yang hak aksesnya diatur satu per satu). Struktur di Kelola Barang, harga di Update Harga: `ubah_barang` **tak pernah** menulis `harga_jual` baris yang sudah ada, karena itu akan melewati `update_harga` beserta validasi harga bulat, hitung ulang margin, pembatalan cache, riwayat, dan sebar ke 8 toko. **Tambah barang khusus gudang**, memakai gerbang `services._is_gudang`/`BukanServerGudang` yang sudah ada. `kd_barang` **diketik operator**, tak ada polanya untuk ditebak (`OCT6555`, `6941057402239B`, `JM14062-MU`, `000-06`, `049`) — yang dilakukan modul memeriksa bentroknya. Baris `m_barang_divisi` **opsional**: 22.927 dari 53.865 barang tak punya satu pun, dan mesin stok membaca pergerakan, bukan tabel itu. `status_pinjam` nol di SELURUH 53.865 baris jadi ia tak pernah jadi kotak isian; `tanggal_daftar` terisi di seluruh baris dan tak punya default constraint, jadi wajib ditulis. `_sebar_harga` sengaja TIDAK dipanggil — toko belum punya baris barangnya, dan fan-out `m_barang`/`m_barang_satuan` sudah dikerjakan trigger feed.
 
@@ -277,6 +279,42 @@ Tiga jalur tulis baru, semuanya diukur di server sebelum ditulis.
 `t_penjualan`(+`_detail`,`_retur`,`_retur_detail`,`_order`,`_order_detail`), `t_pembelian`(+`_detail`,`_order`,`_order_detail`,`_order_spare_part`(+`_detail`),`_retur`,`_retur_detail`), `t_opname_stok`, `t_mutasi_stok`, `t_mutasi_kas`, `t_penambahan_kas`, `t_pegawai_ganti_shift`(+`_detail`), `t_absensi`, `g_tutup_buku`.
 Kolom asli WAJIB dicek via INFORMATION_SCHEMA sebelum tulis SQL (nama kolom legacy tak standar).
 **Daftar ini pernah tidak lengkap**: `t_pembelian_order` sudah ada sejak awal tapi tak tercatat di sini, dan ketiadaannya sempat dibaca sebagai "tabelnya memang tak ada". Sebelum menyimpulkan sebuah tabel tak ada, tanyakan `INFORMATION_SCHEMA.TABLES` — jangan tanyakan berkas ini.
+
+## Hutang Supplier & laporan Order (`reports.hutang`, `reports.order_penjualan`/`order_pembelian`)
+
+Tiga laporan yang ditambahkan setelah membandingkan katalog laporan legacy (`g_mon_menu_detail`, **116 laporan** dalam 39 grup) dengan menu Arunika. Cara membandingkannya penting untuk diulang: **jumlah baris tiap tabel adalah penyaringnya.** Sebagian besar permukaan legacy — seluruh kluster HRD/absensi/cuti/SP/gaji, aset & penyusutan, kendaraan, persewaan & jasa, surat berharga, prive, tagihan, komisi pegawai, nota kosong, koin/point — **nol baris di GUDANG maupun PUSAT**. Menunya lengkap, datanya tak pernah ada. Jangan mengejar fitur legacy tanpa menghitung barisnya lebih dulu.
+
+**Hutang Supplier adalah cermin Piutang**, dan itu bukan kebetulan: pasangan helper-nya (`_nota_net()` ↔ `_pembelian_nota()`) sudah ada, jadi bedanya hanya nama tabel/kolom. Diverifikasi terhadap `mon_t_hutang_aktif` untuk Januari 2025 di GUDANG: **119 nota, nol selisih nilai.**
+
+- `_pembelian_nota()` tak membawa `tanggal_jatuh_tempo` (Piutang mendapatnya dari `_nota_net`). Diambil lewat join balik ke `t_pembelian`, **bukan** dengan menambah kolom di helper yang dipakai tiga laporan lain.
+- **`t_hutang_cicilan` nol baris di setiap server**, jadi kolom Cicilan selalu nol dan seluruh 9.652 pembelian kredit gudang tampil belum lunas. Itu keadaan data — pembayaran hutang memang tak pernah dicatat — bukan cacat laporan. Layarnya mengatakannya lewat banner (slot `#peringatan` di `ReportPage.vue`) yang **hilang sendiri** begitu ada yang mulai mencatat.
+
+**Laporan Order menutup lubang "ditulis lalu hilang".** Arunika sudah MENULIS kedua order sejak lama, tapi `t_penjualan_order`/`t_pembelian_order` tak muncul sekali pun di `reports.py`.
+
+- Grain **per order (header)**, bukan per baris seperti `mon_t_penjualan_order_edit` — yang dicari operator adalah order yang belum jadi nota.
+- **"Terbuka" datang dalam dua bentuk**: `no_transaksi = no_order` (penanda jalur tulis kita, 38 di PUSAT) dan `no_transaksi` kosong (peninggalan aplikasi lama, 20 di PUSAT). Digabung karena artinya sama; kolom `no_transaksi` tetap ditampilkan apa adanya. Kolom `status` (0/1) **bukan** penandanya — 16 baris status=0 vs 38 order terbuka di server yang sama.
+- Nilainya lewat `_ghb()` seperti laporan nota, **bukan** `SUM(qty*harga)` polos. Di GUDANG cuma 4 baris detail order yang berdiskon, tapi keempatnya mode **rupiah flat** (`602`, `901`, `6`, `2`) — persis kasus yang membuat aritmetika flat lama salah. Dicek manual: `OJ2109300007` = (52500−602)×20 + (24500−901)×20 + 670.000 = **2.179.940**, cocok.
+- **`t_pembelian_order` nol baris di semua server**, jadi laporannya kosong sampai layar Order Pembelian kita sendiri mengisinya. Justru itu alasannya ada: tanpa ini satu-satunya jalur tulis ke tabel itu tak punya layar baca sama sekali.
+
+## Laba Rugi (`apps/transactions/laba_rugi.py` + `inventory.services.nilai_persediaan`)
+
+Pengganti `GetRekapHarian` legacy. **Angkanya sengaja TIDAK sama dengan aplikasi lama**, dan layarnya mengatakan itu lewat banner permanen — kalau banner itu dihapus, selisihnya akan dibaca sebagai salah hitung.
+
+**Legacy tak bisa dipakai karena dua hal, keduanya diukur di GUDANG.** (1) `GetRekapHarian` timeout >60 dtk; `GetHargaAverageBarangPerTanggal` sendiri **171 detik** (kursor bersarang per barang + UDF skalar per nota atas 593rb baris). (2) Metodenya **LIFO**, yang dilarang PSAK 14 / IAS 2 sejak revisi 2008, dan ia menilai stok hasil **opname masuk Rp 0** — di GUDANG itu 14,3 juta unit dari 92 juta unit arus masuk.
+
+Prototipe set-based dari metode legacy sempat dibuat dan **cocok 99,77%** (5.987 dari 6.001 barang, 2,4 dtk vs 171 dtk; 14 sisanya lapisan bertanggal sama yang di legacy memang tak deterministik). Jadi ketidakcocokan angka bukan karena kita gagal menirunya — melainkan karena metodenya sengaja diganti.
+
+**Metode penggantinya: rata-rata tertimbang per barang** (`_harga_pokok_rata`), atas arus yang **membawa biaya perolehan saja** — saldo awal + pembelian netto − retur pembelian. Opname, mutasi, dan retur penjualan menggeser kuantitas tanpa menimbulkan biaya, jadi mereka mengubah stok on-hand tapi bukan dasar harganya; unitnya otomatis dinilai pada rata-rata yang sama, bukan Rp 0.
+
+**Kuantitas disaring divisi, harga TIDAK.** Satu barang punya satu biaya perolehan bagi perusahaan, tak berubah karena disimpan di gudang mana — dan efeknya Laba Rugi tiap divisi **menjumlah tepat** ke Laba Rugi server (diuji: selisih Rp 0,02 atas Rp 10,5 miliar). Ini kebalikan dari Stok per Divisi, yang angkanya memang bergeser saat difilter.
+
+**Periode seluruhnya sebelum tutup buku DITOLAK** (`PeriodeTertutup`), tidak digeser. Legacy menggeser `@awal` diam-diam; di PUSAT tutup bukunya 2025-12-31, jadi permintaan "November 2025" di sana berubah jadi Januari 2026 tanpa sepatah kata. Periode yang *melintasi* tutup buku tetap digeser, tapi lewat `notice` yang tampil di layar.
+
+**Jangan pakai `_purchase_prices()` untuk valuasi.** Fungsi itu membagi pembilang DAN penyebutnya dengan `bs.jumlah` sehingga faktornya saling menghilangkan, dan hasilnya harga per satuan **beli** — sementara kuantitas yang mengalikannya dalam satuan **terkecil**. Terbukti pada `AMP013` (beli per `SAA005`, `jumlah = 10`): Rp 11.601,35 vs harga benar Rp 1.160,13, **rasio tepat 10,00×**. Kolom `nominal` di layar Stok Akhir menggelembung karenanya; belum diperbaiki.
+
+**Laporan periode lampau tidak reproducible persis.** Baris bertanggal lampau masih berdatangan lewat sync: terukur saat modul ini ditulis, 3 pembelian + 1 retur bertanggal Juli masuk ke GUDANG dalam 6 jam dan menggeser persediaan akhir Juli **Rp 97 juta**. Sifat datanya, bukan cacat laporan — jangan mengejar selisih terhadap angka yang dicatat kemarin.
+
+Acuan angka (GUDANG, Juli 2026, saat ditulis): persediaan awal 7.610.410.176 · akhir 6.924.568.973 · HPP 3.626.959.894 · laba kotor 1.553.594.031 · margin 29,99% **terhadap penjualan bersih** (legacy menyebut `laba/HPP` sebagai "Rasio Kontribusi" — itu markup, bukan margin).
 
 ## Order Pembelian (`SPEC["pembelian_order"]` di `apps/transactions/transaksi.py`)
 
@@ -298,6 +336,20 @@ Layar tulis pertama yang tabelnya **tidak punya satu pun baris lama untuk ditiru
 - Kunci sisi jual (`kd_customer`, `kd_voucher`) **dibuang** untuk jenis beli, bukan dikosongkan — kunci kosong di layar supplier terbaca seperti pilihan yang gagal dimuat. Tak ada "supplier umum": memilih pemasok memang keputusan.
 - Layar hanya mengisi isian yang MASIH kosong (`watch` pada prop deferred). Prop deferred datang setelah cat pertama, jadi menimpa apa adanya akan menghapus pilihan orang yang sudah keburu mengetik.
 - Ancar-ancar nomor ikut ditampilkan di keempat layar, seperti layar nota — dipakai kasir untuk mencocokkan lembar fisik.
+
+## Struk penjualan (`pj.baca_nota` + `Kasir/NotaCetak.vue`)
+
+Satu blok `<pre>` monospace 40 kolom untuk Epson LX-310, `@page 241mm x 140mm`. Tabel/border/warna memaksa driver Windows masuk mode grafis — lambat, buram, boros pita — jadi seluruh tata letaknya spasi, bukan CSS.
+
+- **Kasir dari `m_userx`, pegawai dari `m_pegawai`, dan keduanya orang yang berbeda.** `kd_user` dan `kd_pegawai` ruang kode terpisah (`apps/auth_app/models.TautanUser`): terukur di server Testing, `LEFT JOIN m_pegawai ON kd_pegawai = h.kd_user` memulangkan **NULL di setiap nota**. Versi pertama menambal NULL itu dengan `kd_pegawai` baris detail PERTAMA, jadi struk mencetak nama SPG di bawah label "Kasir" — salah orang, tanpa satu pun galat. Kasir = `m_userx` (sama seperti `reports.py:286, 353, 430, 682`), Pegawai = `m_pegawai` lewat `t_penjualan_detail.kd_pegawai`.
+- **Kop toko dari `g_info_profile`, dan tabel itu bukan tabel master.** 16.581 baris di grosirPusat / 14.867 di testGudang, `COUNT(DISTINCT)` = 1 pada SETIAP kolom (seluruhnya duplikat), heap tanpa PK/identity/index. Karena itu `TOP 1` **wajib** ber-`ORDER BY`, dan jalur tulisnya `DELETE` + satu `INSERT` dalam satu transaksi — bukan `UPDATE` tanpa `WHERE`, yang sempat menulis ulang 16.581 baris tiap klik Simpan. `modal_awal` dibaca lalu ditulis kembali supaya tak ikut terhapus.
+- **Nama toko dari divisi NOTANYA** (`LEFT JOIN m_divisi ON kd_divisi = h.kd_divisi`), bukan `SELECT TOP 1 FROM m_divisi`. Gudang punya lima divisi.
+- **`m_divisi` TIDAK punya kolom `alamat` maupun `telepon`** di kedua dump skema. Alamat per-cabang tak bisa disimpan tanpa ubah skema; `kepala_nota` itu awalan nomor nota, bukan kop surat.
+- **`Diskon` satu angka, dan ia DITURUNKAN dari total:** `diskon = bruto + pajak_rp - total`. Dengan begitu `Sub Total - Diskon + Pajak = Total` selalu benar di kertas, berapa pun isi `t_penjualan_total.total`. Menjumlahkan diskon sendiri lalu meleset serupiah menghasilkan struk yang terbaca salah hitung — jauh lebih buruk daripada satu angka diskon yang meleset sendirian. Diverifikasi terhadap 11 nota nyata (berdiskon baris, berdiskon header, ber-`diskon_uang`, berpajak): 11 dari 11 menjumlah.
+- **Baris `Disc` wajib ada saat barisnya berdiskon.** 49.181 baris `t_penjualan_detail` punya diskon, jadi `harga x qty = total` justru BUKAN kasus normal. Labelnya menyebut satuannya (`3.000/PCS`) karena angka kiri potongan PER UNIT sementara angka kanan potongan SELURUH baris.
+- **`pajak` itu fraksi** (0,05 = 5%) dan cuma 2 nota di seluruh riwayat server yang memakainya, jadi barisnya disembunyikan saat nol.
+- **`bayar`/`kembali` tak ada kolomnya di `t_penjualan`** (lihat `_HEADER`). Angkanya dioper dari layar kasir lewat `?bayar=` ke `views_kasir.nota_cetak`, dan **kembaliannya dihitung di server** dari total versi server — bukan diterima dari layar — supaya tak bisa dikarang lewat URL. `Penjualan.vue` menahannya di `bayarTerakhir` karena `tutupTab()` menghapus keranjang begitu simpan berhasil. Cetak ulang lewat `/kasir/faktur` tak membawanya, jadi kedua baris itu **tidak dicetak** di sana: lebih baik kosong daripada angka palsu.
+- **Blok `Keterangan :` selalu dicetak**, dengan dua baris titik-titik saat kolomnya kosong — kasir menulis tangan di situ. Sentinel `-` (`KOSONG`) diperlakukan sebagai kosong, bukan dicetak apa adanya.
 
 ## Separasi menu kasir
 

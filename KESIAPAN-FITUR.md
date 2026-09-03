@@ -5,12 +5,15 @@
 > Ini **potret satu waktu**, bukan dokumen hidup. Jangan dijadikan acuan setelah beberapa
 > perubahan besar berikutnya tanpa diaudit ulang.
 
-> ⚠ **SUDAH BASI per 2026-08-09.** `ALL_MENUS` kini berisi **58** menu, bukan 42. Enam belas
-> menu yang menyusul — seluruh layar kasir yang MENULIS (Penjualan, Penjualan Order, Retur
-> Penjualan, Pembelian, Order Pembelian, Retur Pembelian), Koreksi Stok, Neraca Opname, Kelola
-> Pelanggan/Supplier, Kelola Kode Nota, Kesehatan Sync, Kelola Tautan User — **tidak ada di
-> matriks di bawah**, dan justru merekalah satu-satunya yang menyentuh jalur tulis. Matriks ini
-> masih sahih untuk 42 menu yang disebutnya; ia tidak sahih sebagai daftar lengkap.
+> ⚠ **SUDAH BASI per 2026-08-11.** `ALL_MENUS` kini berisi **67** menu, bukan 42 — dan angka di
+> banner ini sendiri sudah sekali salah (tertulis 58 padahal 62). **Hitung dari `len(ALL_MENUS)`,
+> jangan dari dokumen mana pun.** Menu yang menyusul dan **tidak ada di matriks di bawah**:
+> seluruh layar kasir yang MENULIS (Penjualan, Penjualan Order, Retur Penjualan, Pembelian,
+> Order Pembelian, Retur Pembelian), Koreksi Stok, Neraca Opname, Kelola Pelanggan/Supplier,
+> Kelola Kode Nota, Kesehatan Sync, Kelola Tautan User, lalu **Hutang Supplier, laporan Order
+> Penjualan, laporan Order Pembelian, Input Pendapatan Lain-Lain, dan Laba Rugi** (2026-08-11). Justru
+> merekalah yang menyentuh jalur tulis. Matriks ini masih sahih untuk 42 menu yang disebutnya;
+> ia tidak sahih sebagai daftar lengkap.
 
 ---
 
@@ -77,7 +80,7 @@ Kolom **Sumber baca**: `replica` = bisa membaca replica laporan bila dikonfigura
 | Shift Kasir | `shift` | laporan-server | replica | — | Siap |
 | Biaya Operasional | `biaya_operasional` | laporan-server | replica | — | Siap |
 | Biaya per Kategori | `biaya_kategori` | laporan-server | replica | — | Siap |
-| Master Produk | `products` | khusus | primary | — (hanya baca) | Siap |
+| Master Produk | `products` | laporan-server | replica | — (hanya baca) | Siap |
 | Master Pelanggan | `customers` | khusus | primary | — (hanya baca) | Siap |
 | Master Supplier | `suppliers` | khusus | primary | — (hanya baca) | Siap |
 | Update Barang | `update_barang` | khusus | primary | **Ya** (harga, status, nama & keterangan—khusus gudang) | Siap |
@@ -136,7 +139,7 @@ menyaring:
 | Klasifikasi Pelanggan | `nominal` | halaman, panel detail, **kedua sheet** export |
 | Panel info kasir | `nominal` | `info-customer` (profil, piutang, histori) + `histori-user` |
 
-Halaman lain (FMI Stok, Mutasi Stok, Master Produk, laporan penjualan/pembelian) **masih
+Halaman lain (FMI Stok, Mutasi Stok) **masih
 menampilkan uang ke siapa pun yang boleh membukanya** — untuk membatasi seseorang, menu-menu itu
 harus dicabut, bukan sekadar mencabut kunci nilainya.
 

@@ -143,6 +143,7 @@ function muatUlang() {
           >
             <template #cell-status_label="{ row }">
               <Badge :variant="VARIAN[row.status] || 'neutral'">{{ row.status_label }}</Badge>
+              <span v-if="row.penyebab" class="ml-2 text-xs text-ink-muted">via {{ row.penyebab }}</span>
               <span v-if="row.error" class="ml-2 text-xs text-ink-muted">{{ row.error }}</span>
             </template>
             <template #cell-antre="{ row }">{{ angka(row.antre) }}</template>
@@ -255,6 +256,12 @@ function muatUlang() {
               <b>Tarik terakhir</b> — kapan server ini terakhir berhasil menarik data
               dari pusat (<code>tbl_waktu_get</code>). Sehat &lt; {{ ambang.watermark_ok }} mnt,
               lambat &lt; {{ ambang.watermark_lambat }} mnt.
+            </li>
+            <li>
+              <b>via ...</b> — sumbu yang sebenarnya memicu badge status: <em>tertunggak</em>,
+              <em>tarik terakhir</em>, atau <em>macet</em> (antrean tak bergerak walau
+              <code>tbl_log_transaksi</code> terus bertambah — tidak ada kolom angka
+              tersendiri untuk ini). Bisa lebih dari satu kalau dua sumbu sama buruknya.
             </li>
             <li>
               <b>Feed id</b> — ujung <code>tbl_log_transaksi</code>. Bukan penanda
