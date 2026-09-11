@@ -6,11 +6,13 @@ Di database Arunika, tabel legacy TIDAK ADA -- jadi kegagalannya muncul saat
 laporan dibuka, pada pemasangan yang kebetulan menyalakan ARUNIKA_LAPORAN, entah
 kapan.
 
-Test ini menahan dua hal yang tidak bisa dilihat dari membaca spec satu per
+Test ini menahan tiga hal yang tidak bisa dilihat dari membaca spec satu per
 satu: bahwa tiap `inner_arunika` benar-benar hanya menyentuh `arunika_src.*`,
-dan bahwa gerbangnya tetap mati kecuali ketiga syaratnya terpenuhi.
+bahwa layar yang memakainya memang `_report_view` (satu-satunya yang membaca
+kunci itu), dan bahwa gerbangnya tetap mati kecuali ketiga syaratnya terpenuhi.
 """
 import re
+from pathlib import Path
 
 from django.test import RequestFactory, SimpleTestCase
 
@@ -107,3 +109,23 @@ class GerbangnyaMati(SimpleTestCase):
                 {"inner_arunika": lambda f: ("", [])}, kosong))
         finally:
             views.LAPORAN_ARUNIKA = asli
+
+
+class DibacaOlehLayarnya(SimpleTestCase):
+    """`inner_arunika` HANYA dibaca `_report_view`/`_report_export`.
+
+    Sebuah spec yang layarnya bespoke -- Klasifikasi Pelanggan misalnya, yang
+    kolumnar dengan export dua-sheet sendiri -- tetap menerima kunci itu tanpa
+    galat, dan tetap lulus seluruh test di atas. Ia hanya tak pernah dipakai:
+    laporannya terus membaca jalur legacy sementara semua orang mengira sudah
+    pindah. Itu kegagalan yang tak punya gejala sama sekali.
+    """
+
+    def test_specnya_dipakai_report_view(self):
+        sumber = Path(views.__file__).read_text(encoding="utf-8")
+        for nama, _ in _spec_arunika():
+            self.assertIn(
+                f"_report_view({nama})", sumber,
+                f"{nama}: punya inner_arunika tapi layarnya bukan _report_view, "
+                "jadi bentuk Arunika-nya tak akan pernah dibaca",
+            )

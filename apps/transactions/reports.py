@@ -103,6 +103,25 @@ def _nota_net(where_sql: str) -> str:
     jumlah ekspresi GHB per statement tetap kecil (risiko error 8632, lihat
     docstring _ghb) — Kas Harian menanam _nota_net dua kali per statement.
 
+    Kolom kepala adalah KUNCI GROUP BY, bukan MIN(). Keduanya memulangkan angka
+    yang sama persis — `no_transaksi` adalah PRIMARY KEY `t_penjualan` (diperiksa
+    di grosirPusat 474.595 dan testGUdang 52.801, nol duplikat), jadi tiap grup
+    hanya pernah melihat satu baris kepala. Yang berbeda adalah apa yang boleh
+    dilakukan OPTIMIZER: `MIN(h.tanggal)` adalah agregat, jadi predikat tanggal
+    di luar subquery ini tak bisa turun ke bawah GROUP BY — ia memaksa seluruh
+    riwayat diagregasi lebih dulu, lalu dibuang. Terukur atas satu bulan di
+    grosirPusat, hasil identik: **1,95 dtk -> 0,06 dtk (32x)**.
+
+    Jalur laporan lama tak terpengaruh: di sana `where_sql` memang sudah di
+    DALAM subquery ini. Yang berubah nasibnya adalah `arunika_src.penjualan`,
+    yang dibangkitkan dari `_nota_net("1=1")` sehingga SELURUH penyaringan
+    terjadi di luar — sebelum ini tiap pembacaannya membayar ongkos rata 1,6-1,8
+    dtk berapa pun sempit rentangnya.
+
+    `_pembelian_nota()` masih memakai bentuk MIN() dan sengaja dibiarkan: belum
+    ada view adapter pembelian, jadi predikatnya selalu sudah di dalam dan
+    perubahan yang sama tak akan mengubah apa pun di sana.
+
     Voucher sengaja TIDAK dikurangi walau GetTotalPenjualan menguranginya;
     lihat catatan di bagian Piutang."""
     net_pre_tax = _ghb("net_lines", ["hd1", "hd2", "hd3", "hd4"])
@@ -112,19 +131,20 @@ def _nota_net(where_sql: str) -> str:
         f"({net_pre_tax}) * pajak_rate AS pajak, "
         f"({net_pre_tax}) * (1 + pajak_rate) - diskon_uang AS total_bersih "
         "FROM ("
-        "SELECT h.no_transaksi, MIN(h.tanggal) AS tanggal, MIN(h.kd_customer) AS kd_customer, "
-        "MIN(h.kd_divisi) AS kd_divisi, MIN(h.status) AS status_raw, MIN(h.kd_voucher) AS kd_voucher, "
-        "MIN(h.kd_user) AS kd_user, MIN(h.kd_kas) AS kd_kas, MIN(h.tanggal_jatuh_tempo) AS tanggal_jatuh_tempo, "
+        "SELECT h.no_transaksi, h.tanggal, h.kd_customer, h.kd_divisi, "
+        "h.status AS status_raw, h.kd_voucher, h.kd_user, h.kd_kas, h.tanggal_jatuh_tempo, "
         "SUM(d.qty * d.harga_jual) AS total_kotor, "
-        "COALESCE(MIN(h.pajak), 0) AS pajak_rate, "
-        "COALESCE(MIN(h.diskon_uang), 0) AS diskon_uang, "
-        "COALESCE(MIN(h.diskon1), 0) AS hd1, COALESCE(MIN(h.diskon2), 0) AS hd2, "
-        "COALESCE(MIN(h.diskon3), 0) AS hd3, COALESCE(MIN(h.diskon4), 0) AS hd4, "
+        "COALESCE(h.pajak, 0) AS pajak_rate, "
+        "COALESCE(h.diskon_uang, 0) AS diskon_uang, "
+        "COALESCE(h.diskon1, 0) AS hd1, COALESCE(h.diskon2, 0) AS hd2, "
+        "COALESCE(h.diskon3, 0) AS hd3, COALESCE(h.diskon4, 0) AS hd4, "
         f"SUM({_unit_net('harga_jual')} * d.qty) AS net_lines "
         "FROM t_penjualan h "
         "INNER JOIN t_penjualan_detail d ON h.no_transaksi = d.no_transaksi "
         f"WHERE {where_sql} "
-        "GROUP BY h.no_transaksi, h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.diskon_uang, h.pajak"
+        "GROUP BY h.no_transaksi, h.tanggal, h.kd_customer, h.kd_divisi, h.status, "
+        "h.kd_voucher, h.kd_user, h.kd_kas, h.tanggal_jatuh_tempo, "
+        "h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.diskon_uang, h.pajak"
         ") nz"
     )
 
@@ -1867,38 +1887,28 @@ def penjualan_periode_arunika(f):
     — dan identitas keduanya sudah dibuktikan 50/50 nota berdiskon, jadi ini
     bukan penyederhanaan yang mengubah angka.
 
-    ## BELUM DIPASANG DI SPEC. Dua hal harus selesai lebih dulu.
+    ## Catatan sejarah: dua penghalang yang sudah dibongkar
 
-    **1. Angkanya berbeda soal VOUCHER, dan itu perbedaan yang sudah diketahui
-    sebelum fungsi ini ada.** `_nota_net()` TIDAK memotong nominal voucher;
-    `GetTotalPenjualan` dan `t_penjualan_total` memotongnya (lihat catatan di
-    bagian Piutang berkas ini, yang menyebutnya dan sengaja membiarkannya demi
-    konsisten dengan laporan yang sudah terkirim). Jalur lama memihak yang
-    pertama, bentuk baru memihak yang kedua — jadi berpindah berarti MENGUBAH
-    omzet yang selama ini dilihat pengguna, pada **1.396 nota bervoucher** di
-    grosirPusat. Terukur: rentang kecil identik, setahun penuh tidak.
+    Fungsi ini sempat sengaja TIDAK dipasang di spec, karena dua hal. Keduanya
+    sudah selesai, dan dicatat di sini supaya tak dikerjakan ulang.
 
-    Mana yang benar adalah keputusan pemilik data, bukan keputusan kode. Sampai
-    itu diputuskan, memasang `inner_arunika` berarti memasang saklar yang
-    menggeser angka tanpa ada yang menyetujuinya.
+    **1. Angka voucher.** `_nota_net()` tidak memotong nominal voucher;
+    `GetTotalPenjualan` dan `t_penjualan_total` memotongnya. Versi pertama view
+    `penjualan` memanggil fungsi legacy itu, jadi berpindah ke bentuk baru akan
+    menggeser omzet pada nota bervoucher -- 1.396 nota di grosirPusat.
 
-    **2. Terlalu lambat untuk agregat rentang besar.** Kueri agregat harus
-    menyentuh SETIAP baris, dan tiap baris memanggil dua fungsi skalar tanpa
-    syarat (`diskon`, `pajak`) plus satu bersyarat (`total`). Terukur di
-    grosirPusat:
+    **2. Kecepatan.** Fungsi-fungsi skalar itu `is_inlineable` tapi compatibility
+    level database legacy 100, jadi ia jalan baris-per-baris: setahun 2025
+    (118.547 nota) 5,3 dtk lewat jalur lama vs 36,2 dtk lewat fungsi.
 
-        1 minggu / 1 bulan / 3 bulan   identik, 0,01 dtk
-        2025 setahun (118.547 nota)    legacy 5,3 dtk  vs  36,2 dtk
-        2024-2026   (264.203 nota)     legacy 9,9 dtk  vs  79,6 dtk
+    Keduanya hilang sekaligus begitu badan view `penjualan` dibangkitkan dari
+    `_nota_net()` itu sendiri (`apps/bisnis/adapter.badan_penjualan`): set-based,
+    nol panggilan fungsi skalar, dan formulanya sama persis dengan jalur lama --
+    jadi angkanya tidak bergeser sedikit pun.
 
-    Sebabnya sama seperti yang tercatat di `master_src`: fungsi-fungsi itu
-    `is_inlineable` tapi compatibility level database legacy 100.
-
-    **Jalan keluar yang paling mungkin untuk keduanya sekaligus:** bangkitkan
-    badan view `penjualan` dari `_nota_net()` — set-based, tanpa satu pun
-    panggilan fungsi skalar — memakai teknik penanda yang sudah terbukti di
-    `apps/bisnis/adapter.py`. Itu menyelesaikan kecepatan DAN menghapus
-    perbedaan voucher, karena kedua jalur jadi memakai formula yang sama persis.
+    Perbedaan vouchernya sendiri tidak diselesaikan, dan memang bukan keputusan
+    kode. Yang berubah adalah tempatnya: kini ia satu perubahan di dalam
+    `_nota_net()` yang merambat ke KEDUA jalur sekaligus.
     """
     where, params = _base_where_arunika(f)
     granul = f.get("granularitas", "harian")
@@ -1948,3 +1958,89 @@ def penjualan_customer_arunika(f):
         + "GROUP BY p.pelanggan_kode, pl.nama, p.divisi_kode, dv.nama"
     )
     return inner, params + params_luar
+
+
+def fmi_penjualan_arunika(f):
+    """`fmi_penjualan` di atas bentuk Arunika.
+
+    Laporan PERTAMA yang membaca sampai ke baris nota, bukan cuma kepalanya.
+    Dua hal yang membuatnya bisa dipindah sekarang, dan keduanya diukur:
+
+    **1. `penjualan_baris.total` menggantikan `_line_net('harga_jual')`.**
+    Bentuk Arunika tak memulangkan diskon1-4 per baris, jadi ekspresi GHB
+    empat langkah itu tak bisa disusun ulang di sini. Ia juga tak perlu:
+    kolom `total` legacy (`t_penjualan_detail.total`) SUDAH nilai baris sesudah
+    diskon baris, dan identitasnya diuji baris per baris, bukan lewat total --
+    **0 baris berbeda dari 2.990.368 di grosirPusat dan 570.190 di testGUdang**,
+    selisih SUM Rp 0,00 di keduanya. Termasuk 87 baris yang menyimpan diskon
+    sebagai fraksi dan yang berharga <= 0, yang justru jadi alasan `_ghb` ada
+    (lihat docstring `_unit_net`).
+
+    Itu juga membuatnya lebih murah, bukan sekadar sama: satu kolom tersimpan
+    menggantikan ekspresi CASE bertingkat yang dihitung per baris.
+
+    **1b. Penyaringnya di `penjualan_baris`, bukan lewat join ke kepala.**
+    Baris sudah membawa `tanggal` dan `divisi_kode` sendiri, jadi laporan ini
+    tak pernah menyentuh `arunika_src.penjualan` -- view yang menghitung nilai
+    uang per nota, dan yang akan mengagregasi tabel detail untuk kedua kalinya
+    hanya demi satu kolom tanggal.
+
+    ## Ongkosnya: 2,0x, dan sisanya memang harga bentuk ini
+
+    Terukur di grosirPusat (satu bulan, 4.583 baris keluaran), sesudah dua
+    perbaikan di atas: **legacy 0,55 dtk vs Arunika 1,11 dtk**. Setahun 4,02 vs
+    9,05 dtk (2,2x); di testGUdang setahun 0,93 vs 1,25 dtk. Median dari lima
+    putaran, bukan satu tembakan.
+
+    Selisih itu BUKAN akses data yang lebih mahal -- tiap bagiannya diukur
+    sendiri dan praktis sama: bagian baris 0,07 vs 0,07 dtk, `barang` + EXISTS
+    0,07 vs 0,03 dtk. Yang 2x adalah langkah JOIN + GROUP BY-nya (0,23 vs 0,10
+    dtk), karena kunci join dan kunci grup di bentuk Arunika adalah kolom
+    ber-RTRIM, bukan kolom `char` mentah yang punya indeks. Itu harga yang sudah
+    diterima saat adapter ini dirancang (lihat `master_src`), bukan cacat yang
+    masih bisa dikejar di laporan ini.
+
+    Sebagai perbandingan, versi pertama fungsi ini -- yang menyaring lewat join
+    ke `arunika_src.penjualan` -- memakan 2,58 dtk untuk bulan yang sama.
+
+    **2. Nama kategori akhirnya punya sumber.** `arunika_src.barang` sudah
+    memulangkan `kategori_kode` sejak awal, tapi sampai `arunika_src.kategori`
+    ada, kode itu tak bisa dijadikan nama tanpa menyentuh `m_kategori` -- dan
+    satu rujukan legacy yang tersisa membuat seluruh laporan meledak di
+    pemasangan mandiri, bukan cuma mengosongkan satu kolom.
+
+    Sisanya tetap apa adanya, termasuk dua aturan yang gampang dikira remeh:
+    `EXISTS (harga_jual > 0)` membuang barang tanpa harga jual, dan `HAVING
+    SUM(qty) > 0` membuang yang tak terjual sama sekali di rentang itu.
+    """
+    where, params = _base_where_arunika(f, date_col="pb.tanggal", div_col="pb.divisi_kode")
+    grouped = (
+        "SELECT b.kode AS kd_barang, b.nama AS barang, COALESCE(k.nama, '') AS kategori, "
+        "COALESCE(SUM(s.qty), 0) AS qty_terjual, COALESCE(SUM(s.nilai), 0) AS nilai "
+        f"FROM {SRC}.barang b "
+        f"LEFT JOIN {SRC}.kategori k ON k.kode = b.kategori_kode "
+        "LEFT JOIN ("
+        "SELECT pb.barang_kode, pb.qty, pb.total AS nilai "
+        f"FROM {SRC}.penjualan_baris pb "
+        f"WHERE {' AND '.join(where)}"
+        ") s ON s.barang_kode = b.kode "
+        f"WHERE EXISTS (SELECT 1 FROM {SRC}.barang_satuan bs "
+        "WHERE bs.barang_kode = b.kode AND bs.harga_jual > 0) "
+        "GROUP BY b.kode, b.nama, k.nama "
+        "HAVING COALESCE(SUM(s.qty), 0) > 0"
+    )
+    tot_nilai = "NULLIF(SUM(g.nilai) OVER (), 0)"
+    tot_qty = "NULLIF(SUM(g.qty_terjual) OVER (), 0)"
+    cum_nilai = "SUM(g.nilai) OVER (ORDER BY g.nilai DESC, g.kd_barang)"
+    cum_qty = "SUM(g.qty_terjual) OVER (ORDER BY g.qty_terjual DESC, g.kd_barang)"
+    inner = (
+        "SELECT g.*, "
+        f"ROUND(100.0 * g.nilai / {tot_nilai}, 2) AS kontribusi_nilai, "
+        f"ROUND(100.0 * {cum_nilai} / {tot_nilai}, 2) AS akumulasi_nilai, "
+        f"ROUND(100.0 * g.qty_terjual / {tot_qty}, 2) AS kontribusi_qty, "
+        f"ROUND(100.0 * {cum_qty} / {tot_qty}, 2) AS akumulasi_qty, "
+        f"CASE WHEN 100.0 * {cum_nilai} / {tot_nilai} <= 80 THEN 'A' "
+        f"WHEN 100.0 * {cum_nilai} / {tot_nilai} <= 95 THEN 'B' ELSE 'C' END AS kelas "
+        f"FROM ({grouped}) g"
+    )
+    return inner, params

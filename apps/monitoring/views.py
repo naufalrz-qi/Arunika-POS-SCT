@@ -3090,6 +3090,11 @@ _FMI_PENJUALAN = {
     "component": "Admin/Analytics/FmiPenjualan",
     "url": "/admin-panel/analitik/fmi-penjualan",
     "inner": rpt.fmi_penjualan,
+    # Laporan ketiga yang membaca bentuk Arunika, dan yang pertama membaca
+    # sampai ke BARIS nota. Baris identik di grosirPusat dan testGUdang (hanya
+    # ULP terakhir float yang berbeda, dan justru sisi Arunika yang lebih
+    # bersih); ongkos 2,0x, seluruhnya di JOIN/GROUP BY atas kunci ber-RTRIM.
+    "inner_arunika": rpt.fmi_penjualan_arunika,
     "sorts": rpt.SORTS_FMI_PENJUALAN,
     "default_sort": "nilai",
     "summary": rpt.SUMMARY_FMI_PENJUALAN,

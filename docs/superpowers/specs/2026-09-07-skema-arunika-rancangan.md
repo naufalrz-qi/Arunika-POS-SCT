@@ -540,6 +540,137 @@ selisih `SUM(d.total)` terhadap `GetTotalPenjualan` persis sebesar diskon tingka
 (540.000 − 539.500 = 500 = `diskon_uang`), jadi `d.total` adalah nilai baris **sesudah** diskon
 baris.
 
+## 7.5 Laporan ketiga, dan dua temuan yang mengubah bentuknya
+
+Laporan ketiga yang pindah adalah **FMI Penjualan** — yang pertama membaca sampai ke *baris*
+nota, bukan cuma kepalanya. Memindahkannya membongkar dua hal yang tak terlihat dari dua
+laporan sebelumnya, karena keduanya kebetulan agregat rentang-penuh.
+
+### Temuan 1: `MIN(h.tanggal)` mengunci seluruh riwayat
+
+`arunika_src.penjualan` dibangkitkan dari `_nota_net("1=1")`, jadi **seluruh penyaringan
+terjadi di luar view**. Di dalamnya, kolom kepala diambil dengan `MIN(h.tanggal)`,
+`MIN(h.kd_customer)`, dan seterusnya — dan `MIN()` adalah agregat, sehingga predikat tanggal di
+luar **tidak bisa turun ke bawah `GROUP BY`**. Akibatnya tiap pembacaan mengagregasi 474.595
+nota lebih dulu, lalu membuang yang tak diminta:
+
+| | sebelum | sesudah |
+|---|---|---|
+| `COUNT(*)` sebulan lewat `arunika_src.penjualan` | 1,59 dtk | **0,06 dtk** |
+| `COUNT(*)` setahun lewat `arunika_src.penjualan` | 1,79 dtk | **0,46 dtk** |
+
+Ongkosnya dulu **rata**, berapa pun sempit rentangnya — tanda khas pekerjaan yang dikerjakan
+lalu dibuang.
+
+Perbaikannya satu baris konseptual: **jadikan kolom kepala kunci `GROUP BY`, bukan `MIN()`.**
+Keduanya memulangkan angka yang sama persis karena `no_transaksi` adalah PRIMARY KEY
+`t_penjualan` — diperiksa, bukan diasumsikan: 474.595 baris / 474.595 distinct di grosirPusat,
+52.801 / 52.801 di testGUdang, dan `PK_m_penjualan` memang berkunci tunggal `no_transaksi`.
+Terisolasi, perubahan itu sendiri **1,95 dtk → 0,06 dtk (32×)** dengan hasil identik.
+
+Jalur laporan lama ikut untung, walau tak pernah jadi tujuannya — di sana predikat memang sudah
+di dalam subquery, tapi kunci grup yang eksplisit tetap memberi rencana yang lebih baik:
+
+| laporan (legacy, `COUNT(*)`, 1 bulan) | `MIN()` | kunci `GROUP BY` |
+|---|---|---|
+| Penjualan per Pelanggan | 0,49 dtk | **0,06 dtk** |
+| Penjualan per Periode | 0,53 dtk | **0,08 dtk** |
+
+Dibandingkan baris per baris atas lima laporan yang menanam `_nota_net` (Penjualan per
+Pelanggan, per Nota, per Periode, Piutang, Klasifikasi Pelanggan), satu bulan dan satu tahun:
+**identik**, kecuali satu baris yang berbeda di ULP terakhir float (6.397.048.323,160003 vs
+…160001 — urutan penjumlahan, bukan nilai).
+
+`_pembelian_nota()` sengaja dibiarkan memakai bentuk `MIN()`: belum ada view adapter pembelian,
+jadi predikatnya selalu sudah di dalam dan perubahan yang sama tak mengubah apa pun.
+
+### Temuan 2: baris nota harus membawa tanggal & divisinya sendiri
+
+Sesudah temuan 1, FMI masih 4,7× jalur legacy. Sebabnya bentuk kuerinya: ia men-join
+`penjualan_baris` ke `penjualan` **hanya untuk mendapat satu kolom tanggal** — dan `penjualan`
+adalah view yang menghitung seluruh nilai uang per nota. Tabel detail jadi diagregasi dua kali.
+
+`arunika_src.penjualan_baris` karena itu kini membawa `tanggal` dan `divisi_kode` kepalanya.
+Itu bukan denormalisasi yang kebablasan: ini bentuk **baca**, dan keduanya satu-satunya alasan
+laporan tingkat-baris perlu menyentuh kepalanya sama sekali. `pergerakan_stok` — konsolidasi
+besar §4.1 — sudah membawa `tanggal` dan `kd_divisi` di tiap barisnya dengan alasan yang sama.
+
+FMI Penjualan, satu bulan di grosirPusat: **2,58 dtk → 1,11 dtk**.
+
+### Ongkos akhir FMI Penjualan: 2,0×, dan sisanya harga bentuk ini
+
+| | legacy | Arunika |
+|---|---|---|
+| grosirPusat, 1 bulan (4.583 baris) | 0,55 dtk | 1,11 dtk |
+| grosirPusat, 1 tahun (12.328 baris) | 4,02 dtk | 9,05 dtk |
+| testGUdang, 1 tahun (9.467 baris) | 0,93 dtk | 1,25 dtk |
+
+Median dari lima putaran, bukan satu tembakan — sebaran satu bulan 0,52–0,61 dtk (legacy) vs
+0,98–1,28 dtk (Arunika).
+
+Barisnya identik di kedua server; satu-satunya selisih ada di ULP terakhir float, dan justru
+**sisi Arunika yang lebih bersih** (`1452159,65` vs `1452159,6499999997`) karena ia menjumlahkan
+kolom tersimpan alih-alih menghitung ulang GHB per baris.
+
+Selisih 2× itu bukan akses data yang lebih mahal. Tiap bagiannya diukur sendiri dan praktis
+sama — bagian baris 0,07 vs 0,07 dtk, `barang` + `EXISTS` 0,07 vs 0,03 dtk. Yang 2× adalah
+langkah **JOIN + GROUP BY**-nya (0,23 vs 0,10 dtk), karena kunci join dan kunci grup di bentuk
+Arunika adalah kolom ber-`RTRIM`, bukan kolom `char` mentah yang punya indeks. Itu harga yang
+sudah diterima saat adapter ini dirancang, bukan cacat yang masih bisa dikejar.
+
+### `penjualan_baris.total` menggantikan `_line_net()`, dan itu diuji per baris
+
+Bentuk Arunika tak memulangkan diskon1–4 per baris, jadi ekspresi GHB empat langkah tak bisa
+disusun ulang. Ia juga tak perlu: **0 baris berbeda dari 2.990.368 di grosirPusat dan 570.190 di
+testGUdang**, selisih `SUM` Rp 0,00 di keduanya. Termasuk 87 baris yang menyimpan diskon sebagai
+fraksi dan yang berharga ≤ 0 — justru baris-baris yang membuat `_ghb` harus ada.
+
+Ini menguatkan catatan §7.4 tentang `d.total`, yang sebelumnya hanya diperiksa lewat selisih
+total satu nota.
+
+### Lima view referensi barang
+
+`arunika_src.barang` sejak awal memulangkan `merek_kode`, `kategori_kode`, `model_kode`,
+`warna_kode`, dan `bahan_kode` — tanpa tempat untuk memulangkannya jadi nama. Kelimanya kini
+ada (`merek`, `kategori`, `model_barang`, `warna`, `bahan`), sebentuk dengan `satuan` dan
+`negara`, dan ketujuhnya memakai satu pembantu `_referensi()` supaya "aktif = status 1" tak
+punya tujuh salinan.
+
+`status` diperiksa di kedua server untuk kelimanya — 1 = aktif, tak ada jebakan `m_biaya` (yang
+memakai 2). Jumlah barisnya cocok dengan sumbernya: kategori 862, merek 1.473, model 1.290,
+warna 531, bahan 33.
+
+Ini juga bahan untuk §8 butir 2: kesebelas tabel referensi legacy yang diringkas jadi lima
+memang berisi, bukan kluster nol-baris.
+
+### Sisa 21 laporan: apa yang sebenarnya menghalangi
+
+Catatan sesi sebelumnya menyebut sisanya "pengulangan mekanis". Itu **tidak akurat**, dan
+selisihnya bisa dipetakan: dari 24 spec laporan, 3 sudah pindah dan **18 terhalang entitas yang
+belum ada di `arunika_src`**, bukan terhalang penulisan SQL.
+
+| Yang dibutuhkan | Laporan yang menunggunya |
+|---|---|
+| `t_pembelian` + `t_pembelian_detail` | Pembelian, per Supplier, per Periode, Hutang, Laba HPP |
+| `m_userx` | Penjualan per Nota, per User, Laba HPP, Retur Pembelian |
+| `m_pegawai` | Penjualan Detail, Retur Penjualan, Shift |
+| `t_penjualan_retur` / `t_pembelian_retur` (+ detail) | Retur Penjualan, Retur Pembelian |
+| `t_*_order` (+ detail) | Order Penjualan, Order Pembelian |
+| `t_biaya_operasional` | Biaya Operasional, Biaya per Kategori |
+| `t_piutang_cicilan`, `t_hutang_cicilan` | Piutang, Hutang |
+| `t_opname_stok` | Opname |
+| `m_barang_promo` (+ detail) | Promo |
+
+Tiga sisanya terhalang **kolom**, bukan tabel — kelasnya lebih murah:
+
+* **Laporan Voucher** — butuh `voucher_kode` di `arunika_src.penjualan`. Kolomnya sudah ada di
+  keluaran `_nota_net()`, tinggal dipulangkan.
+* **Master Produk** — butuh `ukuran`, `pabrik`, `status_pinjam` di `arunika_src.barang`. Lima
+  nama referensinya sudah beres (di atas).
+* **Klasifikasi Pelanggan** — kolomnya lengkap, tapi layar itu **bukan `_report_view`**: ia
+  kolumnar dengan export dua-sheet sendiri, jadi `inner_arunika` di spec-nya tak akan pernah
+  dibaca. Memindahkannya berarti menyentuh `tx.klasifikasi_kolumnar`, bukan menambah satu spec.
+
 ## 8. Yang harus diverifikasi sebelum rancangan ini dibekukan
 
 Belum dikerjakan, dan tak boleh dilewati:

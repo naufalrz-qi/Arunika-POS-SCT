@@ -80,18 +80,31 @@ def _badan_penjualan(db_legacy: str) -> str:
 
     return adapter.badan_penjualan(db_legacy)
 
+
+def _referensi(tabel_legacy: str, kunci: str, tabel: str) -> dict:
+    """Entitas referensi berbentuk kode + nama + bisa dinonaktifkan.
+
+    Tujuh entri di bawah berbentuk persis begini. Ditulis sekali supaya
+    "aktif = status 1" tidak punya tujuh salinan yang bisa menyimpang satu per
+    satu -- tapi PEMAKAIANNYA tetap keputusan per tabel, bukan bawaan: nilai
+    `status` diperiksa di grosirPusat dan testGUdang untuk ketujuhnya, tidak
+    disimpulkan dari tabel sebelahnya. `m_biaya` membuktikan kenapa itu perlu:
+    seluruh 38 barisnya bernilai **2**, jadi ia sengaja tidak memakai ini.
+    """
+    return {
+        "kolom": ["kode", "nama", "aktif"],
+        "legacy": f"SELECT RTRIM({kunci}), nama, CASE WHEN status = 1 THEN 1 ELSE 0 END "
+                  f"FROM {{db}}.dbo.{tabel_legacy}",
+        "arunika": f"SELECT kode, nama, CAST(aktif AS int) FROM dbo.{tabel}",
+    }
+
 # Tiap entri: kolom bentuk baca + satu badan SELECT per mode.
 #
 # Daftar kolom ditulis di `CREATE VIEW ... (kolom)` sehingga nama kolom di dalam
 # badan SELECT tidak perlu dicocokkan satu per satu -- yang harus sama hanya
 # URUTAN dan jumlahnya. Itu sengaja: satu tempat yang menentukan bentuk.
 _MASTER: dict[str, dict] = {
-    "negara": {
-        "kolom": ["kode", "nama", "aktif"],
-        "legacy": "SELECT RTRIM(kd_negara), nama, CASE WHEN status = 1 THEN 1 ELSE 0 END "
-                  "FROM {db}.dbo.m_negara",
-        "arunika": "SELECT kode, nama, CAST(aktif AS int) FROM dbo.negara",
-    },
+    "negara": _referensi("m_negara", "kd_negara", "negara"),
     "kota": {
         "kolom": ["kode", "nama", "kode_telepon", "negara_kode", "aktif"],
         "legacy": "SELECT RTRIM(kd_kota), nama, RTRIM(kd_telp), RTRIM(kd_negara), "
@@ -160,12 +173,18 @@ _MASTER: dict[str, dict] = {
         "arunika": "SELECT kode, nama, nominal, keterangan, CAST(aktif AS int) FROM dbo.voucher",
     },
     # --- Katalog ----------------------------------------------------------
-    "satuan": {
-        "kolom": ["kode", "nama", "aktif"],
-        "legacy": "SELECT RTRIM(kd_satuan), nama, CASE WHEN status = 1 THEN 1 ELSE 0 END "
-                  "FROM {db}.dbo.m_satuan",
-        "arunika": "SELECT kode, nama, CAST(aktif AS int) FROM dbo.satuan",
-    },
+    "satuan": _referensi("m_satuan", "kd_satuan", "satuan"),
+    # Lima referensi barang. `arunika_src.barang` sudah memulangkan `merek_kode`,
+    # `kategori_kode`, `model_kode`, `warna_kode`, dan `bahan_kode` sejak awal --
+    # tanpa view ini kelima kode itu tak punya tempat untuk dipulangkan jadi
+    # nama, dan tiap laporan yang menampilkan "Kategori" tetap terpaku ke tabel
+    # legacy. Nama `m_model` -> `model_barang` dan `m_jenis_bahan` -> `bahan`
+    # mengikuti nama modelnya, bukan nama legacy-nya.
+    "merek": _referensi("m_merk", "kd_merk", "merek"),
+    "kategori": _referensi("m_kategori", "kd_kategori", "kategori"),
+    "model_barang": _referensi("m_model", "kd_model", "model_barang"),
+    "warna": _referensi("m_warna", "kd_warna", "warna"),
+    "bahan": _referensi("m_jenis_bahan", "kd_jenis_bahan", "bahan"),
     "divisi": {
         "kolom": ["kode", "nama", "awalan_nota", "aktif"],
         # `kepala_nota` -> awalan_nota. Namanya diganti karena artinya memang itu:
@@ -252,18 +271,37 @@ _MASTER: dict[str, dict] = {
                    "LEFT JOIN dbo.pelanggan pl ON pl.id = p.pelanggan_id",
     },
     "penjualan_baris": {
-        "kolom": ["penjualan_nomor", "barang_kode", "satuan_kode", "qty", "harga", "total"],
+        "kolom": ["penjualan_nomor", "tanggal", "divisi_kode",
+                  "barang_kode", "satuan_kode", "qty", "harga", "total"],
+        # ## Kenapa baris membawa tanggal & divisi kepalanya
+        #
+        # Bukan denormalisasi yang kebablasan -- ini bentuk BACA, dan `tanggal`
+        # + `divisi_kode` adalah satu-satunya alasan sebuah laporan tingkat-baris
+        # perlu menyentuh kepalanya sama sekali. Tanpa keduanya, tiap laporan
+        # baris harus men-join `arunika_src.penjualan`, yang menghitung SELURUH
+        # nilai uang per nota (GHB atas tiap baris detail) cuma untuk memulangkan
+        # satu kolom tanggal -- tabel detail diagregasi dua kali.
+        #
+        # Terukur di grosirPusat lewat FMI Penjualan, sesudah `_nota_net` sendiri
+        # sudah diperbaiki: 2,58 dtk lewat view penjualan vs 0,59 dtk jalur
+        # legacy untuk satu bulan. Bentuk ini yang menutup selisih itu.
+        #
+        # Konsisten pula dengan `pergerakan_stok`: buku besar itu memang membawa
+        # `tanggal` dan `kd_divisi` di tiap barisnya.
         # `d.total` adalah computed column yang definisinya rusak di legacy
         # (ANSI_NULLS/QUOTED_IDENTIFIER salah, memblokir CREATE INDEX, error
         # 1935). Cacat itu menghalangi PEMBUATAN INDEKS, bukan SELECT -- nilainya
         # tetap benar dan terbaca. Diperiksa: selisih SUM(d.total) terhadap
         # GetTotalPenjualan persis sebesar diskon tingkat-nota (540.000 - 539.500
         # = 500 = diskon_uang), jadi `d.total` = nilai baris SESUDAH diskon baris.
-        "legacy": "SELECT RTRIM(no_transaksi), RTRIM(kd_barang), RTRIM(kd_satuan), "
-                  "qty, harga_jual, total FROM {db}.dbo.t_penjualan_detail",
-        "arunika": "SELECT p.nomor, b.kode, s.kode, pb.qty, pb.harga, pb.total "
+        "legacy": "SELECT RTRIM(d.no_transaksi), h.tanggal, RTRIM(h.kd_divisi), "
+                  "RTRIM(d.kd_barang), RTRIM(d.kd_satuan), d.qty, d.harga_jual, d.total "
+                  "FROM {db}.dbo.t_penjualan_detail d "
+                  "INNER JOIN {db}.dbo.t_penjualan h ON h.no_transaksi = d.no_transaksi",
+        "arunika": "SELECT p.nomor, p.tanggal, dv.kode, b.kode, s.kode, pb.qty, pb.harga, pb.total "
                    "FROM dbo.penjualan_baris pb "
                    "INNER JOIN dbo.penjualan p ON p.id = pb.penjualan_id "
+                   "INNER JOIN dbo.divisi dv ON dv.id = p.divisi_id "
                    "INNER JOIN dbo.barang b ON b.id = pb.barang_id "
                    "INNER JOIN dbo.satuan s ON s.id = pb.satuan_id",
     },
@@ -304,6 +342,11 @@ SUMBER_UTAMA = {
     "kategori_biaya": "m_biaya",
     "voucher": "m_voucher",
     "satuan": "m_satuan",
+    "merek": "m_merk",
+    "kategori": "m_kategori",
+    "model_barang": "m_model",
+    "warna": "m_warna",
+    "bahan": "m_jenis_bahan",
     "divisi": "m_divisi",
     "barang": "m_barang",
     "penjualan": "t_penjualan",
