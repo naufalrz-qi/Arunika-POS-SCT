@@ -1914,3 +1914,37 @@ def penjualan_periode_arunika(f):
         f"GROUP BY {periode}"
     )
     return inner, params
+
+
+def penjualan_customer_arunika(f):
+    """`penjualan_customer` di atas bentuk Arunika.
+
+    Bentuknya jauh lebih pendek dari aslinya, dan sebabnya bukan penyederhanaan:
+    aslinya harus menyusun subquery `_nota_net()` lebih dulu lalu men-join
+    hasilnya, karena nilai bersih per nota tak ada sebagai kolom di mana pun.
+    Di bentuk baru ia `p.total` -- subquery itu sudah pindah ke dalam view.
+
+    Catatan yang ikut terbawa apa adanya: pencarian menyaring NAMA PELANGGAN,
+    yang hanya ada sesudah join. Di jalur lama itu pernah jadi bug -- menyisipkan
+    `c.nama LIKE ?` ke dalam where_sql `_nota_net()` melempar "multi-part
+    identifier could not be bound" tiap kali ada kata kunci, karena FROM
+    subquery itu cuma t_penjualan/t_penjualan_detail. Di sini penyaringnya
+    memang di lapisan luar, jadi kelas kesalahan itu tak bisa terjadi lagi.
+    """
+    where, params = _base_where_arunika(f)
+    luar, params_luar = [], []
+    if f["search"]:
+        luar.append("pl.nama LIKE ?")
+        params_luar.append(f"%{f['search']}%")
+    inner = (
+        "SELECT p.pelanggan_kode AS kd_customer, COALESCE(pl.nama, '') AS customer, "
+        "p.divisi_kode AS kd_divisi, COALESCE(dv.nama, '') AS divisi, "
+        "COUNT(p.nomor) AS jml_nota, COALESCE(SUM(p.total), 0) AS total "
+        f"FROM {SRC}.penjualan p "
+        f"LEFT JOIN {SRC}.pelanggan pl ON pl.kode = p.pelanggan_kode "
+        f"LEFT JOIN {SRC}.divisi dv ON dv.kode = p.divisi_kode "
+        f"WHERE {' AND '.join(where)} "
+        + (f"AND {' AND '.join(luar)} " if luar else "")
+        + "GROUP BY p.pelanggan_kode, pl.nama, p.divisi_kode, dv.nama"
+    )
+    return inner, params + params_luar

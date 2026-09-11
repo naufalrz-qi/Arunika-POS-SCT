@@ -521,9 +521,15 @@ promo mengurangi pendapatan.
 > * **Nota tanpa baris detail tak terlihat di laporan penjualan mana pun.** `_nota_net()`
 >   meng-INNER JOIN ke `t_penjualan_detail`, jadi nota berbaris nol lenyap. grosirPusat: 1 nota
 >   (`CT2202150001`). Bukan bawaan adapter — perilaku yang sudah ada.
-> * **`VOUCHER BELANJA 300K` dan `500K` bernominal 0** padahal `status = 1` (bisa dipilih
->   kasir). Nota yang memakainya tidak memotong apa pun. Bug data, terpisah dari keputusan di
->   atas.
+> * **`kd_voucher` adalah kolom WAJIB yang diisi penanda "tanpa voucher".** Tiga baris
+>   bernominal 0 (`V1`, `V2`, dan `VAA000` yang bernama `-`) dipakai **473.199 nota** di
+>   grosirPusat — hampir seluruhnya. Voucher sungguhan hanya `001`+`002`+`003`, dan jumlah
+>   pemakaiannya 534+517+345 = **1.396**, persis angka dampak voucher di atas.
+>
+>   `VOUCHER BELANJA 300K` dan `500K` juga bernominal 0 dan `status = 1`, jadi kasir bisa
+>   memilihnya dan tak ada yang terpotong — tapi **pemakaiannya nol**, jadi ini baris yang
+>   disiapkan lalu tak jadi dipakai, bukan kerusakan yang perlu ditindak. (Dokumen ini sempat
+>   menyebutnya "bug data"; pemeriksaan pemakaian membatalkan sebutan itu.)
 
 ### `penjualan_baris.total`
 

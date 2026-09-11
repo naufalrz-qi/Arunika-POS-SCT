@@ -2246,6 +2246,10 @@ _PENJUALAN_CUSTOMER = {
     "component": "Admin/Reports/PenjualanCustomer",
     "url": "/admin-panel/laporan/penjualan-customer",
     "inner": rpt.penjualan_customer,
+    # Laporan kedua yang membaca bentuk Arunika. Terverifikasi identik untuk
+    # rentang setahun DAN dengan kata kunci pencarian (yang di jalur lama
+    # pernah jadi bug "multi-part identifier could not be bound").
+    "inner_arunika": rpt.penjualan_customer_arunika,
     "sorts": rpt.SORTS_PENJUALAN_CUSTOMER,
     "default_sort": "total",
     "summary": rpt.SUMMARY_PENJUALAN_CUSTOMER,
