@@ -3074,6 +3074,14 @@ _VOUCHER = {
     "component": "Admin/Promo/Voucher",
     "url": "/admin-panel/promo/voucher",
     "inner": rpt.voucher,
+    # Laporan keempat. Terhalang SATU kolom selama ini (`voucher_kode`), bukan
+    # tabel — nilainya sudah ada di keluaran `_nota_net()` sejak awal.
+    #
+    # SATU-SATUNYA laporan yang angkanya tidak persis sama: `V1` 21.257 vs
+    # 21.256, karena satu nota tanpa baris detail (`CT2202150001`) tak muncul di
+    # bentuk Arunika — nota yang memang sudah tak terlihat di laporan penjualan
+    # mana pun. Baca docstring `voucher_arunika` sebelum menganggapnya bug.
+    "inner_arunika": rpt.voucher_arunika,
     "sorts": rpt.SORTS_VOUCHER,
     "default_sort": "kd_voucher",
     "summary": rpt.SUMMARY_VOUCHER,

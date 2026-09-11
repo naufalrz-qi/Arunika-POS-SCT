@@ -225,7 +225,7 @@ _MASTER: dict[str, dict] = {
     # Nilai uangnya datang dari FUNGSI SKALAR legacy, bukan dari formula yang
     # ditulis ulang di sini. Itu keputusan sadar, dan alasannya di bawah.
     "penjualan": {
-        "kolom": ["nomor", "tanggal", "divisi_kode", "pelanggan_kode",
+        "kolom": ["nomor", "tanggal", "divisi_kode", "pelanggan_kode", "voucher_kode",
                   "subtotal", "diskon", "pajak", "total", "status"],
         # ## Kenapa memanggil fungsi vendor, bukan menulis formulanya sendiri
         #
@@ -265,10 +265,12 @@ _MASTER: dict[str, dict] = {
         # `total + diskon - pajak == SUM(qty * harga_jual)` -- diuji 50/50 nota
         # berdiskon. Jadi `subtotal` adalah nilai kotor sebelum diskon apa pun.
         "legacy": _badan_penjualan,
-        "arunika": "SELECT p.nomor, p.tanggal, d.kode, pl.kode, p.subtotal, p.diskon, p.pajak, "
-                   "p.total, p.status FROM dbo.penjualan p "
+        "arunika": "SELECT p.nomor, p.tanggal, d.kode, pl.kode, v.kode, "
+                   "p.subtotal, p.diskon, p.pajak, p.total, p.status "
+                   "FROM dbo.penjualan p "
                    "INNER JOIN dbo.divisi d ON d.id = p.divisi_id "
-                   "LEFT JOIN dbo.pelanggan pl ON pl.id = p.pelanggan_id",
+                   "LEFT JOIN dbo.pelanggan pl ON pl.id = p.pelanggan_id "
+                   "LEFT JOIN dbo.voucher v ON v.id = p.voucher_id",
     },
     "penjualan_baris": {
         "kolom": ["penjualan_nomor", "tanggal", "divisi_kode",

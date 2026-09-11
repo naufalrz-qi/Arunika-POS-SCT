@@ -233,10 +233,6 @@ def copot(cur) -> None:
 
 # --- Nota penjualan: dibangkitkan dari `_nota_net()` ------------------------
 
-_KOLOM_PENJUALAN = ("nomor", "tanggal", "divisi_kode", "pelanggan_kode",
-                    "subtotal", "diskon", "pajak", "total", "status")
-
-
 def badan_penjualan(db_legacy: str) -> str:
     """Badan view `penjualan`, dibangkitkan dari `reports._nota_net()`.
 
@@ -286,6 +282,13 @@ def badan_penjualan(db_legacy: str) -> str:
         )
     return (
         "SELECT RTRIM(n.no_transaksi), n.tanggal, RTRIM(n.kd_divisi), RTRIM(n.kd_customer), "
+        # Dipulangkan APA ADANYA, penanda "tanpa voucher" sekalipun (`V1`, `V2`,
+        # `VAA000`). Memetakannya ke NULL akan terasa lebih rapi dan langsung
+        # memecah laporan Voucher: di sana "dipakai" dihitung sebagai
+        # `kd_voucher <> ''`, jadi ketiga penanda itu memang ikut terhitung hari
+        # ini. Adapter menyajikan bentuk lain dari data yang sama, bukan
+        # pendapat lain tentang datanya.
+        "RTRIM(n.kd_voucher), "
         "n.total_kotor, n.total_kotor - (n.total_bersih - n.pajak), n.pajak, n.total_bersih, "
         # Kepala nota legacy tidak punya kolom pembatalan. `t_penjualan.status`
         # adalah JENIS PEMBAYARAN (0=Kredit, 1=Tunai, 2=Lunas), bukan penanda

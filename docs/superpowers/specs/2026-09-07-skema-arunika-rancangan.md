@@ -251,7 +251,7 @@ layar.
 
 | Tabel | Isi |
 |---|---|
-| `penjualan` | id, **nomor** (unique), tanggal, divisi_id, pelanggan_id, jenis_bayar, subtotal, diskon, pajak, total, dibayar, status, dibuat_oleh, dibuat_pada |
+| `penjualan` | id, **nomor** (unique), tanggal, divisi_id, pelanggan_id, **voucher_id (NULL-able)**, jenis_bayar, subtotal, diskon, pajak, total, dibayar, status, dibuat_oleh, dibuat_pada |
 | `penjualan_baris` | id, penjualan_id, barang_id, satuan_id, qty, harga, diskon, total |
 | `penjualan_retur` + `penjualan_retur_baris` | bentuk sama, merujuk penjualan asal |
 | `penjualan_order` + `penjualan_order_baris` | order terbuka; `status` sebagai penanda sungguhan |
@@ -663,13 +663,74 @@ belum ada di `arunika_src`**, bukan terhalang penulisan SQL.
 
 Tiga sisanya terhalang **kolom**, bukan tabel — kelasnya lebih murah:
 
-* **Laporan Voucher** — butuh `voucher_kode` di `arunika_src.penjualan`. Kolomnya sudah ada di
-  keluaran `_nota_net()`, tinggal dipulangkan.
-* **Master Produk** — butuh `ukuran`, `pabrik`, `status_pinjam` di `arunika_src.barang`. Lima
-  nama referensinya sudah beres (di atas).
+* **Laporan Voucher** — ~~butuh `voucher_kode`~~ **selesai, lihat §7.6.**
+* **Master Produk** — butuh `ukuran`, `pabrik`, `status_pinjam` di `arunika_src.barang`, dan
+  ketiganya ternyata **bukan penambahan kolom biasa** — lihat §7.6.
 * **Klasifikasi Pelanggan** — kolomnya lengkap, tapi layar itu **bukan `_report_view`**: ia
   kolumnar dengan export dua-sheet sendiri, jadi `inner_arunika` di spec-nya tak akan pernah
   dibaca. Memindahkannya berarti menyentuh `tx.klasifikasi_kolumnar`, bukan menambah satu spec.
+
+## 7.6 Laporan keempat, dan satu angka yang memang berbeda
+
+**Laporan Voucher** pindah dengan satu kolom: `voucher_kode` di `arunika_src.penjualan`.
+Nilainya sudah dipulangkan `_nota_net()` sejak awal; yang kurang cuma jalur keluarnya. Di sisi
+skema mandiri ia jadi `penjualan.voucher_id` yang **NULL-able** — dan itu perbedaan yang
+disengaja: di legacy `kd_voucher` kolom **wajib** yang diisi penanda "tanpa voucher"
+(`V1`/`V2`/`VAA000`, 473.199 nota). "Tanpa voucher" tidak perlu punya baris master.
+
+Adapter **tidak** memperbaiki penanda itu, dan itu aturan yang lebih besar dari kasus ini:
+*adapter menyajikan bentuk lain dari data yang sama, bukan pendapat lain tentang datanya.*
+Memetakan penanda ke NULL terasa lebih rapi dan langsung memecah laporan Voucher, yang
+menghitung "dipakai" sebagai `kd_voucher <> ''` — ketiga penanda itu memang sudah muncul di
+layar hari ini dengan pemakaian ratusan ribu.
+
+### Satu-satunya laporan yang angkanya tidak persis sama
+
+`V1` terhitung **21.257** di jalur lama dan **21.256** di bentuk Arunika. Selisihnya satu nota,
+dan nota itu punya nama: **`CT2202150001`** (15 Feb 2022, `kd_voucher = 1`) — satu-satunya nota
+grosirPusat yang tak punya baris detail sama sekali, yang sudah dicatat di §7.4.
+`arunika_src.penjualan` dibangkitkan dari `_nota_net()` yang meng-INNER JOIN ke detail, jadi ia
+tak pernah muncul.
+
+Nota itu **sudah tak terlihat di setiap laporan penjualan yang ada sekarang**. Laporan Voucher
+lama satu-satunya yang menghitungnya, karena ia membaca `t_penjualan` langsung. Mengubah INNER
+JOIN itu jadi LEFT akan menggeser angka di seluruh laporan penjualan yang sudah terkirim demi
+satu nota kosong berumur empat tahun — jadi tidak dilakukan. Kalau nota tanpa baris memang harus
+terlihat, tempat memutuskannya `_nota_net()`, sekali, untuk kedua jalur.
+
+Ongkosnya 0,16 → 1,04 dtk. Hitungan "dipakai" sepanjang masa (halaman ini tak punya filter
+tanggal), jadi ia menyentuh 474.595 nota lewat view yang menghitung uang — padahal tak satu pun
+kolom uang dipakai di sini. Delapan baris, jarang dibuka; diterima.
+
+### Master Produk: tiga kolomnya bukan penambahan biasa
+
+Diukur di `m_barang`, kedua server, bukan dibaca dari nama kolomnya:
+
+| Kolom | Tipe | Terisi | Nilai berbeda | Sebaran |
+|---|---|---|---|---|
+| `status_pinjam` | `tinyint` | 100% | **1** | `0` di seluruh 53.612 / 53.865 baris |
+| `pabrik` | `tinyint` | 100% | 3 | `0` ×49.323, `2` ×4.288, `1` ×1 |
+| `ukuran` | `float` | 100% | 14 | `2` ×29.523, `1` ×14.576, `4` ×3.472, … `11` |
+
+Layar Master Produk menampilkan ketiganya sebagai kolom teks berlabel "Ukuran", "Pabrik", dan
+"Status Pinjam", dua di antaranya bisa diurut. Yang sebenarnya dilihat pengguna adalah angka
+kecil tanpa arti: `status_pinjam` konstan, `pabrik` bendera 0/1/2.
+
+`ukuran` berbeda, dan penyaringan `sys.sql_modules` yang membedakannya: ia dirujuk keluarga
+`GetStokPerUkuran`, `GetStokPerUkuranTotal`, `mon_m_barang_stok_per_ukuran` — jadi ia **dimensi
+sungguhan** yang dipakai pelaporan stok legacy, bukan kolom terlantar. Empat belas nilai integer
+kecil berarti ia **kode kelas ukuran**, bukan ukuran itu sendiri; arti tiap kodenya tidak ada di
+skema. `pabrik` dan `status_pinjam` sebaliknya cuma muncul di CRUD/CDC generik dan `v_m_barang`
+— tak ada satu pun objek yang memberi mereka arti.
+
+Jadi Master Produk **bukan** "tambah tiga kolom". Ia tiga keputusan terpisah, dan hanya satu
+yang bisa diputuskan dari data yang ada:
+
+1. `status_pinjam` — konstan di kedua server, tak dipakai objek mana pun. Kandidat kuat §6.
+2. `pabrik` — bendera tanpa arti yang bisa ditemukan. Perlu ditanyakan ke pemilik data, bukan
+   ditebak.
+3. `ukuran` — dimensi nyata dengan kodifikasi yang tak terdokumentasi. **Harus dipetakan lebih
+   dulu**; menyalinnya sebagai `float` ke skema baru berarti mewarisi kode tanpa arti.
 
 ## 8. Yang harus diverifikasi sebelum rancangan ini dibekukan
 

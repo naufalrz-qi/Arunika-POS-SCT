@@ -2044,3 +2044,71 @@ def fmi_penjualan_arunika(f):
         f"FROM ({grouped}) g"
     )
     return inner, params
+
+
+def voucher_arunika(f):
+    """`voucher` di atas bentuk Arunika.
+
+    Satu-satunya yang menghalangi laporan ini selama ini adalah SATU kolom:
+    `voucher_kode` di `arunika_src.penjualan`. Nilainya sudah dipulangkan
+    `_nota_net()` sejak awal, jadi yang perlu ditambahkan hanya jalur keluarnya.
+
+    **Penanda "tanpa voucher" ikut terhitung, dan itu bukan kelalaian.**
+    `kd_voucher` legacy adalah kolom wajib yang diisi `V1`/`V2`/`VAA000` (bernama
+    `-`) pada 473.199 dari 474.595 nota grosirPusat, dan laporan lama menghitung
+    "dipakai" sebagai `kd_voucher <> ''` -- jadi ketiga baris penanda itu memang
+    sudah muncul di layar hari ini dengan pemakaian ratusan ribu. Bentuk baru
+    memulangkan apa adanya supaya angkanya cocok. Membersihkannya adalah
+    keputusan pemilik data, sekelas dengan keputusan potong-atau-tidak voucher
+    di `_nota_net()`; kalau diambil, tempatnya di sini, bukan diam-diam di
+    adapter.
+
+    Kolom `status` memakai `aktif` dari view, yang berarti `status = 1`; jalur
+    lama menulisnya `status <> 0`. Setara, dan diperiksa bukan diduga:
+    `m_voucher` hanya pernah bernilai 0 atau 1 di kedua server (grosirPusat 1+7,
+    testGUdang 0+2).
+
+    ## SATU-SATUNYA laporan yang angkanya TIDAK persis sama
+
+    `V1` terhitung 21.257 di jalur lama dan **21.256** di sini. Selisihnya satu
+    nota, dan nota itu punya nama: `CT2202150001` (15 Feb 2022, `kd_voucher = 1`)
+    -- satu-satunya nota di grosirPusat yang **tak punya baris detail sama
+    sekali**. `arunika_src.penjualan` dibangkitkan dari `_nota_net()`, yang
+    meng-INNER JOIN ke `t_penjualan_detail`, jadi nota berbaris nol tak pernah
+    muncul di sana.
+
+    Itu bukan cacat yang lahir di sini: nota itu SUDAH tak terlihat di setiap
+    laporan penjualan yang ada sekarang (lihat catatan di dokumen rancangan
+    Sec 7.4). Laporan Voucher lama-lah yang satu-satunya menghitungnya, karena ia
+    membaca `t_penjualan` langsung tanpa menyentuh detail.
+
+    Sengaja TIDAK "diperbaiki" dengan mengubah INNER JOIN itu jadi LEFT: itu
+    akan menggeser angka di seluruh laporan penjualan yang sudah terkirim, demi
+    satu nota kosong berumur empat tahun. Kalau nota tanpa baris memang harus
+    terlihat, tempat memutuskannya adalah `_nota_net()` -- sekali, untuk kedua
+    jalur.
+
+    ## Ongkosnya 6,5x, dan sebabnya struktural
+
+    0,16 -> 1,04 dtk di grosirPusat. Hitungan "dipakai" bersifat sepanjang masa
+    (halaman ini memang tak punya filter tanggal), jadi ia menyentuh seluruh
+    474.595 nota -- dan lewat `arunika_src.penjualan` itu berarti ikut membayar
+    perhitungan uang per nota yang tak satu pun kolomnya dipakai di sini.
+    Halaman ini berisi 8 baris dan jarang dibuka, jadi satu detik diterima;
+    kalau suatu saat tidak, jalan keluarnya sama dengan `penjualan_baris`:
+    biarkan nota membawa kodenya tanpa harus melewati view uang.
+    """
+    where = ["1=1"]
+    params = []
+    _search(where, params, f, ["v.kode", "v.nama"])
+    inner = (
+        "SELECT v.kode AS kd_voucher, v.nama, v.nominal, "
+        "COALESCE(u.dipakai, 0) AS dipakai, COALESCE(u.dipakai, 0) * v.nominal AS nilai_dipakai, "
+        "CASE WHEN v.aktif = 1 THEN 'Aktif' ELSE 'Nonaktif' END AS status "
+        f"FROM {SRC}.voucher v "
+        "LEFT JOIN (SELECT voucher_kode, COUNT(*) AS dipakai "
+        f"FROM {SRC}.penjualan WHERE COALESCE(voucher_kode, '') <> '' "
+        "GROUP BY voucher_kode) u ON u.voucher_kode = v.kode "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params

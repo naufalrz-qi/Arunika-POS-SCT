@@ -300,6 +300,20 @@ class Penjualan(models.Model):
     divisi = models.ForeignKey(Divisi, on_delete=models.PROTECT)
     pelanggan_id = models.BigIntegerField(null=True, blank=True)  # FK menyusul di irisan berikutnya
 
+    # NULL = nota ini tidak memakai voucher, dan itu bedanya dari legacy:
+    # di sana `kd_voucher` kolom WAJIB yang diisi penanda "tanpa voucher"
+    # (`V1`, `V2`, `VAA000` yang bernama `-`) pada 473.199 dari 474.595 nota
+    # grosirPusat. Voucher sungguhan cuma tiga kode, 1.396 pemakaian.
+    #
+    # Penanda itu bukan sekadar jelek dipandang: laporan Voucher legacy
+    # menghitung "dipakai" sebagai `kd_voucher <> ''`, jadi ketiga baris penanda
+    # muncul di layar dengan pemakaian ratusan ribu. Adapter TIDAK memperbaiki
+    # itu -- ia memulangkan apa adanya supaya laporan yang dipindahkan tetap
+    # cocok angka. Yang diperbaiki adalah bentuk baru ini, tempat "tanpa
+    # voucher" memang tidak perlu punya baris master.
+    # Rujukan bertali teks: `Voucher` didefinisikan di bawah, di bagian kas.
+    voucher = models.ForeignKey("Voucher", null=True, blank=True, on_delete=models.PROTECT)
+
     subtotal = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     pajak = models.DecimalField(max_digits=18, decimal_places=2, default=0)
