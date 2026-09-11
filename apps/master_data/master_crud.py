@@ -49,6 +49,9 @@ def _st(value) -> str:
     return str(value).strip() if value is not None else ""
 
 
+from apps.transactions.reports import JENIS_BIAYA
+
+
 def _aktif_nonaktif(aktif=1) -> list[dict]:
     """Opsi kolom `status`. Yang PERTAMA jadi nilai bawaan baris baru.
 
@@ -152,11 +155,26 @@ _MASTER = {
         wajib=["nama", "kd_negara"],
         kolom_tabel=["kd_telp"],
     ),
-    # Aktif = 2 di sini, bukan 1: seluruh 38 baris yang ada bernilai 2.
+    # `status` DI SINI BUKAN BENDERA AKTIF. Ia jenis biaya, dan yang
+    # membuktikannya view legacy: `mon_m_biaya` menamai kolomnya `Jenis`,
+    # `mon_rl_biaya_penjualan` menyaring `status = 1`, `mon_rl_biaya_adm_dan_umum`
+    # menyaring `status = 2` -- dua bagian biaya di laporan laba rugi.
+    #
+    # Sebelum ini layar ini menawarkan Aktif/Nonaktif, jadi memilih "Nonaktif"
+    # menulis `status = 0` dan diam-diam MENGELUARKAN kategori itu dari KEDUA
+    # bagian laba rugi. Yang menyamarkannya: testGUdang punya 38 baris dan
+    # semuanya bernilai 2, sehingga "aktif = 2" tampak benar. grosirPusat tidak:
+    # 6 baris bernilai 1 dan 26 bernilai 2 -- keenamnya akan terbaca "Nonaktif".
+    #
+    # `m_biaya` memang tak punya kolom aktif sama sekali (5 kolom), seperti
+    # `m_supplier`.
     "biaya": _referensi(
         "m_biaya", "kd_biaya", "B", "Jenis Biaya",
         teks=["nama", "keterangan", "kd_index"],
-        pilihan={"status": _aktif_nonaktif(aktif=2)},
+        # Urutannya bukan selera: `_bersihkan` memakai opsi PERTAMA sebagai
+        # nilai bawaan baris baru. "Adm. dan Umum" didahulukan karena ia ember
+        # umum -- dan memang mayoritas di data nyata (26 dari 32 di grosirPusat).
+        pilihan={"status": [{"value": k, "label": JENIS_BIAYA[k][1]} for k in (2, 1, 3, 4)]},
         kolom_tabel=["keterangan", "kd_index"],
     ),
     "voucher": _referensi(

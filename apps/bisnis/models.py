@@ -579,6 +579,21 @@ class Kas(Referensi):
         db_table = "kas"
 
 
+class JenisBiaya(models.TextChoices):
+    """Bagian biaya di laporan laba rugi.
+
+    Legacy menyimpannya di `m_biaya.status` -- kolom yang sama yang tampak
+    seperti bendera aktif dan sempat dibaca begitu. Yang membantahnya view
+    legacy sendiri: `mon_m_biaya` menamai hasil CASE-nya `Jenis`, dan dua view
+    laba rugi menyaring `status = 1` dan `status = 2` sebagai dua bagian biaya.
+    """
+
+    PENJUALAN = "penjualan", "Operasional (Penjualan)"
+    ADM_UMUM = "adm_umum", "Operasional (Adm. dan Umum)"
+    PRODUKSI_LANGSUNG = "produksi_langsung", "Produksi (Biaya Langsung)"
+    PRODUKSI_TAK_LANGSUNG = "produksi_tak_langsung", "Produksi (Biaya Tak Langsung)"
+
+
 class KategoriBiaya(Referensi):
     """Jenis biaya operasional.
 
@@ -588,6 +603,12 @@ class KategoriBiaya(Referensi):
     """
 
     keterangan = models.CharField(max_length=50, blank=True)
+
+    # `jenis` adalah kolom TERSENDIRI, dan itu perbaikan bukan tambahan: di
+    # legacy ia berbagi tempat dengan apa yang dikira bendera aktif. `aktif`
+    # sendiri milik Arunika -- `m_biaya` tak punya padanannya sama sekali.
+    jenis = models.CharField(max_length=24, choices=JenisBiaya.choices,
+                             default=JenisBiaya.ADM_UMUM)
 
     class Meta(Referensi.Meta):
         abstract = False

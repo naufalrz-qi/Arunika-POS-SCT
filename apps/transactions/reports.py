@@ -975,10 +975,38 @@ def hutang(f):
 # directly against the mon_m_biaya view definition (not called — reimplemented
 # as a CASE, per project convention); live data only has status 1/2 in use
 # (retail/toys, no production), 3/4 exist in the mapping but are currently unused.
-_BIAYA_KATEGORI_CASE = (
-    "CASE b.status WHEN 1 THEN 'Operasional (Penjualan)' WHEN 2 THEN 'Operasional (Adm. dan Umum)' "
-    "WHEN 3 THEN 'Produksi (Biaya Langsung)' WHEN 4 THEN 'Produksi (Biaya Tak Langsung)' ELSE '' END"
-)
+# `m_biaya.status` adalah JENIS BIAYA, bukan bendera aktif -- dan yang
+# membuktikannya view legacy sendiri: `mon_m_biaya` menamai kolom hasil CASE ini
+# **`Jenis`**, sementara `mon_rl_biaya_penjualan` menyaring `status = 1` dan
+# `mon_rl_biaya_adm_dan_umum` menyaring `status = 2`. Keduanya dua bagian biaya
+# di laporan laba rugi, bukan dua keadaan hidup-mati.
+#
+# `m_biaya` memang TIDAK punya kolom aktif sama sekali (5 kolom: kd_biaya,
+# kd_index, nama, keterangan, status) -- sama seperti `m_supplier`.
+#
+# Ditulis sebagai peta Python, bukan langsung sebagai teks SQL, karena tiga
+# tempat membutuhkannya: laporan ini, pilihan di layar Kelola Referensi
+# (`master_crud`), dan view adapter (`master_src`). Tiga salinan yang menyimpang
+# tak akan memunculkan galat -- hanya label yang berbeda-beda.
+# kode legacy -> (token, label). SATU peta, dua rendering: layar butuh labelnya,
+# bentuk Arunika butuh tokennya (sebentuk dengan `status` dan `jenis_bayar`,
+# yang juga token huruf kecil -- teks layar bukan urusan sebuah kolom).
+JENIS_BIAYA = {
+    1: ("penjualan", "Operasional (Penjualan)"),
+    2: ("adm_umum", "Operasional (Adm. dan Umum)"),
+    3: ("produksi_langsung", "Produksi (Biaya Langsung)"),
+    4: ("produksi_tak_langsung", "Produksi (Biaya Tak Langsung)"),
+}
+
+
+def case_jenis_biaya(kolom: str = "b.status", *, label: bool = True) -> str:
+    """`CASE` jenis biaya atas sebuah kolom status legacy."""
+    i = 1 if label else 0
+    cabang = " ".join(f"WHEN {k} THEN '{v[i]}'" for k, v in JENIS_BIAYA.items())
+    return f"CASE {kolom} {cabang} ELSE '' END"
+
+
+_BIAYA_KATEGORI_CASE = case_jenis_biaya()
 
 SORTS_BIAYA = {"tanggal": "tanggal", "biaya": "biaya", "nominal": "nominal"}
 SUMMARY_BIAYA = "COUNT(*) AS jml_baris, COALESCE(SUM(q.nominal), 0) AS total_nominal"

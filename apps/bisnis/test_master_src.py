@@ -23,6 +23,7 @@ import re
 from django.test import SimpleTestCase
 
 from apps.bisnis import master_src
+from apps.transactions import reports as rpt
 
 
 class DdlDasar(SimpleTestCase):
@@ -79,15 +80,27 @@ class ModeLegacy(SimpleTestCase):
 
 
 class JebakanYangSudahTerbukti(SimpleTestCase):
-    def test_kategori_biaya_aktif_adalah_dua(self):
-        """38 dari 38 baris `m_biaya` bernilai 2. `status = 1` memulangkan NOL
-        baris aktif — tanpa galat, dan layar kas akan tampak kosong."""
+    def test_kategori_biaya_status_adalah_jenis_bukan_aktif(self):
+        """`m_biaya.status` adalah JENIS BIAYA, dan entri ini pernah salah.
+
+        Versi pertamanya memetakan `aktif = (status = 2)` karena seluruh 38 baris
+        testGUdang memang bernilai 2. grosirPusat membantahnya: 6 baris bernilai
+        1, 26 bernilai 2 -- keenamnya akan terbaca NONAKTIF. Arti sebenarnya ada
+        di view legacy (`mon_m_biaya` menamainya `Jenis`).
+
+        `m_biaya` tak punya kolom aktif sama sekali, jadi `aktif` konstan 1 --
+        sama seperti `pemasok`.
+        """
         ddl = master_src.ddl("kategori_biaya", "legacy", db_legacy="X")
-        self.assertIn("status = 2", ddl)
+        self.assertNotIn("status = 2", ddl)
         self.assertNotIn("status = 1", ddl)
+        for _tok, _label in [rpt.JENIS_BIAYA[1], rpt.JENIS_BIAYA[2]]:
+            self.assertIn(f"'{_tok}'", ddl)
+        self.assertNotIn("'" + rpt.JENIS_BIAYA[1][1] + "'", ddl)  # token, bukan label
 
     def test_entitas_lain_tetap_satu(self):
-        """Nilai 2 itu khusus m_biaya; menyeragamkannya akan mematikan yang lain."""
+        """Aktif = `status = 1` di seluruh entitas yang PUNYA kolom aktif;
+        yang tidak punya (`pemasok`, `kategori_biaya`) memulangkan konstan."""
         for nama in ("negara", "kota", "bank", "pelanggan", "kas", "voucher"):
             ddl = master_src.ddl(nama, "legacy", db_legacy="X")
             self.assertIn("status = 1", ddl, nama)

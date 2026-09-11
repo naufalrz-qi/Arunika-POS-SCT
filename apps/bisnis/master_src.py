@@ -109,6 +109,19 @@ def _badan_pembelian(db_legacy: str) -> str:
     return adapter.badan_pembelian(db_legacy)
 
 
+def _case_jenis_biaya(kolom: str) -> str:
+    """Token jenis biaya, dari satu sumber (`reports.JENIS_BIAYA`).
+
+    Token, bukan label: bentuk baca memulangkan nilai yang stabil, dan teks
+    layar dibentuk pembacanya -- sama seperti `status` dan `jenis_bayar`.
+
+    Impor lokal: `master_src` tak boleh menarik modul laporan saat diimpor.
+    """
+    from apps.transactions import reports
+
+    return reports.case_jenis_biaya(kolom, label=False)
+
+
 def _referensi(tabel_legacy: str, kunci: str, tabel: str) -> dict:
     """Entitas referensi berbentuk kode + nama + bisa dinonaktifkan.
 
@@ -186,13 +199,30 @@ _MASTER: dict[str, dict] = {
                    "LEFT JOIN dbo.kota k ON k.id = s.kota_id",
     },
     "kategori_biaya": {
-        "kolom": ["kode", "nama", "keterangan", "aktif"],
-        # AKTIF = 2, BUKAN 1. Seluruh 38 baris `m_biaya` bernilai 2. Memakai
-        # `status = 1` di sini akan memulangkan daftar biaya yang kosong --
-        # tanpa galat, dan layar kas akan tampak "belum ada datanya".
-        "legacy": "SELECT RTRIM(kd_biaya), nama, keterangan, "
-                  "CASE WHEN status = 2 THEN 1 ELSE 0 END FROM {db}.dbo.m_biaya",
-        "arunika": "SELECT kode, nama, keterangan, CAST(aktif AS int) FROM dbo.kategori_biaya",
+        "kolom": ["kode", "nama", "keterangan", "jenis", "aktif"],
+        # ## `m_biaya.status` BUKAN bendera aktif -- ia JENIS BIAYA
+        #
+        # Versi pertama entri ini memetakannya `aktif = (status = 2)`, dengan
+        # alasan yang terdengar meyakinkan: seluruh 38 baris `m_biaya` di
+        # testGUdang memang bernilai 2. Itu salah, dan grosirPusat yang
+        # membuktikannya -- di sana 6 baris bernilai 1 dan 26 bernilai 2,
+        # sehingga keenamnya akan dipulangkan sebagai NONAKTIF.
+        #
+        # Artinya ada di view legacy, seperti biasa: `mon_m_biaya` menamai hasil
+        # CASE atas kolom ini **`Jenis`**, `mon_rl_biaya_penjualan` menyaring
+        # `status = 1`, dan `mon_rl_biaya_adm_dan_umum` menyaring `status = 2`.
+        # Keduanya dua bagian biaya di laporan laba rugi.
+        #
+        # `aktif` karena itu KONSTAN 1 di mode legacy: `m_biaya` punya lima kolom
+        # dan tak satu pun berupa status hidup-mati -- persis seperti
+        # `m_supplier`.
+        "legacy": lambda db: (
+            "SELECT RTRIM(kd_biaya), nama, keterangan, "
+            + _case_jenis_biaya("status") + ", 1 "
+            f"FROM [{db}].dbo.m_biaya"
+        ),
+        "arunika": "SELECT kode, nama, keterangan, jenis, CAST(aktif AS int) "
+                   "FROM dbo.kategori_biaya",
     },
     "voucher": {
         "kolom": ["kode", "nama", "nominal", "keterangan", "aktif"],
