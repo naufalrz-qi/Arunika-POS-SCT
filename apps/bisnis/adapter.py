@@ -335,6 +335,13 @@ def badan_penjualan(db_legacy: str) -> str:
         # ini. Adapter menyajikan bentuk lain dari data yang sama, bukan
         # pendapat lain tentang datanya.
         "RTRIM(n.kd_voucher), "
+        # Kas yang menerima uangnya. `char(6)` (JR_KODE_MASTER), jadi di-RTRIM;
+        # kosong -> NULL supaya kedua mode menyatakan "tanpa kas" dengan nilai
+        # yang sama, dan pembacanya cukup menulis `IS NOT NULL` sekali. Tak ada
+        # laporan yang menampilkan kolom ini, jadi NULLIF di sini tidak mengubah
+        # satu angka pun -- berbeda dari penanda voucher di atas, yang justru
+        # DIHITUNG apa adanya oleh laporan Voucher.
+        "NULLIF(RTRIM(n.kd_kas), ''), "
         "n.total_kotor, n.total_kotor - (n.total_bersih - n.pajak), n.pajak, n.total_bersih, "
         # `t_penjualan.status` adalah JENIS PEMBAYARAN, bukan penanda batal --
         # ia keluar di kolomnya sendiri. Nilainya token huruf kecil, sebentuk

@@ -2462,3 +2462,136 @@ def biaya_kategori_arunika(f):
         "GROUP BY kb.jenis"
     )
     return inner, params
+
+
+# --- Kas Harian di atas bentuk Arunika --------------------------------------
+#
+# Tiga lengan, bukan enam. Itu bukan penyederhanaan tulisan: `jurnal_kas` sudah
+# menggabungkan keempat dokumen kas legacy jadi satu entitas (Sec 4.2), jadi
+# empat `UNION ALL` yang pertama di `_kas_union()` runtuh jadi satu SELECT.
+# Yang tersisa dua: mutasi dibaca DUA KALI (sekali sebagai keluar dari kas
+# sumber, sekali sebagai masuk ke kas tujuan) dan penjualan tunai.
+#
+# Dua baris untuk satu dokumen mutasi memang bentuk BUKU, dan di sinilah
+# tempatnya. Entitasnya sendiri menyimpan satu baris per dokumen dengan
+# `kas_tujuan_kode` yang menyatakan ke mana -- fan-out ini urusan layar kas, dan
+# tak ada layar lain yang menanggungnya.
+
+
+def _kas_union_arunika(pred: str) -> str:
+    """Padanan `_kas_union()`: tanggal, kas_kode, keterangan, masuk, keluar.
+
+    `pred` template predikat tanggal ("{col} >= ? AND {col} <= ?"), dipasang di
+    TIAP lengan -- jadi pemanggil mengirim tuple param yang sama 3x, bukan 6x
+    seperti jalur lama.
+    """
+    def w(col):
+        return pred.format(col=col)
+
+    # Awalan keterangan mengikuti jalur lama huruf per huruf; `penambahan` memang
+    # tak berawalan di sana.
+    prefiks = ("CASE j.jenis WHEN 'pendapatan' THEN 'Pendapatan: ' "
+               "WHEN 'biaya' THEN 'Biaya: ' WHEN 'mutasi' THEN 'Mutasi keluar: ' "
+               "ELSE '' END")
+    masuk = "CASE WHEN j.jenis IN ('penambahan', 'pendapatan') THEN j.jumlah ELSE 0 END"
+    keluar = "CASE WHEN j.jenis IN ('biaya', 'mutasi') THEN j.jumlah ELSE 0 END"
+    return (
+        f"SELECT j.tanggal, j.kas_kode, {prefiks} + j.keterangan AS keterangan, "
+        f"{masuk} AS masuk, {keluar} AS keluar "
+        f"FROM {SRC}.jurnal_kas j WHERE {w('j.tanggal')}"
+        " UNION ALL "
+        "SELECT j.tanggal, j.kas_tujuan_kode, 'Mutasi masuk: ' + j.keterangan, j.jumlah, 0 "
+        f"FROM {SRC}.jurnal_kas j WHERE j.jenis = 'mutasi' AND {w('j.tanggal')}"
+        " UNION ALL "
+        # `nomor` tidak di-RTRIM: `t_penjualan.no_transaksi` varchar, dan nol
+        # baris berspasi ekor di kedua server -- jadi ini sama persis dengan
+        # `RTRIM(x.no_transaksi)` jalur lama, tanpa menyentuh data varchar.
+        "SELECT p.tanggal, p.kas_kode, 'Penjualan ' + p.nomor, p.total, 0 "
+        f"FROM {SRC}.penjualan p WHERE p.kas_kode IS NOT NULL AND {w('p.tanggal')}"
+    )
+
+
+# Nama kas. Jalur lama memakai
+# `COALESCE(NULLIF(keterangan,''), NULLIF(kd_index,''), kd_kas)`; `kd_index`
+# (110/1101) adalah nomor akun bagan perkiraan dan sengaja tidak diwarisi.
+# Membuangnya tidak mengubah satu baris pun: `m_kas.keterangan` bernilai `'-'`
+# -- bukan kosong -- di SELURUH 11 database yang bisa dijangkau (GUDANG, 8
+# grosir, 2 salinan uji), jadi cabang pertama selalu menang dan `kd_index` tak
+# pernah terbaca.
+#
+# Yang perlu diketahui pemilik data: karena `keterangan` selalu `'-'`, kolom Kas
+# di layar ini menampilkan `-` pada SETIAP baris, dan di PUSAT/PAGESANGAN yang
+# punya dua akun kas keduanya tampil sama persis. `kd_index` dan `cabang` pun
+# identik antar akun di sana, jadi tak ada satu kolom pun di `m_kas` yang
+# membedakan keduanya selain kodenya sendiri. Perilaku itu DIPERTAHANKAN di sini
+# supaya perpindahan ini bisa dibuktikan identik; memperbaikinya keputusan
+# tersendiri, bukan efek samping sebuah migrasi.
+_KAS_NAMA = "COALESCE(NULLIF(LTRIM(RTRIM(mk.keterangan)), ''), u.kas_kode)"
+
+
+def kas_harian_arunika(f):
+    """`kas_harian` di atas bentuk Arunika."""
+    period = _kas_union_arunika("{col} >= ? AND {col} <= ?")
+    pre = _kas_union_arunika("{col} < ?")
+    kas_where = " WHERE u.kas_kode = ?" if f.get("kd_kas") else ""
+    inner = (
+        f"SELECT u.tanggal, {_KAS_NAMA} AS kas, u.keterangan, u.masuk, u.keluar, "
+        "ROUND(COALESCE(mk.saldo_awal, 0) + COALESCE(pre.net, 0) + SUM(u.masuk - u.keluar) "
+        "OVER (PARTITION BY u.kas_kode ORDER BY u.tanggal, u.keterangan ROWS UNBOUNDED PRECEDING), 2) AS saldo "
+        f"FROM ({period}) u "
+        f"LEFT JOIN {SRC}.kas mk ON mk.kode = u.kas_kode "
+        f"LEFT JOIN (SELECT kas_kode, SUM(masuk) - SUM(keluar) AS net FROM ({pre}) p "
+        "GROUP BY kas_kode) pre ON pre.kas_kode = u.kas_kode"
+        + kas_where
+    )
+    params = [f["date_from"], f["date_to"]] * 3 + [f["date_from"]] * 3
+    if f.get("kd_kas"):
+        params.append(f["kd_kas"])
+    return inner, params
+
+
+def kas_summary_arunika(f):
+    """`kas_summary` di atas bentuk Arunika.
+
+    `saldo_awal` menjumlahkan SELURUH baris kas, tanpa menyaring aktif -- persis
+    seperti jalur lama. Menambahkan `aktif = 1` di sini akan terlihat rapi dan
+    diam-diam memindahkan uang: saldo awal sebuah akun yang dinonaktifkan tetap
+    uang yang pernah ada, dan baris mutasinya tetap terhitung di lengan atas.
+    """
+    period = _kas_union_arunika("{col} >= ? AND {col} <= ?")
+    pre = _kas_union_arunika("{col} < ?")
+    kw_u = " WHERE u.kas_kode = ?" if f.get("kd_kas") else ""
+    kw_mk = " WHERE kode = ?" if f.get("kd_kas") else ""
+    kw_p = " WHERE p.kas_kode = ?" if f.get("kd_kas") else ""
+    sql = (
+        "SELECT x.jml_baris, x.total_masuk, x.total_keluar, y.saldo_awal, "
+        "ROUND(y.saldo_awal + x.total_masuk - x.total_keluar, 2) AS saldo_akhir "
+        "FROM (SELECT COUNT(*) AS jml_baris, ROUND(COALESCE(SUM(u.masuk), 0), 2) AS total_masuk, "
+        f"ROUND(COALESCE(SUM(u.keluar), 0), 2) AS total_keluar FROM ({period}) u{kw_u}) x "
+        "CROSS JOIN (SELECT ROUND("
+        f"COALESCE((SELECT SUM(saldo_awal) FROM {SRC}.kas{kw_mk}), 0) + "
+        f"COALESCE((SELECT SUM(p.masuk) - SUM(p.keluar) FROM ({pre}) p{kw_p}), 0)"
+        ", 2) AS saldo_awal) y"
+    )
+    # Urutan param ikut posisi ? kiri-ke-kanan dalam teks SQL, sama seperti
+    # `kas_summary`: period (6) -> kd_kas di x -> kd_kas di kas -> pre (3) ->
+    # kd_kas di pre.
+    params = [f["date_from"], f["date_to"]] * 3
+    if f.get("kd_kas"):
+        params.append(f["kd_kas"])
+        params.append(f["kd_kas"])
+    params += [f["date_from"]] * 3
+    if f.get("kd_kas"):
+        params.append(f["kd_kas"])
+    return sql, params
+
+
+def opsi_kas_arunika():
+    """Pilihan filter kas, bentuk Arunika. NILAINYA tetap kode kas di kedua jalur.
+
+    Jalur lama menyaring `status <> 0`; di sini `aktif = 1` -- lihat
+    `kas_summary_arunika`. Labelnya tetap `keterangan`, cacat `'-'` dan semuanya:
+    kotak pilihan yang isinya berbeda dari kolom Kas di tabel yang sama akan
+    lebih membingungkan daripada dua-duanya jelek dengan cara yang sama.
+    """
+    return f"SELECT kode, keterangan FROM {SRC}.kas WHERE aktif = 1 ORDER BY keterangan"

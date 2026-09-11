@@ -179,3 +179,66 @@ class KlasifikasiBespoke(SimpleTestCase):
         urut, label = rpt._segmen_case(f)
         self.assertIn(urut, rpt.klasifikasi_pelanggan_arunika(f)[0])
         self.assertIn(label, rpt.klasifikasi_pelanggan_arunika(f)[0])
+
+
+class KasHarianBespoke(SimpleTestCase):
+    """Kas Harian juga tak punya satu `inner` untuk diganti.
+
+    Tiga rute: baris (layar + export), ringkasan (saldo awal pra-rentang, bukan
+    agregat inner biasa), dan pilihan kas di kotak filter. Yang paling mudah
+    tertinggal justru yang ketiga — ia `SELECT` mentah ke `m_kas` di dalam
+    `views.py`, satu-satunya rujukan legacy layar ini yang tak lewat `reports.py`.
+    Persis bentuk kesalahan yang sama dengan `profil_pelanggan` di Klasifikasi.
+    """
+
+    def _f(self, kd_kas=""):
+        req = RequestFactory().get("/x?date_from=2026-01-01&date_to=2026-01-31")
+        f = reporting.parse_report_params(req, rpt.SORTS_KAS, "tanggal", max_range_days=None)
+        f["kd_kas"] = kd_kas
+        return f
+
+    def _semua_sql(self, kd_kas=""):
+        f = self._f(kd_kas)
+        yield "kas_harian_arunika", rpt.kas_harian_arunika(f)
+        yield "kas_summary_arunika", rpt.kas_summary_arunika(f)
+        yield "opsi_kas_arunika", (rpt.opsi_kas_arunika(), [])
+
+    def test_tak_menyentuh_tabel_legacy(self):
+        for nama, (sql, _) in self._semua_sql():
+            tersisa = re.findall(r"\b(?:FROM|JOIN)\s+((?:m_|t_)\w+)", sql, re.IGNORECASE)
+            self.assertEqual(tersisa, [], f"{nama}: masih membaca {tersisa}")
+            self.assertIn(f"{rpt.SRC}.", sql, f"{nama}: tak menyentuh {rpt.SRC}")
+
+    def test_dipakai_layarnya(self):
+        """Ketiganya dipanggil dari `views.py`. Sebuah fungsi yang benar tapi tak
+        pernah dipanggil membuat layar terus membaca jalur lama tanpa gejala."""
+        sumber = Path(views.__file__).read_text(encoding="utf-8")
+        for nama in ("kas_harian_arunika", "kas_summary_arunika", "opsi_kas_arunika"):
+            self.assertIn(f"rpt.{nama}", sumber, f"{nama}: tak pernah dipanggil layarnya")
+
+    def test_kolom_sama_dengan_jalur_lama(self):
+        """Kolom layar + kunci ringkasan datang dari satu daftar di `views.py`;
+        kolom yang hilang membuat sel kosong, bukan galat."""
+        sql, _ = rpt.kas_harian_arunika(self._f())
+        for kol in views._KAS_COLUMNS:
+            self.assertIn(kol["key"], sql, f"kolom '{kol['key']}' hilang")
+        ringkas, _ = rpt.kas_summary_arunika(self._f())
+        for kunci in ("jml_baris", "total_masuk", "total_keluar", "saldo_awal", "saldo_akhir"):
+            self.assertIn(kunci, ringkas, f"ringkasan '{kunci}' hilang")
+
+    def test_jumlah_param_cocok_dengan_tanda_tanya(self):
+        """Urutan param mengikuti posisi `?` kiri-ke-kanan dalam teks SQL, bukan
+        urutan pembuatannya — jebakan yang sudah tercatat dua kali di
+        `reports.py`. Jumlahnya yang salah memberi galat; urutannya yang salah
+        memberi ANGKA yang salah, jadi yang ini cuma menahan separuhnya."""
+        for kd_kas in ("", "KAA000"):
+            for nama, (sql, params) in self._semua_sql(kd_kas):
+                self.assertEqual(sql.count("?"), len(params),
+                                 f"{nama} (kd_kas={kd_kas!r})")
+                # Jalur lama diperiksa dengan ukuran yang sama: keduanya harus
+                # tetap bisa dijalankan selama gerbangnya masih bisa dimatikan.
+            f = self._f(kd_kas)
+            for nama, (sql, params) in (("kas_harian", rpt.kas_harian(f)),
+                                        ("kas_summary", rpt.kas_summary(f))):
+                self.assertEqual(sql.count("?"), len(params),
+                                 f"{nama} (kd_kas={kd_kas!r})")

@@ -334,6 +334,20 @@ class Penjualan(models.Model):
     # Rujukan bertali teks: `Voucher` didefinisikan di bawah, di bagian kas.
     voucher = models.ForeignKey("Voucher", null=True, blank=True, on_delete=models.PROTECT)
 
+    # Kas yang menerima uangnya -- satu-satunya tali antara sebuah nota dan buku
+    # kas harian. `jurnal_kas` sengaja hanya berisi DOKUMEN kas (empat jenis,
+    # Sec 4.2); penjualan tunai bukan salah satunya, ia punya entitasnya sendiri.
+    # Layar Kas Harian yang menyatukan keduanya.
+    #
+    # NULL-able karena nota kredit tak menerima uang saat dibuat. Di legacy
+    # kolom itu tidak pernah kosong: `t_penjualan.kd_kas` terisi pada SELURUH
+    # 474.595 baris grosirPusat dan 52.801 testGUdang -- termasuk kedelapan nota
+    # kredit grosirPusat, yang karena itu ikut terhitung sebagai uang masuk di
+    # layar Kas Harian hari ini. Penyaring `kd_kas <> ''` di sana tak pernah
+    # membuang apa pun.
+    kas = models.ForeignKey("Kas", null=True, blank=True, on_delete=models.PROTECT,
+                            related_name="penjualan")
+
     subtotal = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     pajak = models.DecimalField(max_digits=18, decimal_places=2, default=0)

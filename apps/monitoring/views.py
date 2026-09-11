@@ -1844,8 +1844,8 @@ def _opt_divisi(profile):
     return reporting.opt(inv.list_divisi(profile), "kd_divisi", "nama")
 
 
-def _opt_master(profile, sql):
-    with mssql.cursor(profile) as cur:
+def _opt_master(profile, sql, buka=None):
+    with (buka or mssql.cursor)(profile) as cur:
         cur.execute(sql)
         cols = [c[0] for c in cur.description]
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
@@ -1860,7 +1860,9 @@ def _opt_supplier(profile):
     return _opt_master(profile, "SELECT TOP 1000 kd_supplier, nama FROM m_supplier ORDER BY nama")
 
 
-def _opt_kas(profile):
+def _opt_kas(profile, arunika=False):
+    if arunika:
+        return _opt_master(profile, rpt.opsi_kas_arunika(), buka=mssql.arunika_cursor)
     return _opt_master(profile, "SELECT kd_kas, keterangan FROM m_kas WHERE status <> 0 ORDER BY keterangan")
 
 
@@ -3550,13 +3552,24 @@ def kas_harian(request):
         profile = _active()
         if profile:
             try:
-                inner, params = rpt.kas_harian(f)
-                with mssql.cursor(profile) as cur:
-                    rows, total = reporting.run_paged(cur, inner, params, f)
+                # Layar ini bespoke, jadi `inner_arunika` di sebuah spec tak akan
+                # pernah terbaca -- gerbangnya dipasang di sini, sama seperti
+                # Klasifikasi Pelanggan. Ketiga rutenya (baris, ringkasan,
+                # pilihan kas) HARUS pindah bersama: meninggalkan satu saja
+                # membuat layar membaca dua sumber sekaligus tanpa galat.
+                lewat_arunika = _arunika_siap(profile)
+                if lewat_arunika:
+                    inner, params = rpt.kas_harian_arunika(f)
+                    ssql, sparams = rpt.kas_summary_arunika(f)
+                else:
+                    inner, params = rpt.kas_harian(f)
                     ssql, sparams = rpt.kas_summary(f)
+                buka = mssql.arunika_cursor if lewat_arunika else mssql.cursor
+                with buka(profile) as cur:
+                    rows, total = reporting.run_paged(cur, inner, params, f)
                     cur.execute(ssql, sparams)
                     summary = reporting.one_row(cur)
-                    options = {"kas": _opt_kas(profile)}
+                    options = {"kas": _opt_kas(profile, arunika=lewat_arunika)}
             except pyodbc.Error as exc:
                 conn_error = mssql.friendly_error(exc, "Gagal membaca kas")
         else:
@@ -3590,7 +3603,8 @@ def kas_harian_export(request):
     if not profile:
         request.session["flash_error"] = CONN_ERROR
         return redirect("/admin-panel/kas/harian")
-    inner, params = rpt.kas_harian(f)
+    lewat_arunika = _arunika_siap(profile)
+    inner, params = (rpt.kas_harian_arunika if lewat_arunika else rpt.kas_harian)(f)
     order_sql = f"SELECT TOP {reporting.EXPORT_CAP} * FROM ({inner}) AS q ORDER BY {f['order_by']}"
     # Penjagaan yang SAMA dengan layar. `_fill_sheet` memetakan kolom lewat nama
     # dari cur.description, jadi mencabut kolom di sini aman — tak ada pergeseran
@@ -3599,7 +3613,7 @@ def kas_harian_export(request):
     buang = _uang_bespoke(request, _KAS_UANG)
     kolom = [c for c in _KAS_COLUMNS if c["key"] not in buang]
     try:
-        with mssql.cursor(profile) as cur:
+        with (mssql.arunika_cursor if lewat_arunika else mssql.cursor)(profile) as cur:
             cur.execute(order_sql, params)
             resp = reporting.xlsx_stream_response("kas-harian", kolom, cur)
     except pyodbc.Error as exc:

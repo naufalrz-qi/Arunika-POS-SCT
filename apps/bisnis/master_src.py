@@ -284,7 +284,7 @@ _MASTER: dict[str, dict] = {
     # ditulis ulang di sini. Itu keputusan sadar, dan alasannya di bawah.
     "penjualan": {
         "kolom": ["nomor", "tanggal", "divisi_kode", "pelanggan_kode", "voucher_kode",
-                  "subtotal", "diskon", "pajak", "total", "jenis_bayar", "status"],
+                  "kas_kode", "subtotal", "diskon", "pajak", "total", "jenis_bayar", "status"],
         # ## Kenapa memanggil fungsi vendor, bukan menulis formulanya sendiri
         #
         # `t_penjualan_total` hanya menutup 55% nota di grosirPusat (259.258 dari
@@ -323,12 +323,13 @@ _MASTER: dict[str, dict] = {
         # `total + diskon - pajak == SUM(qty * harga_jual)` -- diuji 50/50 nota
         # berdiskon. Jadi `subtotal` adalah nilai kotor sebelum diskon apa pun.
         "legacy": _badan_penjualan,
-        "arunika": "SELECT p.nomor, p.tanggal, d.kode, pl.kode, v.kode, "
+        "arunika": "SELECT p.nomor, p.tanggal, d.kode, pl.kode, v.kode, ks.kode, "
                    "p.subtotal, p.diskon, p.pajak, p.total, p.jenis_bayar, p.status "
                    "FROM dbo.penjualan p "
                    "INNER JOIN dbo.divisi d ON d.id = p.divisi_id "
                    "LEFT JOIN dbo.pelanggan pl ON pl.id = p.pelanggan_id "
-                   "LEFT JOIN dbo.voucher v ON v.id = p.voucher_id",
+                   "LEFT JOIN dbo.voucher v ON v.id = p.voucher_id "
+                   "LEFT JOIN dbo.kas ks ON ks.id = p.kas_id",
     },
     "penjualan_baris": {
         "kolom": ["penjualan_nomor", "tanggal", "divisi_kode",

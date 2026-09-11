@@ -251,7 +251,7 @@ layar.
 
 | Tabel | Isi |
 |---|---|
-| `penjualan` | id, **nomor** (unique), tanggal, divisi_id, pelanggan_id, **voucher_id (NULL-able)**, jenis_bayar, subtotal, diskon, pajak, total, dibayar, status, dibuat_oleh, dibuat_pada |
+| `penjualan` | id, **nomor** (unique), tanggal, divisi_id, pelanggan_id, **voucher_id (NULL-able)**, **kas_id (NULL-able)**, jenis_bayar, subtotal, diskon, pajak, total, dibayar, status, dibuat_oleh, dibuat_pada |
 | `penjualan_baris` | id, penjualan_id, barang_id, satuan_id, qty, harga, diskon, total |
 | `penjualan_retur` + `penjualan_retur_baris` | bentuk sama, merujuk penjualan asal |
 | `penjualan_order` + `penjualan_order_baris` | order terbuka; `status` sebagai penanda sungguhan |
@@ -656,7 +656,7 @@ belum ada di `arunika_src`**, bukan terhalang penulisan SQL.
 | `m_pegawai` | Penjualan Detail, Retur Penjualan, Shift |
 | `t_penjualan_retur` / `t_pembelian_retur` (+ detail) | Retur Penjualan, Retur Pembelian |
 | `t_*_order` (+ detail) | Order Penjualan, Order Pembelian |
-| `t_biaya_operasional` | Biaya Operasional, Biaya per Kategori |
+| ~~`t_biaya_operasional`~~ | **selesai — lihat §7.9** (jadi `jurnal_kas`; Kas Harian ikut, §7.10) |
 | `t_piutang_cicilan`, `t_hutang_cicilan` | Piutang, Hutang |
 | `t_opname_stok` | Opname |
 | `m_barang_promo` (+ detail) | Promo |
@@ -951,6 +951,90 @@ ia melaporkan keadaan sebenarnya alih-alih menuduh view yang benar.
 Bersama nota tanpa baris detail (§7.6, §7.8), ini pasangan cacat referensial yang saling
 berlawanan di data yang sama — dan keduanya baru terlihat karena bentuk baru memaksa
 membandingkan jumlah baris terhadap acuan yang eksplisit.
+
+## 7.10 Kas Harian: enam lengan jadi tiga, dan kolom Kas yang isinya `-`
+
+Layar kas harian adalah pembaca terberat `jurnal_kas`, dan yang pertama menuntut §4.2 membayar
+janjinya. Ia juga bespoke seperti Klasifikasi Pelanggan: tiga rute yang harus pindah bersama —
+baris (layar + export), ringkasan (saldo awal pra-rentang, bukan agregat `inner` biasa), dan
+**pilihan kas di kotak filter**, yang seperti `profil_pelanggan` dulu adalah `SELECT` mentah ke
+`m_kas` di dalam `views.py`, satu-satunya rujukan legacy layar ini yang tak lewat `reports.py`.
+
+Enam `UNION ALL` jadi tiga. Empat lengan dokumen kas runtuh jadi **satu** `SELECT` atas
+`jurnal_kas`; yang tersisa mutasi (dibaca dua kali: keluar dari kas sumber, masuk ke kas tujuan)
+dan penjualan tunai. Dua baris untuk satu dokumen mutasi memang bentuk **buku**, dan di sinilah
+tempatnya — entitasnya menyimpan satu baris per dokumen, layar yang memekarkannya.
+
+Hasilnya identik, dan lebih murah di setiap rentang yang diuji:
+
+| Server | Rentang | Baris | Legacy | Arunika |
+|---|---|---:|---:|---:|
+| grosirPusat | 2025 setahun | 118.582 | 9,51 dtk | 5,57 dtk (0,6×) |
+| grosirPusat | 2024–2025, satu kas | 5.502 | 9,30 dtk | 4,70 dtk (0,5×) |
+| grosirPusat | Agustus 2026 | 10 | 7,39 dtk | 5,22 dtk (0,7×) |
+| testGUdang | 2024–2026 | 22.330 | 5,18 dtk | 1,08 dtk (0,2×) |
+| testGUdang | 2026, satu kas | 3.129 | 4,85 dtk | 0,74 dtk (0,2×) |
+
+Nol beda pada seluruh baris, dan ringkasan (`jml_baris`/`total_masuk`/`total_keluar`/
+`saldo_awal`/`saldo_akhir`) identik di kelimanya.
+
+Sebagian besar selisihnya bukan dari lengan kas melainkan dari lengan **penjualan**, diukur
+terpisah di testGUdang (2024–2026, hasil sama 22.329 nota / Rp 139.951.316.871):
+
+    _nota_net + predikat kd_kas, di dalam       1,73 dtk
+    _nota_net tanpa predikat kd_kas             1,45 dtk
+    lewat `arunika_src.penjualan`               0,46 dtk
+
+Bolak-balik dua putaran memberi angka yang sama, jadi ini bukan cache yang hangat. Predikat
+`kd_kas` menyumbang sekitar seperlimanya; sisanya bentuk view itu sendiri, dan mekanismenya
+belum diisolasi — dicatat sebagai pengukuran, bukan sebagai penjelasan.
+
+### `penjualan.kas_id`: satu kolom yang memang kurang
+
+`arunika_src.penjualan` tak punya cara menyebut kas mana yang menerima uangnya, dan tanpa itu
+lengan penjualan tak bisa ditulis sama sekali. §5.E sekarang mencantumkan `kas_id` (NULL-able).
+Ini bukan pelunakan §4.2: buku besar kas tetap berisi **dokumen** kas saja, dan penjualan tunai
+tetap bukan salah satunya — yang ditambahkan hanya tali yang menyatakan ke kas mana sebuah nota
+bermuara, persis seperti `piutang_cicilan.kas_id` yang sudah ada di §5.G sejak awal.
+
+Di legacy kolom itu tidak pernah kosong: `t_penjualan.kd_kas` terisi pada **seluruh** 474.595
+baris grosirPusat dan 52.801 testGUdang. Artinya penyaring `kd_kas <> ''` di jalur lama — yang
+dimaksudkan memilih "penjualan tunai saja" — tak pernah membuang apa pun, dan kedelapan nota
+**kredit** grosirPusat ikut terhitung sebagai uang masuk. Bentuk baru memakai `IS NOT NULL`,
+yang di sana menyatakan hal yang sama dan di pemasangan Arunika sungguhan akhirnya punya arti.
+
+### Kolom Kas menampilkan `-` di setiap baris, di sebelas database
+
+Nama kas di jalur lama adalah
+`COALESCE(NULLIF(keterangan, ''), NULLIF(kd_index, ''), kd_kas)`. `kd_index` (110/1101) adalah
+nomor akun bagan perkiraan dan sengaja tidak diwarisi — dan membuangnya **tidak mengubah satu
+baris pun**, karena cabang pertama selalu menang. `m_kas.keterangan` bernilai `'-'` — bukan
+kosong — di **seluruh 11 database yang bisa dijangkau**: GUDANG, kedelapan grosir, dan dua
+salinan uji lokal.
+
+Konsekuensinya yang perlu diketahui pemilik data: kolom **Kas** menampilkan `-` pada setiap
+baris, dan kotak filternya menawarkan dua pilihan yang keduanya berlabel `-` di PUSAT dan
+PAGESANGAN, satu-satunya server yang punya dua akun kas. `kd_index` dan `cabang` pun identik
+antar akun di sana, jadi **tak ada satu kolom pun di `m_kas` yang membedakan kedua akun itu
+selain kodenya sendiri**.
+
+Perilaku itu dipertahankan apa adanya, dan itu keputusan: perpindahan ini harus bisa dibuktikan
+identik dulu. Memperbaiki labelnya — memakai `kode`, yang satu-satunya membedakan — adalah
+perubahan tampilan yang berdiri sendiri, bukan efek samping sebuah migrasi.
+
+### Yang tidak diperbaiki, dan sebaiknya diputuskan
+
+Buku kas ini punya lengan **penjualan** tapi tidak punya lengan **pembelian**. Terukur di
+grosirPusat: 11.673 pembelian tunai (`t_pembelian.status = 1`), semuanya dengan `kd_kas` terisi,
+tak satu pun mengurangi kas. Angka ringkasan setahun 2025 memperlihatkan akibatnya telanjang —
+`total_masuk` Rp 29,06 miliar berbanding `total_keluar` Rp 10,63 **juta**. `t_piutang_cicilan`
+(5 baris) dan `t_hutang_cicilan` (0) juga di luar union, jadi pelunasan piutang tak pernah
+tampak sebagai uang masuk.
+
+Keenam lengan itu pilihan kami sendiri, bukan warisan: `t_arus_kas` tidak ada di legacy. Jadi
+ini bukan cacat vendor yang diwarisi, melainkan kelalaian yang bisa diperbaiki — tapi
+memperbaikinya **mengubah angka sebuah laporan keuangan**, jadi ia keputusan pemilik data dan
+sengaja tidak diselipkan ke dalam perpindahan ini.
 
 ## 8. Yang harus diverifikasi sebelum rancangan ini dibekukan
 

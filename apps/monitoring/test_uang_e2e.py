@@ -180,7 +180,7 @@ class UangBespoke(TestCase):
              (v.mssql, "cursor", _cursor()),
              (v.reporting, "run_paged", lambda *a, **k: ([dict(self.KAS_BARIS)], 1)),
              (v.reporting, "one_row", lambda cur: dict(self.KAS_RINGKAS)),
-             (v, "_opt_kas", lambda p: [])])
+             (v, "_opt_kas", lambda p, arunika=False: [])])
 
     def _fmi(self):
         return self._props(
