@@ -384,6 +384,79 @@ class PenjualanBaris(models.Model):
         return f"{self.penjualan_id} {self.barang_id} x{self.qty}"
 
 
+
+# --- Pembelian -------------------------------------------------------------
+#
+# Cermin penjualan, dan sengaja cermin: bentuk yang sama berarti satu cara
+# membaca, satu cara menulis laporan, dan satu tempat memperbaiki kalau salah.
+# Yang berbeda cuma sisi lawannya -- pemasok menggantikan pelanggan.
+
+
+class Pembelian(models.Model):
+    """Kepala nota pembelian.
+
+    `jenis_bayar` datang dari `t_pembelian.status`, dan itu BUKAN tebakan:
+    view legacy `mon_t_pembelian` memanggil `GetConvertStatus(beli.status)` lalu
+    memberinya nama kolom **"Pembayaran"** -- UDF yang sama yang dipakai
+    penjualan (0=Kredit, 1=Tunai, 2=Lunas). Jadi pembelian mewarisi penggabungan
+    yang persis sama: satu kolom dipakai untuk cara bayar, dan tak ada tempat
+    untuk menyatakan nota batal. Di sini keduanya dipisah, sama seperti di
+    `Penjualan`.
+
+    `t_pembelian.kd_jenis` adalah hal LAIN (JAA000/JAA001, merujuk
+    `m_jenis_bayar`) dan sengaja belum dipetakan: belum ada laporan yang
+    membutuhkannya, dan menebak arti kolom legacy adalah cara paling rapi untuk
+    salah tanpa ketahuan.
+    """
+
+    nomor = models.CharField(max_length=30, unique=True)
+    tanggal = models.DateField()
+    divisi = models.ForeignKey(Divisi, on_delete=models.PROTECT)
+    pemasok_id = models.BigIntegerField(null=True, blank=True)  # FK menyusul, spt pelanggan_id
+
+    subtotal = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    pajak = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    jenis_bayar = models.CharField(max_length=10, choices=JenisBayar.choices, default=JenisBayar.TUNAI)
+    status = models.CharField(max_length=10, choices=StatusPenjualan.choices, default=StatusPenjualan.AKTIF)
+    dibuat_oleh = models.IntegerField(null=True, blank=True)
+    dibuat_pada = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "pembelian"
+        indexes = [
+            models.Index(fields=["tanggal"], name="ix_beli_tgl"),
+            models.Index(fields=["divisi", "tanggal"], name="ix_beli_divisi_tgl"),
+            models.Index(fields=["pemasok_id", "tanggal"], name="ix_beli_pemasok_tgl"),
+        ]
+
+    def __str__(self):
+        return self.nomor
+
+
+class PembelianBaris(models.Model):
+    """Baris nota pembelian. Tanpa unique constraint pada (pembelian, barang),
+    alasan sama dengan `PenjualanBaris`."""
+
+    pembelian = models.ForeignKey(Pembelian, on_delete=models.CASCADE, related_name="baris")
+    barang = models.ForeignKey(Barang, on_delete=models.PROTECT)
+    satuan = models.ForeignKey(Satuan, on_delete=models.PROTECT)
+
+    qty = models.DecimalField(max_digits=18, decimal_places=3)
+    harga = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = "pembelian_baris"
+        indexes = [models.Index(fields=["barang"], name="ix_beli_baris_barang")]
+
+    def __str__(self):
+        return f"{self.pembelian_id} {self.barang_id} x{self.qty}"
+
+
 # --- Master: wilayah, mitra, kas -------------------------------------------
 #
 # Ditambahkan di Fase 4 irisan 1. Bentuknya diturunkan dari kebutuhan, lalu

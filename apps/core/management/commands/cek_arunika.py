@@ -29,6 +29,14 @@ from core import mssql
 _FILTER_KOSONG = {"skip_date_predicate": True, "search": "", "recent": True}
 
 
+# View yang badannya dibangkitkan dari subquery nota, beserta laporan yang
+# memakai subquery itu apa adanya -- dipakai sebagai acuan jumlah baris.
+_DARI_SUBQUERY_NOTA = {
+    "penjualan": (reports._nota_net, "_nota_net()"),
+    "pembelian": (reports._pembelian_nota, "_pembelian_nota()"),
+}
+
+
 class Command(BaseCommand):
     help = "Bandingkan jumlah baris view arunika_src.* dengan tabel legacy sumbernya."
 
@@ -71,19 +79,20 @@ class Command(BaseCommand):
                 tab = master_src.SUMBER_UTAMA[nama]
                 vc.execute(f"SELECT COUNT(*) FROM {master_src.SKEMA}.{nama}")
                 nv = vc.fetchone()[0]
-                if nama == "penjualan":
-                    # Acuannya BUKAN `t_penjualan` mentah. Badan view ini
-                    # dibangkitkan dari `_nota_net()`, yang meng-INNER JOIN ke
-                    # `t_penjualan_detail` -- jadi nota TANPA baris detail tidak
-                    # muncul. Itu perilaku yang sudah berlaku di seluruh laporan
-                    # penjualan Arunika, bukan sesuatu yang dibawa adapter.
-                    # (grosirPusat: 1 nota, CT2202150001, nol baris detail.)
-                    # Membandingkan dengan tabel mentah akan melaporkan selisih
-                    # yang justru menandakan view-nya BENAR.
-                    nota_sql, nota_prm = reports.penjualan_nota(_FILTER_KOSONG)
-                    lc.execute(f"SELECT COUNT(*) FROM ({nota_sql}) q", nota_prm)
+                if nama in _DARI_SUBQUERY_NOTA:
+                    # Acuannya BUKAN tabel kepala mentah. Badan kedua view ini
+                    # dibangkitkan dari subquery nota (`_nota_net()` /
+                    # `_pembelian_nota()`), yang meng-INNER JOIN ke tabel detail
+                    # -- jadi nota TANPA baris detail tidak muncul. Itu perilaku
+                    # yang sudah berlaku di SELURUH laporan penjualan dan
+                    # pembelian Arunika, bukan sesuatu yang dibawa adapter.
+                    # Terukur: grosirPusat 1 nota jual (CT2202150001) dan 2 nota
+                    # beli; testGUdang 3 nota beli. Membandingkan dengan tabel
+                    # mentah akan melaporkan selisih yang justru menandakan
+                    # view-nya BENAR.
+                    bangun, tab = _DARI_SUBQUERY_NOTA[nama]
+                    lc.execute(f"SELECT COUNT(*) FROM ({bangun('1=1')}) q")
                     nl = lc.fetchone()[0]
-                    tab = "_nota_net()"
                 else:
                     lc.execute(f"SELECT COUNT(*) FROM {tab}")
                     nl = lc.fetchone()[0]

@@ -2520,6 +2520,10 @@ _PEMBELIAN_SUPPLIER = {
     "component": "Admin/Reports/PembelianSupplier",
     "url": "/admin-panel/laporan/pembelian-supplier",
     "inner": rpt.pembelian_supplier,
+    # Laporan keenam. Dibuka oleh entitas `pembelian`, yang badannya
+    # dibangkitkan dari `_pembelian_nota()` -- teknik yang sama dengan
+    # penjualan, jadi formula uangnya tidak punya salinan kedua.
+    "inner_arunika": rpt.pembelian_supplier_arunika,
     "sorts": rpt.SORTS_PEMBELIAN_SUPPLIER,
     "default_sort": "total",
     "summary": rpt.SUMMARY_PEMBELIAN_SUPPLIER,
@@ -2542,6 +2546,7 @@ _PEMBELIAN_PERIODE = {
     "component": "Admin/Reports/PembelianPeriode",
     "url": "/admin-panel/laporan/pembelian-periode",
     "inner": rpt.pembelian_periode,
+    "inner_arunika": rpt.pembelian_periode_arunika,
     "sorts": rpt.SORTS_PEMBELIAN_PERIODE,
     "default_sort": "periode",
     "summary": rpt.SUMMARY_PEMBELIAN_PERIODE,

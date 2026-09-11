@@ -233,6 +233,57 @@ def copot(cur) -> None:
 
 # --- Nota penjualan: dibangkitkan dari `_nota_net()` ------------------------
 
+def _dari_nota(bangun, db_legacy: str, apa: str) -> str:
+    """Kualifikasi badan subquery nota, dengan penjaga yang sama untuk keduanya.
+
+    Dipakai `badan_penjualan` dan `badan_pembelian`. Kalau tak satu pun rujukan
+    tabel legacy dikenali, bentuk fungsi sumbernya berubah -- dan view-nya akan
+    tercipta dengan sukses lalu gagal saat dibaca, dari dalam laporan,
+    berbulan-bulan kemudian.
+    """
+    inti, n = _kualifikasi(bangun("1=1"), db_legacy)
+    if n == 0:
+        raise RuntimeError(
+            f"Tak satu pun rujukan tabel legacy dikenali di {apa}. "
+            "Bentuknya berubah; perbarui adapter ini alih-alih menebak."
+        )
+    return inti
+
+
+def badan_pembelian(db_legacy: str) -> str:
+    """Badan view `pembelian`, dibangkitkan dari `reports._pembelian_nota()`.
+
+    Cermin `badan_penjualan`, dengan teknik dan alasan yang persis sama: satu
+    sumber kebenaran untuk formula uang, nol transkripsi, nol panggilan fungsi
+    skalar legacy.
+
+    Yang berbeda hanya tiga hal, dan ketiganya bawaan sisi pembelian:
+
+    * **`ppnbm` ikut dihitung.** `_pembelian_nota()` mengalikannya berurutan
+      `(1+pajak)*(1+ppnbm)` sesuai UDF `GetTotalPembelian`, bukan menjumlah
+      keduanya. Dampaknya nol pada data sekarang -- seluruh baris `t_pembelian`
+      di kedua server berpajak dan ber-ppnbm 0 -- jadi ini kebenaran laten, yang
+      justru alasan untuk tidak menuliskannya ulang dengan tangan.
+    * **`diskon` diturunkan** dengan identitas yang sama:
+      `total_kotor - (total_bersih - pajak)`.
+    * **`jenis_bayar` dari `status_raw`.** Di legacy `t_pembelian.status` adalah
+      cara bayar, bukan penanda batal; view `mon_t_pembelian` menamai
+      `GetConvertStatus(beli.status)` sebagai "Pembayaran".
+    """
+    from apps.transactions import reports  # lokal: hindari lingkaran impor
+
+    inti = _dari_nota(reports._pembelian_nota, db_legacy, "_pembelian_nota()")
+    return (
+        "SELECT n.no_transaksi, n.tanggal, RTRIM(n.kd_divisi), RTRIM(n.kd_supplier), "
+        "n.total_kotor, n.total_kotor - (n.total_bersih - n.pajak), n.pajak, n.total_bersih, "
+        "CASE n.status_raw WHEN 0 THEN 'kredit' WHEN 1 THEN 'tunai' "
+        "WHEN 2 THEN 'lunas' ELSE '' END, "
+        # Sama seperti penjualan: kepala nota legacy tak punya kolom pembatalan.
+        "'aktif' "
+        f"FROM ({inti}) n"
+    )
+
+
 def badan_penjualan(db_legacy: str) -> str:
     """Badan view `penjualan`, dibangkitkan dari `reports._nota_net()`.
 
@@ -274,12 +325,7 @@ def badan_penjualan(db_legacy: str) -> str:
     """
     from apps.transactions import reports  # lokal: hindari lingkaran impor
 
-    inti, n = _kualifikasi(reports._nota_net("1=1"), db_legacy)
-    if n == 0:
-        raise RuntimeError(
-            "Tak satu pun rujukan tabel legacy dikenali di _nota_net(). "
-            "Bentuknya berubah; perbarui adapter ini alih-alih menebak."
-        )
+    inti = _dari_nota(reports._nota_net, db_legacy, "_nota_net()")
     return (
         "SELECT n.no_transaksi, n.tanggal, RTRIM(n.kd_divisi), n.kd_customer, "
         # Dipulangkan APA ADANYA, penanda "tanpa voucher" sekalipun (`V1`, `V2`,

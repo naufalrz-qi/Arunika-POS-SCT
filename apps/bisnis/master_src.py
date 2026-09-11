@@ -102,6 +102,13 @@ def _badan_penjualan(db_legacy: str) -> str:
     return adapter.badan_penjualan(db_legacy)
 
 
+def _badan_pembelian(db_legacy: str) -> str:
+    """Badan view `pembelian`, dibangkitkan dari `reports._pembelian_nota()`."""
+    from apps.bisnis import adapter
+
+    return adapter.badan_pembelian(db_legacy)
+
+
 def _referensi(tabel_legacy: str, kunci: str, tabel: str) -> dict:
     """Entitas referensi berbentuk kode + nama + bisa dinonaktifkan.
 
@@ -328,6 +335,43 @@ _MASTER: dict[str, dict] = {
                    "INNER JOIN dbo.barang b ON b.id = pb.barang_id "
                    "INNER JOIN dbo.satuan s ON s.id = pb.satuan_id",
     },
+    # --- Pembelian --------------------------------------------------------
+    #
+    # Cermin penjualan, sampai ke cara badannya dibangkitkan. Yang berbeda cuma
+    # sisi lawannya: `pemasok_kode` menggantikan `pelanggan_kode`, dan tak ada
+    # voucher -- voucher adalah alat jual, bukan alat beli.
+    "pembelian": {
+        "kolom": ["nomor", "tanggal", "divisi_kode", "pemasok_kode",
+                  "subtotal", "diskon", "pajak", "total", "jenis_bayar", "status"],
+        "legacy": _badan_pembelian,
+        "arunika": "SELECT p.nomor, p.tanggal, d.kode, pm.kode, "
+                   "p.subtotal, p.diskon, p.pajak, p.total, p.jenis_bayar, p.status "
+                   "FROM dbo.pembelian p "
+                   "INNER JOIN dbo.divisi d ON d.id = p.divisi_id "
+                   "LEFT JOIN dbo.pemasok pm ON pm.id = p.pemasok_id",
+    },
+    "pembelian_baris": {
+        "kolom": ["pembelian_nomor", "tanggal", "divisi_kode",
+                  "barang_kode", "satuan_kode", "qty", "harga", "total"],
+        # `tanggal` + `divisi_kode` dibawa baris, alasan sama dengan
+        # `penjualan_baris`: tanpa keduanya tiap laporan tingkat-baris harus
+        # men-join view kepala yang menghitung seluruh nilai uang per nota,
+        # hanya demi satu kolom tanggal.
+        #
+        # `d.total` sudah nilai baris sesudah diskon baris, dan identitasnya
+        # terhadap `_line_net('harga_beli')` diuji per baris: **0 beda dari
+        # 150.920** di grosirPusat.
+        "legacy": "SELECT d.no_transaksi, h.tanggal, RTRIM(h.kd_divisi), "
+                  "d.kd_barang, RTRIM(d.kd_satuan), d.qty, d.harga_beli, d.total "
+                  "FROM {db}.dbo.t_pembelian_detail d "
+                  "INNER JOIN {db}.dbo.t_pembelian h ON h.no_transaksi = d.no_transaksi",
+        "arunika": "SELECT p.nomor, p.tanggal, dv.kode, b.kode, s.kode, pb.qty, pb.harga, pb.total "
+                   "FROM dbo.pembelian_baris pb "
+                   "INNER JOIN dbo.pembelian p ON p.id = pb.pembelian_id "
+                   "INNER JOIN dbo.divisi dv ON dv.id = p.divisi_id "
+                   "INNER JOIN dbo.barang b ON b.id = pb.barang_id "
+                   "INNER JOIN dbo.satuan s ON s.id = pb.satuan_id",
+    },
     "barang_satuan": {
         "kolom": ["barang_kode", "satuan_kode", "isi", "harga_jual"],
         # `jumlah` -> isi. Nama legacy itu berkali-kali terbaca sebagai kuantitas
@@ -358,6 +402,9 @@ TANPA_RTRIM = {
     ("penjualan", "pelanggan_kode"): ("t_penjualan", "kd_customer"),
     ("penjualan_baris", "penjualan_nomor"): ("t_penjualan_detail", "no_transaksi"),
     ("penjualan_baris", "barang_kode"): ("t_penjualan_detail", "kd_barang"),
+    ("pembelian", "nomor"): ("t_pembelian", "no_transaksi"),
+    ("pembelian_baris", "pembelian_nomor"): ("t_pembelian_detail", "no_transaksi"),
+    ("pembelian_baris", "barang_kode"): ("t_pembelian_detail", "kd_barang"),
 }
 
 MODE = ("legacy", "arunika")
@@ -393,6 +440,8 @@ SUMBER_UTAMA = {
     "barang": "m_barang",
     "penjualan": "t_penjualan",
     "penjualan_baris": "t_penjualan_detail",
+    "pembelian": "t_pembelian",
+    "pembelian_baris": "t_pembelian_detail",
     "barang_satuan": "m_barang_satuan",
 }
 

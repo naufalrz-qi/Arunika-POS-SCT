@@ -584,26 +584,37 @@ def _pembelian_nota(where_sql: str) -> str:
 
     Diskon header sekali per nota di outer, alasan sama seperti _nota_net().
 
+    Kolom kepala adalah KUNCI GROUP BY, bukan MIN(), alasan sama persis dengan
+    `_nota_net()` -- `no_transaksi` PRIMARY KEY `t_pembelian` (11.697/11.697 dan
+    15.730/15.730 distinct), dan `MIN()` menghalangi predikat luar turun ke bawah
+    GROUP BY. Di jalur laporan lama itu tak berpengaruh karena predikatnya sudah
+    di dalam; yang membutuhkannya adalah view `arunika_src.pembelian`, yang
+    dibangkitkan dari fungsi ini dengan `where_sql = "1=1"`.
+
+    `status_raw` ikut keluar karena ia CARA BAYAR, bukan penanda batal -- view
+    legacy `mon_t_pembelian` memanggil `GetConvertStatus(beli.status)` dan
+    menamainya "Pembayaran". UDF yang sama dengan penjualan.
+
     Tidak menjumlahkan t_pembelian_biaya_angkut di sini — itu tabel header
     (1 baris/no_transaksi); breakdown ongkos kirim per supplier/periode
     disisihkan sebagai fitur terpisah nanti."""
     net_pre_tax = _ghb("net_lines", ["hd1", "hd2", "hd3", "hd4"])
     return (
-        "SELECT no_transaksi, tanggal, kd_supplier, kd_divisi, total_kotor, "
+        "SELECT no_transaksi, tanggal, kd_supplier, kd_divisi, status_raw, total_kotor, "
         f"({net_pre_tax}) * pajak_rate AS pajak, "
         f"({net_pre_tax}) * (1 + pajak_rate) * (1 + ppnbm_rate) AS total_bersih "
         "FROM ("
-        "SELECT h.no_transaksi, MIN(h.tanggal) AS tanggal, MIN(h.kd_supplier) AS kd_supplier, "
-        "MIN(h.kd_divisi) AS kd_divisi, "
+        "SELECT h.no_transaksi, h.tanggal, h.kd_supplier, h.kd_divisi, h.status AS status_raw, "
         "SUM(d.qty * d.harga_beli) AS total_kotor, "
-        "COALESCE(MIN(h.pajak), 0) AS pajak_rate, COALESCE(MIN(h.ppnbm), 0) AS ppnbm_rate, "
-        "COALESCE(MIN(h.diskon1), 0) AS hd1, COALESCE(MIN(h.diskon2), 0) AS hd2, "
-        "COALESCE(MIN(h.diskon3), 0) AS hd3, COALESCE(MIN(h.diskon4), 0) AS hd4, "
+        "COALESCE(h.pajak, 0) AS pajak_rate, COALESCE(h.ppnbm, 0) AS ppnbm_rate, "
+        "COALESCE(h.diskon1, 0) AS hd1, COALESCE(h.diskon2, 0) AS hd2, "
+        "COALESCE(h.diskon3, 0) AS hd3, COALESCE(h.diskon4, 0) AS hd4, "
         f"SUM({_unit_net('harga_beli')} * d.qty) AS net_lines "
         "FROM t_pembelian h "
         "INNER JOIN t_pembelian_detail d ON h.no_transaksi = d.no_transaksi "
         f"WHERE {where_sql} "
-        "GROUP BY h.no_transaksi, h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.pajak, h.ppnbm"
+        "GROUP BY h.no_transaksi, h.tanggal, h.kd_supplier, h.kd_divisi, h.status, "
+        "h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.pajak, h.ppnbm"
         ") nz"
     )
 
@@ -2297,3 +2308,53 @@ def profil_pelanggan_arunika(kd_customer: str):
         "CASE WHEN aktif = 1 THEN 1 ELSE 0 END AS status "
         f"FROM {SRC}.pelanggan WHERE kode = ?"
     ), [kd_customer]
+
+
+# --- Pembelian di atas bentuk Arunika --------------------------------------
+
+
+def pembelian_supplier_arunika(f):
+    """`pembelian_supplier` di atas bentuk Arunika.
+
+    Cermin `penjualan_customer_arunika`, dan sependek itu karena alasan yang
+    sama: nilai bersih per nota sudah jadi kolom (`p.total`), jadi subquery
+    `_pembelian_nota()` yang harus disusun lalu di-join itu tidak ada lagi.
+
+    Butirannya tetap (divisi x pemasok) seperti aslinya -- satu pemasok yang
+    berdagang dengan beberapa divisi tetap dapat satu baris per divisi.
+    """
+    where, params = _base_where_arunika(f)
+    inner = (
+        "SELECT p.pemasok_kode AS kd_supplier, COALESCE(s.nama, '') AS supplier, "
+        "p.divisi_kode AS kd_divisi, COALESCE(dv.nama, '') AS divisi, "
+        "COUNT(p.nomor) AS jml_nota, COALESCE(SUM(p.total), 0) AS total "
+        f"FROM {SRC}.pembelian p "
+        f"LEFT JOIN {SRC}.pemasok s ON s.kode = p.pemasok_kode "
+        f"LEFT JOIN {SRC}.divisi dv ON dv.kode = p.divisi_kode "
+        f"WHERE {' AND '.join(where)} "
+        "GROUP BY p.pemasok_kode, s.nama, p.divisi_kode, dv.nama"
+    )
+    return inner, params
+
+
+def pembelian_periode_arunika(f):
+    """`pembelian_periode` di atas bentuk Arunika.
+
+    Sama seperti `penjualan_periode_arunika`, `total_diskon` di sini kolom
+    sungguhan alih-alih diturunkan secara aljabar di tempat pemakaian --
+    penurunannya sudah dikerjakan sekali, di dalam view.
+    """
+    where, params = _base_where_arunika(f)
+    granul = f.get("granularitas", "harian")
+    fmt = "yyyy-MM" if granul == "bulanan" else "yyyy-MM-dd"
+    periode = f"FORMAT(p.tanggal, '{fmt}')"
+    inner = (
+        f"SELECT {periode} AS periode, COUNT(p.nomor) AS jml_nota, "
+        "COALESCE(SUM(p.subtotal), 0) AS total_kotor, "
+        "COALESCE(SUM(p.diskon), 0) AS total_diskon, "
+        "COALESCE(SUM(p.pajak), 0) AS total_pajak, "
+        "COALESCE(SUM(p.total), 0) AS total "
+        f"FROM {SRC}.pembelian p WHERE {' AND '.join(where)} "
+        f"GROUP BY {periode}"
+    )
+    return inner, params

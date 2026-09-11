@@ -651,7 +651,7 @@ belum ada di `arunika_src`**, bukan terhalang penulisan SQL.
 
 | Yang dibutuhkan | Laporan yang menunggunya |
 |---|---|
-| `t_pembelian` + `t_pembelian_detail` | Pembelian, per Supplier, per Periode, Hutang, Laba HPP |
+| ~~`t_pembelian` + `t_pembelian_detail`~~ | **selesai — lihat §7.8** (per Supplier & per Periode pindah; Pembelian dan Hutang masih menunggu hal lain) |
 | `m_userx` | Penjualan per Nota, per User, Laba HPP, Retur Pembelian |
 | `m_pegawai` | Penjualan Detail, Retur Penjualan, Shift |
 | `t_penjualan_retur` / `t_pembelian_retur` (+ detail) | Retur Penjualan, Retur Pembelian |
@@ -839,6 +839,79 @@ yang bisa diputuskan dari data yang ada:
    ditebak.
 3. `ukuran` — dimensi nyata dengan kodifikasi yang tak terdokumentasi. **Harus dipetakan lebih
    dulu**; menyalinnya sebagai `float` ke skema baru berarti mewarisi kode tanpa arti.
+
+## 7.8 Sisi pembelian: cermin, dan itu memang tujuannya
+
+`pembelian` + `pembelian_baris` ada, dan bentuknya sengaja cermin penjualan sampai ke cara
+badannya dibangkitkan — `adapter.badan_pembelian` dari `reports._pembelian_nota()`, teknik yang
+sama, satu sumber kebenaran untuk formula uang, nol transkripsi. Keduanya kini berbagi satu
+penjaga (`_dari_nota`), sehingga "bentuk fungsi sumbernya berubah" dilaporkan sekali untuk
+kedua sisi.
+
+Dua laporan langsung pindah, **identik di kedua server**, dengan ongkos 0,7–1,3× — beberapa
+justru lebih cepat dari jalur lama:
+
+| | legacy | Arunika |
+|---|---|---|
+| Pembelian per Periode, setahun (328 baris) | 0,28 dtk | 0,26 dtk |
+| Pembelian per Supplier, setahun (178 baris, testGUdang) | 0,14 dtk | 0,14 dtk |
+
+`_pembelian_nota()` ikut mendapat perbaikan `MIN()` → kunci `GROUP BY` yang §7.5 sengaja tunda
+(waktu itu belum ada view pembelian, jadi belum ada yang menyaring dari luar). Syaratnya
+diperiksa ulang di sisi ini: `no_transaksi` PRIMARY KEY `t_pembelian`, 11.697/11.697 dan
+15.730/15.730 distinct. Dibanding baris per baris di jalur legacy atas Pembelian per Supplier,
+per Periode, dan Hutang: identik.
+
+### `t_pembelian.status` adalah cara bayar — dan yang membuktikannya bukan tebakan
+
+Kolom ini gampang dibaca sebagai penanda batal (nilainya 0 dan 1). Yang menjawabnya view legacy
+`mon_t_pembelian`: ia memanggil `GetConvertStatus(beli.status)` lalu memberinya nama kolom
+**"Pembayaran"** — UDF yang sama yang dipakai penjualan (0=Kredit, 1=Tunai, 2=Lunas). Jadi
+pembelian mewarisi penggabungan yang persis sama, dan di bentuk baru keduanya dipisah seperti di
+`penjualan`. Aturan lamanya berlaku lagi: **arti kolom legacy sering ada di VIEW, bukan di
+skema.**
+
+`t_pembelian.kd_jenis` adalah hal lain (JAA000/JAA001 → `m_jenis_bayar`) dan sengaja belum
+dipetakan — belum ada laporan yang membutuhkannya.
+
+### Nota tanpa baris detail, sekarang di kedua sisi
+
+`_pembelian_nota()` meng-INNER JOIN ke detail persis seperti `_nota_net()`, jadi nota pembelian
+berbaris nol juga tak muncul: **2 di grosirPusat, 3 di testGUdang**. Sama seperti sisi jual, itu
+perilaku yang sudah berlaku di seluruh laporan pembelian hari ini, bukan sesuatu yang dibawa
+adapter. `manage.py cek_arunika` sekarang memakai satu peta `_DARI_SUBQUERY_NOTA` untuk kedua
+entitas, sehingga jumlah barisnya dibandingkan terhadap subquery yang benar-benar membangun
+view — bukan terhadap tabel kepala mentah, yang justru akan melaporkan selisih saat view-nya
+BENAR.
+
+### Yang masih menghalangi dua laporan pembelian lainnya
+
+* **Hutang** — butuh `t_hutang_cicilan`, yang **nol baris di setiap server yang bisa dijangkau**.
+  Memindahkannya berarti membuat entitas untuk tabel yang tak pernah diisi; nilainya nol sampai
+  ada yang mencatat pembayaran hutang di sana.
+* **Pembelian (tingkat baris)** — layarnya menampilkan **delapan kolom diskon**
+  (`diskon_item1–4` + `diskon_total1–4`), sementara §5.E/§5.F merancang **satu** kolom `diskon`.
+  Itu bukan kelalaian rancangan, tapi juga bukan keputusan yang boleh diambil diam-diam.
+
+### Berapa dalam rantai diskon 4 slot itu sebenarnya dipakai?
+
+Diukur di kedua server, dan jawabannya bernuansa:
+
+| | baris | diskon1 | diskon2 | diskon3 | diskon4 |
+|---|---|---|---|---|---|
+| `t_penjualan_detail` (grosirPusat) | 2.990.368 | 49.181 | 0 | 0 | 0 |
+| `t_penjualan` (grosirPusat) | 474.595 | 2.302 | 0 | 0 | 0 |
+| `t_pembelian_detail` (testGUdang) | 74.236 | 954 | **10** | 0 | 0 |
+| `t_pembelian` (testGUdang) | 15.730 | 505 | **2** | **1** | 0 |
+
+Jadi slot kedua dan ketiga **bukan nol** — kecil, tapi ada, dan **10 baris pembelian benar-benar
+merantai dua diskon sekaligus**. Meringkas 4 slot jadi 1 karenanya tidak lossless untuk
+*rinciannya*.
+
+Yang TIDAK hilang adalah **nilainya**: `t_pembelian_detail.total` sudah sama dengan
+`_line_net('harga_beli')` — **0 beda dari 150.920 baris**, identitas yang sama yang sudah
+dibuktikan di sisi jual (0 dari 2.990.368 + 570.190). Jadi laporan uang aman; yang butuh
+keputusan hanyalah layar yang menampilkan rinciannya.
 
 ## 8. Yang harus diverifikasi sebelum rancangan ini dibekukan
 
