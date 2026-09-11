@@ -1,0 +1,86 @@
+Hak Cipta (c) 2026 Naufal Rifqi Zuhrian.
+Copyright (c) 2026 Naufal Rifqi Zuhrian.
+
+SELURUH HAK DILINDUNGI UNDANG-UNDANG — ALL RIGHTS RESERVED.
+
+===============================================================================
+BAHASA INDONESIA
+===============================================================================
+
+Perangkat lunak ini ("Arunika POS") beserta kode sumber, dokumentasi, dan
+seluruh berkas pendukungnya adalah ciptaan berhak cipta milik pemegang hak
+cipta yang tercantum di atas.
+
+Perangkat lunak ini BUKAN perangkat lunak sumber terbuka (open source) dan
+BUKAN domain publik.
+
+Tidak ada izin yang diberikan kepada siapa pun untuk menggunakan, menyalin,
+mengubah, menggabungkan, menerbitkan, mendistribusikan, mensublisensikan,
+atau menjual salinan perangkat lunak ini, kecuali berdasarkan perjanjian
+lisensi tertulis yang ditandatangani oleh pemegang hak cipta.
+
+Ketiadaan perjanjian tertulis berarti ketiadaan izin. Akses terhadap berkas
+ini — termasuk memiliki salinannya, menjalankannya, atau menerimanya dari
+pihak lain — dengan sendirinya TIDAK memberikan hak pakai apa pun.
+
+CAKUPAN — apa yang dilindungi dan apa yang TIDAK
+-------------------------------------------------------------------------------
+Hak cipta ini mencakup kode dan dokumentasi yang ditulis untuk Arunika POS.
+
+Hak cipta ini TIDAK mencakup, dan tidak mengklaim kepemilikan atas:
+
+  1. Skema basis data MS SQL Server legacy (tabel `m_*`, `t_*`, `tbl_*`,
+     view, trigger, dan stored procedure di dalamnya) yang dibaca dan ditulis
+     oleh perangkat lunak ini. Skema tersebut adalah karya pihak ketiga dan
+     tetap menjadi milik pemiliknya masing-masing.
+
+  2. Data bisnis apa pun — barang, transaksi, pelanggan, harga, akun — milik
+     perusahaan yang mengoperasikan perangkat lunak ini.
+
+  3. Pustaka pihak ketiga yang dipakai perangkat lunak ini (Django, Vue,
+     Inertia, Tailwind, dan seluruh dependensi di `requirements.txt` serta
+     `package.json`), yang masing-masing tunduk pada lisensinya sendiri.
+
+TANPA JAMINAN
+-------------------------------------------------------------------------------
+PERANGKAT LUNAK INI DISEDIAKAN "SEBAGAIMANA ADANYA", TANPA JAMINAN DALAM
+BENTUK APA PUN, BAIK TERSURAT MAUPUN TERSIRAT, TERMASUK NAMUN TIDAK TERBATAS
+PADA JAMINAN KELAYAKAN JUAL, KESESUAIAN UNTUK TUJUAN TERTENTU, DAN
+KETIDAKLANGGARAN HAK. PEMEGANG HAK CIPTA TIDAK BERTANGGUNG JAWAB ATAS
+TUNTUTAN, KERUGIAN, ATAU KEWAJIBAN LAIN YANG TIMBUL DARI ATAU BERKAITAN
+DENGAN PERANGKAT LUNAK INI ATAU PENGGUNAANNYA.
+
+Jaminan yang berbeda, apabila ada, hanya berlaku bila dinyatakan tersurat di
+dalam perjanjian lisensi tertulis yang ditandatangani.
+
+===============================================================================
+ENGLISH
+===============================================================================
+
+This software ("Arunika POS"), including its source code, documentation, and
+all supporting files, is a copyrighted work owned by the copyright holder
+named above.
+
+This software is NOT open source and is NOT in the public domain.
+
+No permission is granted to any person to use, copy, modify, merge, publish,
+distribute, sublicense, or sell copies of this software, except under a
+written license agreement signed by the copyright holder. Absence of a written
+agreement means absence of permission. Mere possession of, access to, or
+receipt of these files grants no rights of use whatsoever.
+
+SCOPE. This copyright covers the code and documentation written for Arunika
+POS. It does NOT cover and does NOT claim ownership of: (1) the legacy MS SQL
+Server database schema this software reads and writes, which is third-party
+work owned by its respective owners; (2) any business data belonging to the
+company operating this software; (3) third-party libraries used by this
+software, each governed by its own license.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OF THE SOFTWARE.
+
+Different warranty terms, if any, apply only where expressly stated in a
+signed written license agreement.

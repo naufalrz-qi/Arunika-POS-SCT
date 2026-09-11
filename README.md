@@ -123,3 +123,12 @@ waitress-serve --threads=32 --listen=0.0.0.0:8000 config.wsgi:application
 - **`Blocked request ... not allowed`** → tambah host ke `ALLOWED_HOSTS` di `.env`.
 - **Data koneksi kosong / kolom kosong** → cek koneksi aktif di navbar; koneksi pertama kali lambat (build index background + cache master 10 mnt).
 - **Port 8000 dipakai** → `Get-NetTCPConnection -LocalPort 8000 | Stop-Process` (lihat `PRODUCTION.md`).
+
+## Lisensi
+
+Hak Cipta (c) 2026 Naufal Rifqi Zuhrian. Seluruh hak dilindungi undang-undang.
+
+Bukan perangkat lunak sumber terbuka. Pemakaian hanya berdasarkan perjanjian
+lisensi tertulis — lihat [LICENSE](LICENSE). Skema MS SQL legacy dan seluruh
+data bisnis di dalamnya **bukan** bagian dari hak cipta ini; keduanya tetap
+milik pemiliknya masing-masing.
