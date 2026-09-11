@@ -50,6 +50,18 @@ class ServerProfile(models.Model):
     #
     # Kosong = profil ini bukan sumber pusat. `sync_hub` melewatinya, bukan menebak.
     kode_sumber = models.CharField(max_length=20, blank=True, default="")
+    # Database PENDAMPING berisi skema Arunika sendiri (apps/bisnis/models.py),
+    # di instans SQL Server yang SAMA dengan `db_name` tapi database terpisah.
+    #
+    # Terpisah, bukan schema di dalam database legacy, supaya database milik
+    # vendor tidak menerima satu objek pun — bukan tabel, bukan view, bukan
+    # schema. Adapternya membaca legacy lintas-database; terukur 0,0232 vs
+    # 0,0181 dtk untuk kueri yang sama, dengan baris identik.
+    #
+    # Kosong = server ini belum punya database Arunika, dan seluruh jalur skema
+    # baru dilewati. Itu yang membuat profil lama tidak berubah perilakunya
+    # sama sekali sampai seseorang mengisinya. Diisi oleh `manage.py init_arunika`.
+    db_arunika = models.CharField(max_length=128, blank=True, default="")
     is_default = models.BooleanField(default=False)
     last_status = models.CharField(max_length=10, choices=ConnStatus.choices, default=ConnStatus.UNKNOWN)
     last_checked = models.DateTimeField(null=True, blank=True)

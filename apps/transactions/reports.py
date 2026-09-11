@@ -1837,3 +1837,80 @@ def master_produk(f):
         f"WHERE {' AND '.join(where)}"
     )
     return inner, params
+
+
+# --- Laporan di atas bentuk Arunika ----------------------------------------
+#
+# Kembaran spec yang membaca `arunika_src.*` alih-alih tabel legacy. Satu bentuk,
+# dua sumber: di server legacy `arunika_src` adalah view yang membaca legacy
+# lintas-database; di pemasangan mandiri ia tabel Arunika sendiri. Kuerinya sama
+# persis di keduanya.
+#
+# Dipilih lewat `inner_arunika` di spec + env `ARUNIKA_LAPORAN`, default MATI.
+# Selama mati, tak satu pun pengguna melihat perubahan.
+
+SRC = "arunika_src"
+
+
+def _base_where_arunika(f, date_col="p.tanggal", div_col="p.divisi_kode"):
+    """Padanan `_base_where` untuk bentuk baru. Sengaja memanggil yang asli:
+    aturan rentang tanggal dan mode `recent` hanya boleh ditulis di satu tempat."""
+    return _base_where(f, date_col=date_col, div_col=div_col)
+
+
+def penjualan_periode_arunika(f):
+    """`penjualan_periode` di atas bentuk Arunika.
+
+    Lebih pendek dari aslinya karena satu hal: aslinya menurunkan `total_diskon`
+    secara aljabar (`total_kotor - total_bersih + pajak`) sebab tak ada kolom
+    diskon per nota. Bentuk baru punya kolomnya, dari `GetTotalDiskonPenjualan`
+    — dan identitas keduanya sudah dibuktikan 50/50 nota berdiskon, jadi ini
+    bukan penyederhanaan yang mengubah angka.
+
+    ## BELUM DIPASANG DI SPEC. Dua hal harus selesai lebih dulu.
+
+    **1. Angkanya berbeda soal VOUCHER, dan itu perbedaan yang sudah diketahui
+    sebelum fungsi ini ada.** `_nota_net()` TIDAK memotong nominal voucher;
+    `GetTotalPenjualan` dan `t_penjualan_total` memotongnya (lihat catatan di
+    bagian Piutang berkas ini, yang menyebutnya dan sengaja membiarkannya demi
+    konsisten dengan laporan yang sudah terkirim). Jalur lama memihak yang
+    pertama, bentuk baru memihak yang kedua — jadi berpindah berarti MENGUBAH
+    omzet yang selama ini dilihat pengguna, pada **1.396 nota bervoucher** di
+    grosirPusat. Terukur: rentang kecil identik, setahun penuh tidak.
+
+    Mana yang benar adalah keputusan pemilik data, bukan keputusan kode. Sampai
+    itu diputuskan, memasang `inner_arunika` berarti memasang saklar yang
+    menggeser angka tanpa ada yang menyetujuinya.
+
+    **2. Terlalu lambat untuk agregat rentang besar.** Kueri agregat harus
+    menyentuh SETIAP baris, dan tiap baris memanggil dua fungsi skalar tanpa
+    syarat (`diskon`, `pajak`) plus satu bersyarat (`total`). Terukur di
+    grosirPusat:
+
+        1 minggu / 1 bulan / 3 bulan   identik, 0,01 dtk
+        2025 setahun (118.547 nota)    legacy 5,3 dtk  vs  36,2 dtk
+        2024-2026   (264.203 nota)     legacy 9,9 dtk  vs  79,6 dtk
+
+    Sebabnya sama seperti yang tercatat di `master_src`: fungsi-fungsi itu
+    `is_inlineable` tapi compatibility level database legacy 100.
+
+    **Jalan keluar yang paling mungkin untuk keduanya sekaligus:** bangkitkan
+    badan view `penjualan` dari `_nota_net()` — set-based, tanpa satu pun
+    panggilan fungsi skalar — memakai teknik penanda yang sudah terbukti di
+    `apps/bisnis/adapter.py`. Itu menyelesaikan kecepatan DAN menghapus
+    perbedaan voucher, karena kedua jalur jadi memakai formula yang sama persis.
+    """
+    where, params = _base_where_arunika(f)
+    granul = f.get("granularitas", "harian")
+    fmt = "yyyy-MM" if granul == "bulanan" else "yyyy-MM-dd"
+    periode = f"FORMAT(p.tanggal, '{fmt}')"
+    inner = (
+        f"SELECT {periode} AS periode, COUNT(p.nomor) AS jml_nota, "
+        "COALESCE(SUM(p.subtotal), 0) AS total_kotor, "
+        "COALESCE(SUM(p.diskon), 0) AS total_diskon, "
+        "COALESCE(SUM(p.pajak), 0) AS total_pajak, "
+        "COALESCE(SUM(p.total), 0) AS total "
+        f"FROM {SRC}.penjualan p WHERE {' AND '.join(where)} "
+        f"GROUP BY {periode}"
+    )
+    return inner, params

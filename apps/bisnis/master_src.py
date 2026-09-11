@@ -1,0 +1,375 @@
+"""Adapter master: satu bentuk baca, dua sumber, nol objek di database legacy.
+
+## Di mana objeknya tinggal
+
+Seluruh VIEW di sini dibuat di **database Arunika**, bukan di database legacy.
+Yang bermode legacy membacanya lintas-database (`[SOLID_SIM].[dbo].[m_customer]`);
+yang berdiri sendiri membacanya dari tabelnya sendiri. Database legacy tidak
+menerima satu objek pun -- bukan view, bukan schema, bukan tabel.
+
+Terukur di server uji lokal, kueri yang sama dari database berbeda vs dari dalam
+database legacy sendiri: **0,0232 vs 0,0181 dtk, 1.597 baris identik.** Selisih
+itu ongkos tetap pada kueri kecil, dan harganya murah untuk tidak menyentuh apa
+pun milik vendor.
+
+> **Catatan yang perlu diketahui:** aplikasi ini SUDAH membuat dua tabel di dalam
+> database legacy lewat jalur lain -- `pos_stok_snapshot` dan
+> `pos_stok_snapshot_base` (`apps/inventory/services._ensure_snapshot_table`,
+> masing-masing 8.412 dan 8.800 baris di server uji). Itu mendahului modul ini
+> dan tidak ditambah olehnya. Kalau suatu hari "nol objek di legacy" mau ditegakkan
+> sungguhan, keduanya yang harus pindah -- dan dokumen rancangan sudah
+> mempertanyakan apakah snapshot masih perlu ada setelah `pergerakan_stok`
+> menjadi tabel nyata.
+
+## Kenapa VIEW, bukan iTVF
+
+Fase 3 memilih iTVF untuk pergerakan stok karena parameter bertipe di tanda
+tangannya menjaga index seek pada tabel ratusan ribu baris. Master tidak
+menghadapi masalah itu: `m_supplier` 517 baris, `m_customer` 9.482, `m_kota` 29,
+`m_kas` 1. VIEW polos cukup, dan jauh lebih mudah dibaca maupun dibuang.
+
+Aturannya satu kalimat: **iTVF hanya ketika filter berparameter harus menembus
+tabel besar; selebihnya VIEW.**
+
+## Kenapa bentuknya memakai KODE, bukan id
+
+Tabel Arunika berkunci `id` (kunci pengganti) supaya kode yang salah ketik bisa
+diperbaiki tanpa memutus baris transaksi yang menunjuknya. Tapi sebuah view di
+atas data legacy **tidak bisa mengarang id** -- di sana yang ada hanya
+`kd_customer`, `kd_kota`, dan seterusnya.
+
+Karena itu bentuk BACA memakai kode bisnis untuk tiap rujukan antar-entitas
+(`kota_kode`, bukan `kota_id`). Kunci pengganti tetap ada, tapi ia urusan dalam
+tabel Arunika sendiri -- bukan bagian dari kontrak yang dilihat pembaca. Itulah
+sebabnya view untuk mode Arunika pun ada: ia menjoin `kota` untuk memunculkan
+`kota_kode`, sehingga kedua mode menyajikan kolom yang persis sama.
+
+## RTRIM bukan kosmetik
+
+Kunci legacy bertipe `char(6)`, yang dipadatkan spasi. Terbukti di server uji:
+kode pemasok yang sebenarnya `'01'` tersimpan sebagai `'01    '`. SQL Server
+menganggap keduanya sama (ia mengabaikan spasi ekor); kunci dict Python tidak.
+Repo ini sudah punya `_k()` di `apps/inventory/services.py` justru karena
+ketidakcocokan seperti itu pernah menjatuhkan baris tanpa suara.
+
+`RTRIM` diterapkan pada **setiap kolom KELUARAN** yang berupa kode, termasuk
+yang hari ini bertipe `varchar` dan karenanya tak butuh (mis. `m_kota.kd_telp`).
+Itu bukan kelalaian: memutuskan per kolom mana yang `char` berarti menyimpan
+pengetahuan tentang skema yang BUKAN MILIK KITA dan bisa diubah vendor kapan
+saja. Aturan seragam bertahan terhadap perubahan itu; daftar per-kolom tidak.
+
+Predikat join **tidak** di-RTRIM, dan itu disengaja: perbandingan `char` di SQL
+Server sudah mengabaikan spasi ekor, sementara membungkus kolom dengan fungsi
+justru membatalkan index seek. Yang berbahaya hanyalah nilai yang KELUAR lalu
+dipakai sebagai kunci di Python.
+
+Hak Cipta (c) 2026 Naufal Rifqi Zuhrian. Lihat LICENSE.
+"""
+from __future__ import annotations
+
+SKEMA = "arunika_src"
+
+
+def _badan_penjualan(db_legacy: str) -> str:
+    """Badan view `penjualan`, dibangkitkan dari `reports._nota_net()`.
+
+    Impor lokal supaya `master_src` tidak menarik seluruh modul laporan saat
+    diimpor -- dan supaya tak ada lingkaran impor.
+    """
+    from apps.bisnis import adapter
+
+    return adapter.badan_penjualan(db_legacy)
+
+# Tiap entri: kolom bentuk baca + satu badan SELECT per mode.
+#
+# Daftar kolom ditulis di `CREATE VIEW ... (kolom)` sehingga nama kolom di dalam
+# badan SELECT tidak perlu dicocokkan satu per satu -- yang harus sama hanya
+# URUTAN dan jumlahnya. Itu sengaja: satu tempat yang menentukan bentuk.
+_MASTER: dict[str, dict] = {
+    "negara": {
+        "kolom": ["kode", "nama", "aktif"],
+        "legacy": "SELECT RTRIM(kd_negara), nama, CASE WHEN status = 1 THEN 1 ELSE 0 END "
+                  "FROM {db}.dbo.m_negara",
+        "arunika": "SELECT kode, nama, CAST(aktif AS int) FROM dbo.negara",
+    },
+    "kota": {
+        "kolom": ["kode", "nama", "kode_telepon", "negara_kode", "aktif"],
+        "legacy": "SELECT RTRIM(kd_kota), nama, RTRIM(kd_telp), RTRIM(kd_negara), "
+                  "CASE WHEN status = 1 THEN 1 ELSE 0 END FROM {db}.dbo.m_kota",
+        "arunika": "SELECT k.kode, k.nama, k.kode_telepon, n.kode, CAST(k.aktif AS int) "
+                   "FROM dbo.kota k LEFT JOIN dbo.negara n ON n.id = k.negara_id",
+    },
+    "bank": {
+        "kolom": ["kode", "nama", "keterangan", "aktif"],
+        "legacy": "SELECT RTRIM(kd_bank), nama, keterangan, "
+                  "CASE WHEN status = 1 THEN 1 ELSE 0 END FROM {db}.dbo.m_bank",
+        "arunika": "SELECT kode, nama, keterangan, CAST(aktif AS int) FROM dbo.bank",
+    },
+    "pelanggan": {
+        "kolom": ["kode", "nama", "alamat", "kota_kode", "telepon", "hp", "email",
+                  "kontak", "keterangan", "batas_piutang", "diskon_persen", "aktif"],
+        # `limit_kredit` -> batas_piutang, `disc` -> diskon_persen. Tempo
+        # pembayaran TIDAK dipetakan: `m_customer` punya 19 kolom dan tak satu
+        # pun menyimpannya (lihat catatan di model Pelanggan).
+        "legacy": "SELECT RTRIM(kd_customer), nama, alamat, RTRIM(kd_kota), telepon, hp, email, "
+                  "kontak, keterangan, limit_kredit, disc, "
+                  "CASE WHEN status = 1 THEN 1 ELSE 0 END FROM {db}.dbo.m_customer",
+        "arunika": "SELECT p.kode, p.nama, p.alamat, k.kode, p.telepon, p.hp, p.email, "
+                   "p.kontak, p.keterangan, p.batas_piutang, p.diskon_persen, CAST(p.aktif AS int) "
+                   "FROM dbo.pelanggan p LEFT JOIN dbo.kota k ON k.id = p.kota_id",
+    },
+    "pemasok": {
+        "kolom": ["kode", "nama", "alamat", "kota_kode", "telepon", "hp", "email",
+                  "kontak", "keterangan", "bank_kode", "rekening", "aktif"],
+        # `aktif` KONSTAN 1 di mode legacy, dan itu bukan penyederhanaan:
+        # `m_supplier` punya 13 kolom dan tak satu pun berupa status, jadi di
+        # sana pemasok memang tak bisa dinonaktifkan sama sekali.
+        "legacy": "SELECT RTRIM(kd_supplier), nama, alamat, RTRIM(kd_kota), telepon, hp, email, "
+                  "kontak, keterangan, RTRIM(kd_bank), rekening, 1 FROM {db}.dbo.m_supplier",
+        "arunika": "SELECT s.kode, s.nama, s.alamat, k.kode, s.telepon, s.hp, s.email, "
+                   "s.kontak, s.keterangan, b.kode, s.rekening, CAST(s.aktif AS int) "
+                   "FROM dbo.pemasok s LEFT JOIN dbo.kota k ON k.id = s.kota_id "
+                   "LEFT JOIN dbo.bank b ON b.id = s.bank_id",
+    },
+    "kas": {
+        "kolom": ["kode", "nama", "no_rekening", "bank_kode", "kota_kode", "telepon",
+                  "kontak", "saldo_awal", "keterangan", "aktif"],
+        # Kolom manusiawi `m_kas` bernama `cabang` -- tabel itu tak punya `nama`
+        # sama sekali.
+        "legacy": "SELECT RTRIM(kd_kas), cabang, no_rekening, RTRIM(kd_bank), RTRIM(kd_kota), "
+                  "telepon, kontak, saldo_awal, keterangan, "
+                  "CASE WHEN status = 1 THEN 1 ELSE 0 END FROM {db}.dbo.m_kas",
+        "arunika": "SELECT s.kode, s.nama, s.no_rekening, b.kode, k.kode, s.telepon, "
+                   "s.kontak, s.saldo_awal, s.keterangan, CAST(s.aktif AS int) "
+                   "FROM dbo.kas s LEFT JOIN dbo.bank b ON b.id = s.bank_id "
+                   "LEFT JOIN dbo.kota k ON k.id = s.kota_id",
+    },
+    "kategori_biaya": {
+        "kolom": ["kode", "nama", "keterangan", "aktif"],
+        # AKTIF = 2, BUKAN 1. Seluruh 38 baris `m_biaya` bernilai 2. Memakai
+        # `status = 1` di sini akan memulangkan daftar biaya yang kosong --
+        # tanpa galat, dan layar kas akan tampak "belum ada datanya".
+        "legacy": "SELECT RTRIM(kd_biaya), nama, keterangan, "
+                  "CASE WHEN status = 2 THEN 1 ELSE 0 END FROM {db}.dbo.m_biaya",
+        "arunika": "SELECT kode, nama, keterangan, CAST(aktif AS int) FROM dbo.kategori_biaya",
+    },
+    "voucher": {
+        "kolom": ["kode", "nama", "nominal", "keterangan", "aktif"],
+        "legacy": "SELECT RTRIM(kd_voucher), nama, nominal, keterangan, "
+                  "CASE WHEN status = 1 THEN 1 ELSE 0 END FROM {db}.dbo.m_voucher",
+        "arunika": "SELECT kode, nama, nominal, keterangan, CAST(aktif AS int) FROM dbo.voucher",
+    },
+    # --- Katalog ----------------------------------------------------------
+    "satuan": {
+        "kolom": ["kode", "nama", "aktif"],
+        "legacy": "SELECT RTRIM(kd_satuan), nama, CASE WHEN status = 1 THEN 1 ELSE 0 END "
+                  "FROM {db}.dbo.m_satuan",
+        "arunika": "SELECT kode, nama, CAST(aktif AS int) FROM dbo.satuan",
+    },
+    "divisi": {
+        "kolom": ["kode", "nama", "awalan_nota", "aktif"],
+        # `kepala_nota` -> awalan_nota. Namanya diganti karena artinya memang itu:
+        # awalan nomor dokumen, dan ia PER DIVISI, bukan per server -- GUDANG
+        # punya lima divisi dengan awalan berbeda.
+        "legacy": "SELECT RTRIM(kd_divisi), nama, kepala_nota, "
+                  "CASE WHEN status = 1 THEN 1 ELSE 0 END FROM {db}.dbo.m_divisi",
+        "arunika": "SELECT kode, nama, awalan_nota, CAST(aktif AS int) FROM dbo.divisi",
+    },
+    "barang": {
+        "kolom": ["kode", "nama", "keterangan", "merek_kode", "kategori_kode",
+                  "model_kode", "warna_kode", "bahan_kode", "satuan_dasar_kode", "aktif"],
+        # `m_barang` TIDAK punya kolom satuan dasar; ia diturunkan dari baris
+        # `m_barang_satuan` yang berfaktor 1. `MIN(kd_satuan)` bukan pilihan
+        # sembarangan: sebagian barang punya LEBIH DARI SATU satuan berfaktor 1
+        # (mis. PENAL02 -> SAA000 dan SAA006), dan mengambil semuanya akan
+        # menggandakan barisnya. Faktornya sama-sama 1, jadi pilih satu -- cara
+        # yang PERSIS sama dengan blok [0] `_movement_sql`. Berbeda sedikit saja
+        # di sini, stok dan katalog akan bercabang tanpa satu pun galat.
+        "legacy": "SELECT RTRIM(b.kd_barang), b.nama, b.keterangan, RTRIM(b.kd_merk), "
+                  "RTRIM(b.kd_kategori), RTRIM(b.kd_model), RTRIM(b.kd_warna), "
+                  "RTRIM(b.kd_jenis_bahan), "
+                  "(SELECT MIN(RTRIM(bs.kd_satuan)) FROM {db}.dbo.m_barang_satuan bs "
+                  "WHERE bs.kd_barang = b.kd_barang AND bs.jumlah = 1), "
+                  "CASE WHEN b.status = 1 THEN 1 ELSE 0 END FROM {db}.dbo.m_barang b",
+        "arunika": "SELECT b.kode, b.nama, b.keterangan, mk.kode, kt.kode, mo.kode, "
+                   "wa.kode, bh.kode, sd.kode, CAST(b.aktif AS int) "
+                   "FROM dbo.barang b "
+                   "LEFT JOIN dbo.merek mk ON mk.id = b.merek_id "
+                   "LEFT JOIN dbo.kategori kt ON kt.id = b.kategori_id "
+                   "LEFT JOIN dbo.model_barang mo ON mo.id = b.model_id "
+                   "LEFT JOIN dbo.warna wa ON wa.id = b.warna_id "
+                   "LEFT JOIN dbo.bahan bh ON bh.id = b.bahan_id "
+                   "LEFT JOIN dbo.satuan sd ON sd.id = b.satuan_dasar_id",
+    },
+    # --- Penjualan --------------------------------------------------------
+    #
+    # Nilai uangnya datang dari FUNGSI SKALAR legacy, bukan dari formula yang
+    # ditulis ulang di sini. Itu keputusan sadar, dan alasannya di bawah.
+    "penjualan": {
+        "kolom": ["nomor", "tanggal", "divisi_kode", "pelanggan_kode",
+                  "subtotal", "diskon", "pajak", "total", "status"],
+        # ## Kenapa memanggil fungsi vendor, bukan menulis formulanya sendiri
+        #
+        # `t_penjualan_total` hanya menutup 55% nota di grosirPusat (259.258 dari
+        # 474.595). Sisanya butuh nilai yang dihitung. Menulis ulang formulanya
+        # di sini berarti SALINAN KEDUA logika uang -- dan salinan yang menyimpang
+        # tidak memunculkan galat apa pun, hanya omzet yang berbeda.
+        #
+        # `dbo.GetTotalPenjualan` adalah formula otoritatifnya, dan itu diukur
+        # bukan diduga: **200/200 nota cocok persis** dengan `t_penjualan_total`
+        # di kedua server yang diperiksa, DAN ia tetap menjawab untuk nota yang
+        # tak punya baris total.
+        #
+        # Memanggil fungsi vendor adalah interoperabilitas; menyalin isinya yang
+        # tidak boleh. Definisinya tidak pernah dibaca untuk menulis modul ini.
+        #
+        # ## Ongkosnya, dan kenapa COALESCE
+        #
+        # Ketiga fungsi ini `is_inlineable = True`, TAPI compatibility level
+        # database legacy **100** sementara inlining butuh >= 150. Jadi ia jalan
+        # baris-per-baris. Terukur atas 5.000 nota:
+        #
+        #     kolom tersimpan saja              0,0153 dtk
+        #     fungsi untuk SEMUA baris          0,6510 dtk   (42,5x)
+        #     COALESCE, fungsi hanya saat NULL  0,2142 dtk   (14,0x)
+        #
+        # Menaikkan compatibility level akan menggratiskannya -- dan itu MENGUBAH
+        # DATABASE LEGACY serta bisa menggeser rencana eksekusi aplikasi lama.
+        # Keputusan pemilik server, bukan keputusan kita.
+        #
+        # `CROSS APPLY` memastikan tiap fungsi dipanggil SEKALI per baris, bukan
+        # sekali per kemunculan -- `subtotal` diturunkan dari ketiganya tanpa
+        # panggilan tambahan.
+        #
+        # ## subtotal diturunkan, dan identitasnya dibuktikan
+        #
+        # `total + diskon - pajak == SUM(qty * harga_jual)` -- diuji 50/50 nota
+        # berdiskon. Jadi `subtotal` adalah nilai kotor sebelum diskon apa pun.
+        "legacy": _badan_penjualan,
+        "arunika": "SELECT p.nomor, p.tanggal, d.kode, pl.kode, p.subtotal, p.diskon, p.pajak, "
+                   "p.total, p.status FROM dbo.penjualan p "
+                   "INNER JOIN dbo.divisi d ON d.id = p.divisi_id "
+                   "LEFT JOIN dbo.pelanggan pl ON pl.id = p.pelanggan_id",
+    },
+    "penjualan_baris": {
+        "kolom": ["penjualan_nomor", "barang_kode", "satuan_kode", "qty", "harga", "total"],
+        # `d.total` adalah computed column yang definisinya rusak di legacy
+        # (ANSI_NULLS/QUOTED_IDENTIFIER salah, memblokir CREATE INDEX, error
+        # 1935). Cacat itu menghalangi PEMBUATAN INDEKS, bukan SELECT -- nilainya
+        # tetap benar dan terbaca. Diperiksa: selisih SUM(d.total) terhadap
+        # GetTotalPenjualan persis sebesar diskon tingkat-nota (540.000 - 539.500
+        # = 500 = diskon_uang), jadi `d.total` = nilai baris SESUDAH diskon baris.
+        "legacy": "SELECT RTRIM(no_transaksi), RTRIM(kd_barang), RTRIM(kd_satuan), "
+                  "qty, harga_jual, total FROM {db}.dbo.t_penjualan_detail",
+        "arunika": "SELECT p.nomor, b.kode, s.kode, pb.qty, pb.harga, pb.total "
+                   "FROM dbo.penjualan_baris pb "
+                   "INNER JOIN dbo.penjualan p ON p.id = pb.penjualan_id "
+                   "INNER JOIN dbo.barang b ON b.id = pb.barang_id "
+                   "INNER JOIN dbo.satuan s ON s.id = pb.satuan_id",
+    },
+    "barang_satuan": {
+        "kolom": ["barang_kode", "satuan_kode", "isi", "harga_jual"],
+        # `jumlah` -> isi. Nama legacy itu berkali-kali terbaca sebagai kuantitas
+        # stok, padahal artinya berapa satuan dasar di dalam satu satuan ini.
+        "legacy": "SELECT RTRIM(kd_barang), RTRIM(kd_satuan), jumlah, harga_jual "
+                  "FROM {db}.dbo.m_barang_satuan",
+        "arunika": "SELECT b.kode, s.kode, bs.isi, bs.harga_jual "
+                   "FROM dbo.barang_satuan bs "
+                   "INNER JOIN dbo.barang b ON b.id = bs.barang_id "
+                   "INNER JOIN dbo.satuan s ON s.id = bs.satuan_id",
+    },
+}
+
+MODE = ("legacy", "arunika")
+
+# Tabel legacy yang menentukan JUMLAH BARIS tiap entitas.
+#
+# Ditulis eksplisit, bukan diturunkan dari badan view -- dan itu sesudah mencoba
+# menurunkannya lalu gagal. Rujukan `{db}.dbo.X` yang PERTAMA di badan `barang`
+# adalah `m_barang_satuan` (di dalam subquery satuan dasar), bukan `m_barang`,
+# sehingga pemeriksa membandingkan 53.865 baris dengan 54.232 dan melaporkan
+# selisih yang tidak ada. Rujukan TERAKHIR sama tak bisa dipercaya: di
+# `penjualan` yang terakhir justru sebuah fungsi, bukan tabel.
+#
+# Daftar kedua memang berisiko menyimpang dari yang pertama. Karena itu ada test
+# yang memastikan tiap nilai di sini benar-benar muncul di badan view-nya, dan
+# tiap entitas punya satu.
+SUMBER_UTAMA = {
+    "negara": "m_negara",
+    "kota": "m_kota",
+    "bank": "m_bank",
+    "pelanggan": "m_customer",
+    "pemasok": "m_supplier",
+    "kas": "m_kas",
+    "kategori_biaya": "m_biaya",
+    "voucher": "m_voucher",
+    "satuan": "m_satuan",
+    "divisi": "m_divisi",
+    "barang": "m_barang",
+    "penjualan": "t_penjualan",
+    "penjualan_baris": "t_penjualan_detail",
+    "barang_satuan": "m_barang_satuan",
+}
+
+
+def badan_legacy(nama: str, db_legacy: str) -> str:
+    """Badan SELECT mode legacy sebuah entitas, sudah diselesaikan jadi teks.
+
+    Sebagian badan berupa string ber-`{db}`, sebagian berupa fungsi pembangkit
+    (`penjualan`, dari `reports._nota_net()`). Pemanggil yang ingin MEMBACA
+    SQL-nya -- test, alat diagnosa -- memakai ini alih-alih menyentuh `_MASTER`
+    langsung, supaya tak perlu tahu bentuk mana yang dipakai entitas mana.
+    """
+    badan = _MASTER[nama]["legacy"]
+    return badan(db_legacy) if callable(badan) else badan.format(db=f"[{db_legacy}]")
+
+
+def ddl(nama: str, mode: str, db_legacy: str | None = None) -> str:
+    """`CREATE VIEW` untuk satu entitas pada satu mode."""
+    if mode not in MODE:
+        raise ValueError(f"mode tak dikenal: {mode!r}")
+    spec = _MASTER[nama]
+    badan = spec[mode]
+    if mode == "legacy":
+        if not db_legacy:
+            raise ValueError(f"{nama}: mode legacy butuh nama database sumber.")
+        if "]" in db_legacy:
+            raise ValueError(f"Nama database tak bisa dikutip aman: {db_legacy!r}")
+        # Badan bisa berupa string ber-`{db}` ATAU fungsi pembangkit. Yang kedua
+        # dipakai saat SQL-nya harus berasal dari satu sumber kebenaran yang
+        # sudah ada di kode -- `penjualan` dibangkitkan dari `reports._nota_net()`
+        # supaya formula uangnya tidak punya salinan kedua.
+        badan = badan(db_legacy) if callable(badan) else badan.format(db=f"[{db_legacy}]")
+    kolom = ", ".join(f"[{k}]" for k in spec["kolom"])
+    return f"CREATE VIEW [{SKEMA}].[{nama}] ({kolom}) AS\n{badan}"
+
+
+def pasang(cur, mode: str, db_legacy: str | None = None) -> list[str]:
+    """Buat schema + seluruh view. Idempoten: yang sudah ada dibuat ulang.
+
+    Dibuat ulang, bukan dilewati: sebuah view adalah definisi, bukan data, jadi
+    menggantinya tidak berisiko kehilangan apa pun -- sementara MELEWATI-nya
+    berarti perubahan pemetaan diam-diam tidak pernah sampai ke server.
+    """
+    cur.execute(f"IF SCHEMA_ID('{SKEMA}') IS NULL EXEC('CREATE SCHEMA [{SKEMA}]')")
+    dibuat = []
+    for nama in _MASTER:
+        cur.execute(
+            f"IF OBJECT_ID('{SKEMA}.{nama}', 'V') IS NOT NULL DROP VIEW [{SKEMA}].[{nama}]"
+        )
+        cur.execute(ddl(nama, mode, db_legacy))
+        dibuat.append(nama)
+    return dibuat
+
+
+def copot(cur) -> None:
+    """Buang seluruh jejak adapter master. Tak menyentuh tabel apa pun."""
+    for nama in _MASTER:
+        cur.execute(
+            f"IF OBJECT_ID('{SKEMA}.{nama}', 'V') IS NOT NULL DROP VIEW [{SKEMA}].[{nama}]"
+        )
+    cur.execute(f"IF SCHEMA_ID('{SKEMA}') IS NOT NULL DROP SCHEMA [{SKEMA}]")
+
+
+def daftar() -> list[str]:
+    return list(_MASTER)

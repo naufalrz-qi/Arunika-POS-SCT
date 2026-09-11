@@ -1923,6 +1923,29 @@ def _spec_filters(f, spec):
     return filters
 
 
+# Gerbang tunggal untuk memindahkan laporan ke bentuk Arunika.
+#
+# Default MATI, dan itu disengaja. Memindahkan jalur baca 26 laporan sekaligus
+# tanpa saklar berarti satu pemetaan yang salah langsung mengenai semua orang —
+# dan pemetaan yang salah TIDAK memunculkan galat, ia cuma mengubah angka.
+# Dengan saklar ini, jalur baru bisa dinyalakan per pemasangan, diukur dengan
+# `manage.py cek_arunika`, dan dimatikan lagi dalam satu langkah.
+LAPORAN_ARUNIKA = os.environ.get("ARUNIKA_LAPORAN", "0").lower() in ("1", "true", "yes", "on")
+
+
+def _pakai_bentuk_arunika(spec, profile) -> bool:
+    """Tiga syarat, semuanya harus benar; kalau tidak, jalur legacy apa adanya.
+
+    Spec yang belum punya `inner_arunika` otomatis tetap di jalur lama, jadi
+    pemindahan bisa dilakukan satu laporan per satu tanpa menyentuh sisanya.
+    """
+    return bool(
+        LAPORAN_ARUNIKA
+        and spec.get("inner_arunika")
+        and mssql.punya_arunika(profile)
+    )
+
+
 def _report_view(spec):
     def view(request):
         f = _spec_params(request, spec)
@@ -1940,12 +1963,19 @@ def _report_view(spec):
                 # spec["inner"]/apply_column_filters dulu di luar try — bentuk
                 # filter yang aneh jadi 500, bukan banner.
                 try:
-                    inner, params = spec["inner"](f)
+                    lewat_arunika = _pakai_bentuk_arunika(spec, profile)
+                    bangun = spec["inner_arunika"] if lewat_arunika else spec["inner"]
+                    inner, params = bangun(f)
                     inner, params = reporting.apply_column_filters(inner, params, f)
-                    for read_profile in mssql.report_read_profiles(profile):
+                    # Bentuk Arunika tak punya replica: ia dibaca dari database
+                    # pendamping di instans yang sama, jadi tak ada yang bisa
+                    # di-fallback-i. Jalur legacy tetap memakai daftar replica.
+                    kandidat = [profile] if lewat_arunika else mssql.report_read_profiles(profile)
+                    buka = mssql.arunika_cursor if lewat_arunika else mssql.report_cursor
+                    for read_profile in kandidat:
                         rows, total, summary, options = [], 0, {}, {}  # reset per attempt
                         try:
-                            with mssql.report_cursor(read_profile) as cur:
+                            with buka(read_profile) as cur:
                                 if f["recent"]:
                                     rows, total, summary_sql = reporting.run_recent(cur, inner, params, f)
                                 else:
@@ -2264,6 +2294,11 @@ _PENJUALAN_PERIODE = {
     "component": "Admin/Reports/PenjualanPeriode",
     "url": "/admin-panel/laporan/penjualan-periode",
     "inner": rpt.penjualan_periode,
+    # Laporan PERTAMA yang membaca bentuk Arunika. Aman dipasang sejak badan view
+    # `penjualan` dibangkitkan dari `_nota_net()`: angkanya IDENTIK dengan jalur
+    # lama (2025 setahun, 2024-2026, dan harian 365 baris), 1,0-1,3x ongkosnya.
+    # Tetap di balik ARUNIKA_LAPORAN=1 supaya bisa dinyalakan per pemasangan.
+    "inner_arunika": rpt.penjualan_periode_arunika,
     "sorts": rpt.SORTS_PENJUALAN_PERIODE,
     "default_sort": "periode",
     "summary": rpt.SUMMARY_PENJUALAN_PERIODE,

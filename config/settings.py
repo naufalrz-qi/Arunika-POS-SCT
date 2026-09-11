@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     "django_vite",
     # Local apps
     "apps.core",
+    "apps.bisnis",
     "apps.auth_app",
     "apps.monitoring",
     "apps.connections",
