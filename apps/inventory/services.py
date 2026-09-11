@@ -311,7 +311,10 @@ def _fetch_movements(cur, *, kd_barang=None, kd_divisi=None, date_to=None, date_
     sql, params = _movement_sql(
         closing, kd_barang=kd_barang, kd_divisi=kd_divisi, date_to=date_to, date_from=date_from
     )
-    cur.execute(sql, params)
+    # kd_barang/kd_divisi WAJIB lewat execute_varchar: diikat NVARCHAR (bawaan
+    # pyodbc) melawan kolom `varchar` legacy, seek-nya batal dan tabelnya
+    # dipindai. Terukur 18,6x di server uji lokal.
+    mssql.execute_varchar(cur, sql, params)
     return _dictify(cur)
 
 
@@ -365,7 +368,13 @@ def _movement_sums(cur, *, kd_barang=None, kd_divisi=None, date_from=None, date_
         "OR SUM(CASE WHEN mv.tanggal >= ? THEN CAST(COALESCE(mv.debet, 0) * COALESCE(bs.jumlah, 1) AS FLOAT) ELSE 0 END) <> 0 "
         "OR SUM(CASE WHEN mv.tanggal >= ? THEN CAST(COALESCE(mv.kredit, 0) * COALESCE(bs.jumlah, 1) AS FLOAT) ELSE 0 END) <> 0"
     )
-    cur.execute(sql, [boundary, boundary, boundary] + params + [boundary, boundary, boundary])
+    # Daftar akhirnya CAMPURAN: enam `boundary` datetime membungkus `params`
+    # yang sendiri sudah campuran. `execute_varchar` memeriksa tipe per posisi,
+    # jadi pembungkusan ini aman -- yang tak boleh adalah memaksa seluruhnya
+    # VARCHAR (lihat docstring-nya: pecah di server berbahasa non-us_english).
+    mssql.execute_varchar(
+        cur, sql, [boundary, boundary, boundary] + params + [boundary, boundary, boundary]
+    )
     return _dictify(cur)
 
 

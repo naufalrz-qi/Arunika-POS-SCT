@@ -325,3 +325,123 @@ def report_read_profiles(profile) -> list:
     """
     replica = get_report_source(profile)
     return [replica, profile] if replica else [profile]
+
+
+def execute_varchar(cur, sql, params, panjang_min: int = 10):
+    """`cur.execute` dengan parameter string diikat VARCHAR **per posisi**.
+
+    pyodbc mengikat `str` Python sebagai NVARCHAR, sedangkan seluruh kolom kunci
+    legacy bertipe `varchar`/`char`. Konversi implisit di sisi KOLOM membatalkan
+    index seek, dan SQL Server memindai tabelnya. Terukur di server uji lokal
+    pada kueri pergerakan stok (`t_penjualan_detail` 569.831 baris, difilter
+    satu `kd_barang`): **0,1309 dtk -> 0,0070 dtk, 18,6x.** Di server jauh
+    ongkosnya akan jauh lebih besar lagi.
+
+    ## Kenapa bukan `hub_sync.bind_varchar`
+
+    Helper itu menyetel SELURUH posisi jadi VARCHAR, yang benar untuk kasus yang
+    melahirkannya -- satu daftar `IN (...)` berisi string semua. Daftar parameter
+    di sini CAMPURAN: kueri pergerakan stok mengirim 38 parameter, 22 di
+    antaranya `datetime`. Memaksa datetime jadi VARCHAR berarti menyerahkan
+    penafsiran tanggalnya ke setelan bahasa server, dan itu **terbukti pecah**:
+
+        SET LANGUAGE us_english  -> lolos, hasil identik
+        SET LANGUAGE british     -> DataError 22007 (gagal konversi tanggal)
+        SET LANGUAGE deutsch     -> DataError 22007
+
+    Lolosnya di mesin pengembang hanya karena bahasa sesinya kebetulan
+    `us_english`. Kegagalan seperti itu tidak akan pernah terlihat saat menguji
+    ke server lokal -- ia muncul di server pelanggan.
+
+    Karena itu di sini hanya posisi bertipe `str` yang diikat; sisanya `None`,
+    yang berarti "biarkan pyodbc memutuskan". pyodbc menerima `None` per posisi,
+    dan hasilnya terbukti identik di ketiga bahasa di atas.
+
+    ## Panjang deklarasi
+
+    Diturunkan dari nilai terpanjang yang benar-benar dikirim, bukan konstanta.
+    Deklarasi yang lebih PENDEK dari nilainya akan memotongnya diam-diam, dan
+    baris yang hilang karena kunci terpotong tidak memunculkan galat apa pun.
+
+    Ikatan `setinputsizes` menempel di cursor, jadi ia selalu direset di
+    `finally` -- execute berikutnya dengan jumlah parameter berbeda akan salah
+    kalau tidak.
+    """
+    def _varchar_aman(v) -> bool:
+        """Hanya string ASCII yang diikat VARCHAR.
+
+        Kolom legacy memang `varchar`, jadi ia tak pernah bisa menyimpan
+        karakter di luar codepage-nya -- tapi NILAI yang dikirim tidak selalu
+        datang dari sana. Kata kunci pencarian diketik pengguna dan bisa memuat
+        apa saja. Memaksa string non-ASCII lewat VARCHAR menyerahkannya ke
+        konversi codepage server, yang bisa memetakan dua karakter berbeda ke
+        byte yang sama dan memunculkan kecocokan yang salah -- tanpa galat.
+
+        Dibiarkan NVARCHAR, string seperti itu sekadar tidak cocok dengan apa
+        pun, yang memang jawaban yang benar. Ongkosnya nol: nilai non-ASCII
+        tidak akan pernah menemukan baris di kolom `varchar` bagaimanapun
+        caranya, jadi seek yang hilang tidak merugikan siapa pun.
+        """
+        return isinstance(v, str) and v.isascii()
+
+    if not any(_varchar_aman(v) for v in params):
+        cur.execute(sql, params)
+        return cur
+    panjang = max(panjang_min, max(len(v) for v in params if _varchar_aman(v)))
+    try:
+        cur.setinputsizes(
+            [(pyodbc.SQL_VARCHAR, panjang, 0) if _varchar_aman(v) else None for v in params]
+        )
+        cur.execute(sql, params)
+    finally:
+        cur.setinputsizes(None)
+    return cur
+
+
+def punya_arunika(profile) -> bool:
+    """Apakah profil ini punya database Arunika pendamping."""
+    return bool((getattr(profile, "db_arunika", "") or "").strip())
+
+
+@contextmanager
+def arunika_cursor(profile, query_timeout=None):
+    """Cursor READ-ONLY ke database ARUNIKA pendamping, bukan ke database legacy.
+
+    Kembaran `report_cursor` untuk sisi yang lain. Keduanya menunjuk instans SQL
+    Server yang SAMA; yang berbeda hanya databasenya -- `profile.db_name` untuk
+    legacy, `profile.db_arunika` untuk milik kita. Di situlah tabel skema Arunika
+    dan view adapter `arunika_src.*` tinggal, dan dari sanalah legacy dibaca
+    lintas-database.
+
+    READ UNCOMMITTED dengan alasan yang sama seperti `report_cursor`: laporan
+    memindai banyak baris dan tak boleh mengambil shared lock yang memblok tulis
+    POS live. Di mode legacy isolasi itu ikut berlaku ke tabel legacy yang dibaca
+    view -- justru yang diinginkan.
+
+    Menolak dengan galat kalau `db_arunika` kosong, bukan diam-diam jatuh ke
+    database legacy: jatuh diam-diam berarti kueri bentuk-baru dijalankan di
+    database yang tak punya bentuk itu, dan pesannya akan menyebut nama objek
+    yang "tidak ada" alih-alih menyebut sebab sebenarnya.
+    """
+    db = (getattr(profile, "db_arunika", "") or "").strip()
+    if not db:
+        raise ProfileAuthError(
+            "HY000",
+            f"Profil '{profile.name}' belum punya database Arunika (db_arunika kosong). "
+            "Jalankan `manage.py init_arunika --profile <nama>` lebih dulu.",
+        )
+    try:
+        password = decrypt_checked(profile.password_encrypted)
+    except (PasswordDecryptError, EncryptionKeyMissing) as exc:
+        raise ProfileAuthError("HY000", str(exc)) from exc
+    conn = _connect(
+        profile.host, profile.port, db, profile.username, password,
+        autocommit=True, query_timeout=query_timeout,
+    )
+    cur = conn.cursor()
+    try:
+        cur.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
+        yield cur
+    finally:
+        cur.close()
+        conn.close()
