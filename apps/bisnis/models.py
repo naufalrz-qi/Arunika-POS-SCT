@@ -615,6 +615,61 @@ class KategoriBiaya(Referensi):
         db_table = "kategori_biaya"
 
 
+
+class JenisJurnalKas(models.TextChoices):
+    BIAYA = "biaya", "Biaya"
+    PENDAPATAN = "pendapatan", "Pendapatan"
+    PENAMBAHAN = "penambahan", "Penambahan Kas"
+    MUTASI = "mutasi", "Mutasi Antar-Kas"
+
+
+class JurnalKas(models.Model):
+    """Satu buku besar kas, menggantikan empat tabel legacy.
+
+    `t_biaya_operasional`, `t_pendapatan`, `t_penambahan_kas`, dan `t_mutasi_kas`
+    dipisah di legacy, padahal `apps/transactions/kas.py` sudah menggerakkan
+    keempatnya dari SATU `SPEC` dengan satu route generik -- dokumen kas keempat
+    terbukti tak butuh view maupun route baru sama sekali. Kodenya sudah
+    memperlakukan mereka sebagai satu hal; skema legacy saja yang tidak.
+
+    `kas_tujuan` hanya terisi untuk `mutasi`, dan tipenya di sini tidak berbohong:
+    di legacy `t_mutasi_kas.kd_kas_tujuan` bertipe `varchar(10)`/`JR_KODE_ACCOUNT`
+    seolah menunjuk akun jurnal, padahal tiga view legacy membuktikan ia menunjuk
+    `m_kas`.
+
+    `kategori` hanya bermakna untuk `biaya`. Baris pendapatan legacy menunjuk
+    `m_pendapatan` -- tabel LAIN, satu baris di kedua server yang bisa dijangkau
+    -- dan sengaja belum dipetakan: memaksanya masuk `kategori_biaya` berarti
+    menyatakan pendapatan adalah sejenis biaya.
+    """
+
+    nomor = models.CharField(max_length=30, unique=True)
+    tanggal = models.DateField()
+    divisi = models.ForeignKey(Divisi, null=True, blank=True, on_delete=models.PROTECT)
+
+    kas = models.ForeignKey("Kas", on_delete=models.PROTECT, related_name="jurnal")
+    kas_tujuan = models.ForeignKey("Kas", null=True, blank=True, on_delete=models.PROTECT,
+                                   related_name="jurnal_masuk")
+
+    jenis = models.CharField(max_length=12, choices=JenisJurnalKas.choices)
+    kategori = models.ForeignKey("KategoriBiaya", null=True, blank=True, on_delete=models.PROTECT)
+
+    jumlah = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    keterangan = models.CharField(max_length=200, blank=True)
+    dibuat_oleh = models.IntegerField(null=True, blank=True)
+    dibuat_pada = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "jurnal_kas"
+        indexes = [
+            models.Index(fields=["tanggal"], name="ix_jurkas_tgl"),
+            models.Index(fields=["kas", "tanggal"], name="ix_jurkas_kas_tgl"),
+            models.Index(fields=["jenis", "tanggal"], name="ix_jurkas_jenis_tgl"),
+        ]
+
+    def __str__(self):
+        return f"{self.nomor} {self.jenis} {self.jumlah}"
+
 class Voucher(Referensi):
     nominal = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     keterangan = models.CharField(max_length=50, blank=True)

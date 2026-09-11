@@ -31,6 +31,23 @@ _FILTER_KOSONG = {"skip_date_predicate": True, "search": "", "recent": True}
 
 # View yang badannya dibangkitkan dari subquery nota, beserta laporan yang
 # memakai subquery itu apa adanya -- dipakai sebagai acuan jumlah baris.
+# Entitas yang menggabungkan beberapa tabel legacy: acuannya jumlah seluruhnya,
+# bukan satu tabel saja.
+_JUMLAH_GABUNGAN = {
+    "jurnal_kas": ("t_biaya_operasional", "t_pendapatan", "t_penambahan_kas", "t_mutasi_kas"),
+}
+
+# Entitas baris yang view-nya meng-INNER JOIN kepalanya (untuk membawa tanggal
+# dan divisi). Baris detail YATIM -- yang kepalanya tak ada -- karena itu tidak
+# muncul, dan acuannya harus ikut menghitungnya begitu. Terukur: testGUdang
+# punya 118 baris `t_pembelian_detail` tanpa kepala; grosirPusat nol. Baris
+# seperti itu tak punya tanggal maupun divisi, jadi ia memang tak pernah masuk
+# laporan mana pun -- termasuk di jalur legacy, yang juga men-join kepalanya.
+_ACUAN_BERKEPALA = {
+    "penjualan_baris": ("t_penjualan_detail", "t_penjualan", "no_transaksi"),
+    "pembelian_baris": ("t_pembelian_detail", "t_pembelian", "no_transaksi"),
+}
+
 _DARI_SUBQUERY_NOTA = {
     "penjualan": (reports._nota_net, "_nota_net()"),
     "pembelian": (reports._pembelian_nota, "_pembelian_nota()"),
@@ -93,6 +110,20 @@ class Command(BaseCommand):
                     bangun, tab = _DARI_SUBQUERY_NOTA[nama]
                     lc.execute(f"SELECT COUNT(*) FROM ({bangun('1=1')}) q")
                     nl = lc.fetchone()[0]
+                elif nama in _ACUAN_BERKEPALA:
+                    detail, kepala, kunci = _ACUAN_BERKEPALA[nama]
+                    lc.execute(
+                        f"SELECT COUNT(*) FROM {detail} d "
+                        f"INNER JOIN {kepala} h ON h.{kunci} = d.{kunci}"
+                    )
+                    nl = lc.fetchone()[0]
+                    tab = f"{detail} berkepala"
+                elif nama in _JUMLAH_GABUNGAN:
+                    tabel = _JUMLAH_GABUNGAN[nama]
+                    lc.execute(" UNION ALL ".join(
+                        f"SELECT COUNT(*) FROM {x}" for x in tabel))
+                    nl = sum(r[0] for r in lc.fetchall())
+                    tab = " + ".join(tabel)
                 else:
                     lc.execute(f"SELECT COUNT(*) FROM {tab}")
                     nl = lc.fetchone()[0]

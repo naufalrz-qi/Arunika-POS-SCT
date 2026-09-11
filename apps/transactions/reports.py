@@ -2386,3 +2386,79 @@ def pembelian_periode_arunika(f):
         f"GROUP BY {periode}"
     )
     return inner, params
+
+
+# --- Biaya operasional di atas bentuk Arunika ------------------------------
+#
+# Dibuka oleh `jurnal_kas`: satu buku besar menggantikan empat tabel legacy
+# (dokumen rancangan Sec 4.2). Kedua laporan di bawah hanya melihat baris
+# berjenis `biaya`, dan menyatakannya SECARA TERSURAT alih-alih mengandalkan
+# INNER JOIN ke kategori seperti jalur lama -- di sana pembatasannya kebetulan,
+# di sini ia bagian dari pertanyaannya.
+
+
+def case_label_jenis_biaya(kolom: str) -> str:
+    """`CASE` label jenis biaya atas kolom TOKEN (bentuk Arunika).
+
+    Pasangan `case_jenis_biaya()`, yang bekerja atas kode legacy. Dua rendering
+    dari satu peta; yang tak boleh ada adalah dua daftar label.
+    """
+    cabang = " ".join(f"WHEN '{tok}' THEN '{label}'" for tok, label in JENIS_BIAYA.values())
+    return f"CASE {kolom} {cabang} ELSE '' END"
+
+
+def _token_jenis_biaya(kode) -> str | None:
+    """Kode legacy dari filter layar -> token bentuk Arunika.
+
+    Nilai filternya sengaja tetap kode legacy: mengubahnya berarti mengubah
+    kontrak URL dan bookmark yang sudah dipakai orang, demi gerbang yang bisa
+    dimatikan lagi besok.
+    """
+    try:
+        return JENIS_BIAYA[int(kode)][0]
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def _biaya_where_arunika(f):
+    where, params = _base_where_arunika(f, date_col="j.tanggal", div_col="j.divisi_kode")
+    where.append("j.jenis = ?")
+    params.append("biaya")
+    return where, params
+
+
+def biaya_operasional_arunika(f):
+    """`biaya_operasional` di atas bentuk Arunika."""
+    where, params = _biaya_where_arunika(f)
+    if f.get("kategori"):
+        token = _token_jenis_biaya(f["kategori"])
+        # Kode yang tak dikenal menyaring habis, bukan diabaikan diam-diam:
+        # filter yang tak berlaku lebih buruk daripada hasil kosong.
+        where.append("kb.jenis = ?")
+        params.append(token if token is not None else "")
+    _search(where, params, f, ["kb.nama", "j.keterangan"])
+    inner = (
+        "SELECT j.nomor AS no_transaksi, j.tanggal, COALESCE(dv.nama, '') AS divisi, "
+        "kb.nama AS biaya, "
+        f"{case_label_jenis_biaya('kb.jenis')} AS kategori, "
+        "j.jumlah AS nominal, COALESCE(j.keterangan, '') AS keterangan "
+        f"FROM {SRC}.jurnal_kas j "
+        f"INNER JOIN {SRC}.kategori_biaya kb ON kb.kode = j.kategori_kode "
+        f"LEFT JOIN {SRC}.divisi dv ON dv.kode = j.divisi_kode "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
+
+
+def biaya_kategori_arunika(f):
+    """`biaya_kategori` di atas bentuk Arunika."""
+    where, params = _biaya_where_arunika(f)
+    inner = (
+        f"SELECT {case_label_jenis_biaya('kb.jenis')} AS kategori, "
+        "COUNT(*) AS jml_baris, SUM(j.jumlah) AS total "
+        f"FROM {SRC}.jurnal_kas j "
+        f"INNER JOIN {SRC}.kategori_biaya kb ON kb.kode = j.kategori_kode "
+        f"WHERE {' AND '.join(where)} "
+        "GROUP BY kb.jenis"
+    )
+    return inner, params

@@ -913,6 +913,45 @@ Yang TIDAK hilang adalah **nilainya**: `t_pembelian_detail.total` sudah sama den
 dibuktikan di sisi jual (0 dari 2.990.368 + 570.190). Jadi laporan uang aman; yang butuh
 keputusan hanyalah layar yang menampilkan rinciannya.
 
+## 7.9 `jurnal_kas` ada, dan konsolidasi §4.2 terbukti
+
+Empat tabel legacy jadi satu entitas, persis seperti yang §4.2 tetapkan. Dua laporan pindah —
+Biaya Operasional dan Biaya per Kategori — **identik di seluruh 9.564 baris** grosirPusat,
+termasuk dengan kedua filter kategori, kode kategori asing, dan kata kunci pencarian. Ongkos
+0,9–1,3×.
+
+Yang **tidak** ikut: lengan penjualan di `_kas_union()`. Itu proyeksi buku kas harian (penjualan
+tunai memang menambah kas), bukan dokumen kas — penjualan sudah punya entitasnya sendiri. Layar
+Kas Harian kelak menyatukan keduanya; view ini berisi dokumen saja.
+
+Mutasi kas jadi **satu baris per dokumen**, bukan dua. Dua baris (keluar dari sumber, masuk ke
+tujuan) adalah bentuk *buku*, dan itu urusan layar; dokumennya satu, dan `kas_tujuan_kode` yang
+menyatakan ke mana. Tipenya pun tak lagi berbohong — di legacy `t_mutasi_kas.kd_kas_tujuan`
+bertipe `varchar(10)`/`JR_KODE_ACCOUNT` seolah menunjuk akun jurnal.
+
+`t_penambahan_kas` dan `t_mutasi_kas` **nol baris di kedua server**. Lengannya tetap ada:
+`kas.py` menulis ke keduanya, dan §2 sudah mencatat kenapa nol baris di server uji bukan bukti
+fitur tak terpakai.
+
+`kategori` hanya bermakna untuk baris `biaya`. Baris pendapatan legacy menunjuk `m_pendapatan` —
+tabel lain, satu baris di kedua server — dan sengaja belum dipetakan: memaksanya masuk
+`kategori_biaya` berarti menyatakan pendapatan adalah sejenis biaya.
+
+### Baris detail yatim: 118 di testGUdang, nol di grosirPusat
+
+`penjualan_baris` dan `pembelian_baris` meng-INNER JOIN kepalanya (untuk membawa `tanggal` dan
+`divisi_kode`, §7.5 temuan 2). Konsekuensinya baru terlihat sekarang: **118 baris
+`t_pembelian_detail` di testGUdang tidak punya kepala sama sekali**, jadi ia tak muncul di view.
+
+Itu bukan kehilangan: baris tanpa kepala tak punya tanggal maupun divisi, sehingga ia memang tak
+pernah masuk laporan mana pun — termasuk di jalur legacy, yang juga men-join kepalanya.
+`cek_arunika` kini memakai acuan "baris detail **yang berkepala**" untuk kedua entitas, sehingga
+ia melaporkan keadaan sebenarnya alih-alih menuduh view yang benar.
+
+Bersama nota tanpa baris detail (§7.6, §7.8), ini pasangan cacat referensial yang saling
+berlawanan di data yang sama — dan keduanya baru terlihat karena bentuk baru memaksa
+membandingkan jumlah baris terhadap acuan yang eksplisit.
+
 ## 8. Yang harus diverifikasi sebelum rancangan ini dibekukan
 
 Belum dikerjakan, dan tak boleh dilewati:

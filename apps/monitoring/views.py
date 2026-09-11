@@ -1864,20 +1864,26 @@ def _opt_kas(profile):
     return _opt_master(profile, "SELECT kd_kas, keterangan FROM m_kas WHERE status <> 0 ORDER BY keterangan")
 
 
-_KATEGORI_BIAYA_LABEL = {
-    1: "Operasional (Penjualan)", 2: "Operasional (Adm. dan Umum)",
-    3: "Produksi (Biaya Langsung)", 4: "Produksi (Biaya Tak Langsung)",
-}
-
-
 def _opt_kategori_biaya(profile):
-    # Only status values actually assigned to a m_biaya row are offered — this
-    # business (retail/toys) only uses 1/2; 3/4 (produksi) exist in the label
-    # mapping but would otherwise be a dead filter option.
+    """Pilihan filter kategori biaya. NILAINYA tetap kode legacy di kedua jalur.
+
+    Hanya jenis yang benar-benar dipakai sebuah baris yang ditawarkan — usaha
+    ini (mainan/retail) cuma memakai 1/2; 3/4 (produksi) ada di peta label tapi
+    akan jadi opsi mati.
+
+    Labelnya datang dari `reports.JENIS_BIAYA`, satu-satunya peta yang boleh ada
+    — berkas ini sempat menyimpan salinan keempatnya sendiri.
+    """
+    if _arunika_siap(profile):
+        with mssql.arunika_cursor(profile) as cur:
+            cur.execute(f"SELECT DISTINCT jenis FROM {rpt.SRC}.kategori_biaya WHERE jenis <> ''")
+            token = {r[0] for r in cur.fetchall()}
+        return [{"value": str(k), "label": label}
+                for k, (tok, label) in rpt.JENIS_BIAYA.items() if tok in token]
     with mssql.cursor(profile) as cur:
         cur.execute("SELECT DISTINCT status FROM m_biaya WHERE status <> 0 ORDER BY status")
         statuses = [r[0] for r in cur.fetchall()]
-    return [{"value": str(s), "label": _KATEGORI_BIAYA_LABEL.get(s, str(s))} for s in statuses]
+    return [{"value": str(s), "label": rpt.JENIS_BIAYA.get(s, ("", str(s)))[1]} for s in statuses]
 
 
 def _spec_params(request, spec, export=False):
@@ -3621,6 +3627,9 @@ _BIAYA = {
     "component": "Admin/Reports/BiayaOperasional",
     "url": "/admin-panel/laporan/biaya-operasional",
     "inner": rpt.biaya_operasional,
+    # Laporan ketujuh & kedelapan, dibuka oleh `jurnal_kas` — satu buku besar
+    # kas menggantikan empat tabel legacy (rancangan Sec 4.2).
+    "inner_arunika": rpt.biaya_operasional_arunika,
     "sorts": rpt.SORTS_BIAYA,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_BIAYA,
@@ -3644,6 +3653,7 @@ _BIAYA_KATEGORI = {
     "component": "Admin/Reports/BiayaKategori",
     "url": "/admin-panel/laporan/biaya-kategori",
     "inner": rpt.biaya_kategori,
+    "inner_arunika": rpt.biaya_kategori_arunika,
     "sorts": rpt.SORTS_BIAYA_KATEGORI,
     "default_sort": "total",
     "summary": rpt.SUMMARY_BIAYA_KATEGORI,

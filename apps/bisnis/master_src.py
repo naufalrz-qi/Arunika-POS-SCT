@@ -402,6 +402,56 @@ _MASTER: dict[str, dict] = {
                    "INNER JOIN dbo.barang b ON b.id = pb.barang_id "
                    "INNER JOIN dbo.satuan s ON s.id = pb.satuan_id",
     },
+    # --- Kas ---------------------------------------------------------------
+    "jurnal_kas": {
+        "kolom": ["nomor", "tanggal", "divisi_kode", "kas_kode", "kas_tujuan_kode",
+                  "jenis", "kategori_kode", "jumlah", "keterangan"],
+        # ## Empat tabel legacy, satu buku besar
+        #
+        # Konsolidasi Sec 4.2, dan ia BUKAN penyederhanaan yang dikarang di sini:
+        # `apps/transactions/kas.py` sudah menggerakkan keempat tabel itu dari
+        # satu `SPEC` dengan satu route generik.
+        #
+        # Yang TIDAK ikut: lengan penjualan di `_kas_union()`. Itu proyeksi buku
+        # kas harian (penjualan tunai memang menambah kas), bukan dokumen kas --
+        # penjualan sudah punya entitasnya sendiri. Layar Kas Harian kelak
+        # menyatukan keduanya; view ini tetap berisi dokumen saja.
+        #
+        # `t_penambahan_kas` dan `t_mutasi_kas` NOL BARIS di kedua server yang
+        # bisa dijangkau. Lengannya tetap ada: `kas.py` menulis ke keduanya, dan
+        # dokumen rancangan Sec 2 sudah mencatat kenapa nol baris bukan bukti
+        # fitur tak terpakai.
+        #
+        # `kd_jenis` (JAA000/...) sengaja tak dipetakan: ia cara bayar, dan belum
+        # ada laporan kas yang memintanya.
+        "legacy": lambda db: (
+            "SELECT no_transaksi, tanggal, RTRIM(kd_divisi), RTRIM(kd_kas), NULL, "
+            "'biaya', RTRIM(kd_biaya), nominal, COALESCE(keterangan, '') "
+            f"FROM [{db}].dbo.t_biaya_operasional"
+            " UNION ALL "
+            "SELECT no_transaksi, tanggal, RTRIM(kd_divisi), RTRIM(kd_kas), NULL, "
+            "'pendapatan', NULL, nominal, COALESCE(keterangan, '') "
+            f"FROM [{db}].dbo.t_pendapatan"
+            " UNION ALL "
+            "SELECT no_transaksi, tanggal, NULL, RTRIM(kd_kas), NULL, "
+            "'penambahan', NULL, nominal, COALESCE(keterangan, '') "
+            f"FROM [{db}].dbo.t_penambahan_kas"
+            " UNION ALL "
+            # SATU baris per dokumen mutasi, bukan dua. Dua baris adalah bentuk
+            # BUKU (keluar dari sumber, masuk ke tujuan) dan itu urusan layar
+            # kas; dokumennya satu, dan `kas_tujuan_kode` yang menyatakan ke mana.
+            "SELECT no_transaksi, tanggal, NULL, RTRIM(kd_kas_sumber), RTRIM(kd_kas_tujuan), "
+            "'mutasi', NULL, nominal, COALESCE(keterangan, '') "
+            f"FROM [{db}].dbo.t_mutasi_kas"
+        ),
+        "arunika": "SELECT j.nomor, j.tanggal, dv.kode, ks.kode, kt.kode, j.jenis, kb.kode, "
+                   "j.jumlah, j.keterangan "
+                   "FROM dbo.jurnal_kas j "
+                   "LEFT JOIN dbo.divisi dv ON dv.id = j.divisi_id "
+                   "INNER JOIN dbo.kas ks ON ks.id = j.kas_id "
+                   "LEFT JOIN dbo.kas kt ON kt.id = j.kas_tujuan_id "
+                   "LEFT JOIN dbo.kategori_biaya kb ON kb.id = j.kategori_id",
+    },
     "barang_satuan": {
         "kolom": ["barang_kode", "satuan_kode", "isi", "harga_jual"],
         # `jumlah` -> isi. Nama legacy itu berkali-kali terbaca sebagai kuantitas
@@ -435,6 +485,7 @@ TANPA_RTRIM = {
     ("pembelian", "nomor"): ("t_pembelian", "no_transaksi"),
     ("pembelian_baris", "pembelian_nomor"): ("t_pembelian_detail", "no_transaksi"),
     ("pembelian_baris", "barang_kode"): ("t_pembelian_detail", "kd_barang"),
+    ("jurnal_kas", "nomor"): ("t_biaya_operasional", "no_transaksi"),
 }
 
 MODE = ("legacy", "arunika")
@@ -472,6 +523,9 @@ SUMBER_UTAMA = {
     "penjualan_baris": "t_penjualan_detail",
     "pembelian": "t_pembelian",
     "pembelian_baris": "t_pembelian_detail",
+    # Jumlah barisnya gabungan empat tabel -- lihat `_JUMLAH_GABUNGAN` di
+    # `cek_arunika`, yang menjumlahkan keempatnya sebagai acuan.
+    "jurnal_kas": "t_biaya_operasional",
     "barang_satuan": "m_barang_satuan",
 }
 
