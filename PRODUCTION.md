@@ -36,6 +36,9 @@ Set these in the shell or `.env` before running:
 
 | Var | Default | Note |
 |-----|---------|------|
+| `POS_APP_DB_ENGINE` | `sqlite` | `mssql` untuk produksi. Lihat bagian "Basis data aplikasi" di bawah — **jangan diubah tanpa `dumpdata` lebih dulu.** |
+| `POS_APP_DB_HOST` / `_PORT` / `_NAME` / `_USER` / `_PASSWORD` | *(kosong)* | Wajib saat `POS_APP_DB_ENGINE=mssql`; HOST & NAME diperiksa saat boot. |
+| `POS_APP_DB_DRIVER` | `ODBC Driver 17 for SQL Server` | Disamakan dengan jalur pyodbc di `core/mssql.py`. |
 | `DEBUG` | `0` (false) | Secure default. Set `1` only for dev. |
 | `SECRET_KEY` | `django-insecure-...` (dev fallback) | **Must set in production.** With `DEBUG=0` the app REFUSES TO BOOT while the dev key is in place. Generate: `python -c "import secrets; print(secrets.token_urlsafe(50))"`. |
 | `ALLOWED_HOSTS` | `127.0.0.1,localhost` | Comma-separated IPs; add LAN/Tailscale hosts. |
@@ -166,20 +169,74 @@ Caddy mengirim `X-Forwarded-For` + `X-Forwarded-Proto` sendiri. Sesudah itu baru
 memang diizinkan) punya arti. Untuk HTTPS, tambahkan nama yang punya sertifikat — `tailscale
 cert` untuk nama tailnet mesin itu, atau CA internal untuk nama LAN-nya.
 
+## Basis data aplikasi: SQLite atau MS SQL
+
+Sejak `POS_APP_DB_ENGINE` ada, basis data aplikasi (akun, sesi, `ServerProfile`, `TautanUser`,
+`ActivityLog`, cursor sync, snapshot) bisa tinggal di dua tempat:
+
+| `POS_APP_DB_ENGINE` | Di mana | Untuk apa |
+|---|---|---|
+| `sqlite` (default) | `db.sqlite3` di folder proyek | Pengembangan, `manage.py test`, klon baru. Tak butuh server apa pun. |
+| `mssql` | Server MS SQL "pangkal" dari `.env` | Produksi |
+
+Ini **koneksi pangkal**, dan sengaja dari `.env` — bukan dari `ServerProfile` seperti server
+bisnis. Alasannya melingkar: `ServerProfile` justru yang menyimpan cara menyambung ke
+server-server itu, jadi ia sendiri harus bisa dibaca lebih dulu tanpa profil apa pun.
+
+> **Konsekuensi yang harus disadari sebelum menaikkan ke `mssql`: kalau server pangkal mati,
+> tak ada yang bisa login.** Dengan SQLite, login tetap jalan walau server bisnis tak
+> terjangkau. Karena itu server pangkal sebaiknya mesin lokal aplikasi, bukan server jauh
+> lewat Tailscale.
+
+### Pindah dari SQLite ke MS SQL (sekali, dan tidak bisa diulang kalau salah)
+
+**Langkah 1 tidak boleh dilewati.** `TautanUser` adalah pekerjaan manual belasan baris per
+orang yang **tidak bisa direkonstruksi dari server mana pun**. Kehilangannya tidak bisa
+diperbaiki dengan kode.
+
+```bash
+python manage.py dumpdata --natural-foreign --natural-primary -e contenttypes -e auth.Permission -o pindah-app-db.json
+```
+
+Simpan `pindah-app-db.json` **dan** salinan `db.sqlite3` di luar mesin sebelum melanjutkan.
+Lalu buat database kosong di SQL Server, isi `POS_APP_DB_*` di `.env`, set
+`POS_APP_DB_ENGINE=mssql`, dan:
+
+```bash
+python manage.py migrate
+```
+
+```bash
+python manage.py loaddata pindah-app-db.json
+```
+
+**Verifikasi sebelum menyatakan selesai** — bandingkan jumlah baris per model, lama vs baru.
+Yang paling penting `TautanUser`: kalau jumlahnya berkurang, tujuh layar kasir yang menulis
+akan menolak jalan, dan barisnya tidak bisa dibuat ulang. Lalu uji login, lonceng notif, dan
+ganti koneksi di navbar.
+
 ## Cadangan (WAJIB — tak ada salinan lain)
 
-`db.sqlite3` adalah satu-satunya tempat akun, hak menu, **tautan user legacy per koneksi**,
-audit trail, cursor sync, dan password koneksi terenkripsi disimpan. Data bisnis aman di MS
-SQL; yang di sini tidak punya cadangan di mana pun. Tautan user khususnya adalah pekerjaan
-manual belasan baris per orang yang tak bisa direkonstruksi dari server mana pun.
+Basis data aplikasi adalah satu-satunya tempat akun, hak menu, **tautan user legacy per
+koneksi**, audit trail, cursor sync, dan password koneksi terenkripsi disimpan. Data bisnis
+aman di MS SQL; yang di sini tidak punya cadangan di mana pun.
 
 ```bash
 python manage.py backup_db --dir D:\backup\arunika --keep-days 30
 ```
 
-Jadwalkan harian lewat Windows Task Scheduler. Perintah ini memakai `VACUUM INTO`, bukan
-menyalin berkasnya — pada mode WAL, menyalin `db.sqlite3` saat server hidup menghasilkan
-salinan yang kehilangan transaksi yang belum ter-checkpoint.
+Jadwalkan harian lewat Windows Task Scheduler. Perintah ini menyesuaikan diri dengan mesinnya:
+
+- **SQLite** — `VACUUM INTO`, bukan menyalin berkasnya. Pada mode WAL, menyalin `db.sqlite3`
+  saat server hidup menghasilkan salinan yang kehilangan transaksi yang belum ter-checkpoint.
+- **MS SQL** — `BACKUP DATABASE ... WITH INIT`. **Berkasnya ditulis di mesin SQL Server, bukan
+  di mesin yang menjalankan perintah ini**; `--dir` diartikan oleh SQL Server dan akun
+  layanannya yang harus punya izin tulis di sana. Kalau folder itu tak terjangkau dari mesin
+  ini, pemangkasan retensi dilewati dan perintahnya mengatakan begitu. `COMPRESSION` sengaja
+  tidak dipakai karena SQL Server Express tidak mendukungnya.
+
+Mesin selain keduanya **ditolak dengan galat**, bukan dilewati diam-diam — cadangan yang gagal
+tanpa suara persis sama buruknya dengan tidak ada cadangan.
 
 **`POS_FERNET_KEY` tidak ikut tercadang, dan harus disalin terpisah.** Tanpa kuncinya, ke-14
 password koneksi di dalam cadangan tetap terenkripsi selamanya — cadangan yang lengkap tapi
@@ -200,7 +257,7 @@ tak bisa dipakai memulihkan apa pun.
 Get-NetTCPConnection -LocalPort 8000 -ErrorAction Stop | Where-Object {$_.State -eq 'Listen'} | Foreach-Object {Stop-Process -Id $_.OwningProcess -Force}
 ```
 
-**SQLite "database is locked"**:
+**SQLite "database is locked"** (hanya berlaku selama `POS_APP_DB_ENGINE=sqlite`):
 Rare (WAL + SESSION_SAVE_EVERY_REQUEST=False mitigate). Restart layanannya. **Jangan menghapus
 `db.sqlite3-wal` / `db.sqlite3-shm`** — pada mode WAL kedua berkas itu memuat transaksi yang
 sudah ter-commit tapi belum ter-checkpoint, jadi menghapusnya membuang data yang sudah

@@ -2,6 +2,11 @@ Django>=5.0,<6.0
 inertia-django>=1.0
 django-vite>=3.0
 pyodbc>=5.1
+# Backend Django untuk MS SQL — dipakai saat POS_APP_DB_ENGINE=mssql, yaitu
+# ketika basis data aplikasi (akun, ServerProfile, TautanUser, log) pindah dari
+# SQLite ke MS SQL. Resmi Microsoft; mendukung Django 3.2-6.1 lewat ODBC Driver
+# 17/18. Tidak dipakai sama sekali selama engine masih sqlite.
+mssql-django>=1.5
 bcrypt>=4.1
 cryptography>=42.0
 python-dotenv>=1.0

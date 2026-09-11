@@ -2,8 +2,10 @@
 Django settings for the POS Multi-Server app (admin panel).
 
 Django + Inertia + Vite over a legacy MS SQL Server dataset. App-local state
-(auth, sessions, logs, connection profiles) lives in SQLite; all business data
-is read from MS SQL via raw pyodbc in each app's services.py.
+(auth, sessions, logs, connection profiles) lives in the "pangkal" database
+configured from .env — SQLite by default, MS SQL in production (see DATABASES
+below). All business data is read from MS SQL via raw pyodbc in each app's
+services.py.
 """
 import ipaddress
 import os
@@ -89,13 +91,60 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-# Local app DB (PRD §5: SQLite for auth/config). Default unused in this phase.
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+# --- Basis data aplikasi (koneksi PANGKAL) ---------------------------------
+#
+# Di sinilah ke-16 model app-local tinggal: akun, sesi, `ServerProfile`,
+# `TautanUser`, `ActivityLog`, seluruh cursor & snapshot, `InfoPerusahaan`.
+#
+# Kenapa dari .env dan bukan dari `ServerProfile` seperti server bisnis:
+# `ServerProfile` justru MENYIMPAN cara menyambung ke server-server itu. Kalau
+# ia sendiri hanya bisa dibaca lewat sebuah profil, tak ada yang bisa dibaca
+# pertama kali. Satu koneksi pangkal di .env memutus lingkaran itu; profil
+# cabang yang lain jadi baris biasa di dalamnya.
+#
+# SQLite masih default — klon baru, mesin pengembang, dan `manage.py test`
+# tetap jalan tanpa server apa pun. Produksi menaikkannya ke MS SQL dengan
+# POS_APP_DB_ENGINE=mssql; prosedur pemindahan datanya ada di PRODUCTION.md
+# dan WAJIB diawali `dumpdata` (`TautanUser` tak bisa direkonstruksi dari
+# server mana pun).
+_APP_DB_ENGINE = os.environ.get("POS_APP_DB_ENGINE", "sqlite").strip().lower()
+
+if _APP_DB_ENGINE in ("mssql", "sqlserver"):
+    from django.core.exceptions import ImproperlyConfigured
+
+    _wajib = ("POS_APP_DB_HOST", "POS_APP_DB_NAME")
+    _kosong = [k for k in _wajib if not os.environ.get(k)]
+    if _kosong:
+        raise ImproperlyConfigured(
+            f"POS_APP_DB_ENGINE={_APP_DB_ENGINE} tapi {', '.join(_kosong)} belum diisi "
+            "di .env. Lihat .env.example."
+        )
+    DATABASES = {
+        "default": {
+            "ENGINE": "mssql",
+            "NAME": os.environ["POS_APP_DB_NAME"],
+            "HOST": os.environ["POS_APP_DB_HOST"],
+            "PORT": os.environ.get("POS_APP_DB_PORT", ""),
+            "USER": os.environ.get("POS_APP_DB_USER", ""),
+            "PASSWORD": os.environ.get("POS_APP_DB_PASSWORD", ""),
+            "OPTIONS": {
+                # Sengaja disamakan dengan driver yang sudah dipakai jalur pyodbc
+                # di core/mssql.py. mssql-django default-nya Driver 18 dengan
+                # fallback ke 17; menyebutnya eksplisit membuat satu mesin tidak
+                # diam-diam memakai dua driver berbeda.
+                "driver": os.environ.get(
+                    "POS_APP_DB_DRIVER", "ODBC Driver 17 for SQL Server"
+                ),
+            },
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
 
 # --- Auth (PRD §4, §8.1) ---------------------------------------------------
 AUTH_USER_MODEL = "auth_app.User"
