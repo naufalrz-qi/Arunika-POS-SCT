@@ -44,24 +44,45 @@ tabel Arunika sendiri -- bukan bagian dari kontrak yang dilihat pembaca. Itulah
 sebabnya view untuk mode Arunika pun ada: ia menjoin `kota` untuk memunculkan
 `kota_kode`, sehingga kedua mode menyajikan kolom yang persis sama.
 
-## RTRIM bukan kosmetik
+## RTRIM: pada `char`, TIDAK pada `varchar`
 
-Kunci legacy bertipe `char(6)`, yang dipadatkan spasi. Terbukti di server uji:
-kode pemasok yang sebenarnya `'01'` tersimpan sebagai `'01    '`. SQL Server
-menganggap keduanya sama (ia mengabaikan spasi ekor); kunci dict Python tidak.
-Repo ini sudah punya `_k()` di `apps/inventory/services.py` justru karena
-ketidakcocokan seperti itu pernah menjatuhkan baris tanpa suara.
+Kunci legacy ada dua jenis, dan perlakuannya berbeda karena artinya berbeda:
 
-`RTRIM` diterapkan pada **setiap kolom KELUARAN** yang berupa kode, termasuk
-yang hari ini bertipe `varchar` dan karenanya tak butuh (mis. `m_kota.kd_telp`).
-Itu bukan kelalaian: memutuskan per kolom mana yang `char` berarti menyimpan
-pengetahuan tentang skema yang BUKAN MILIK KITA dan bisa diubah vendor kapan
-saja. Aturan seragam bertahan terhadap perubahan itu; daftar per-kolom tidak.
+* **`char(n)`** dipadatkan spasi oleh mesin. Kode pemasok yang sebenarnya `'01'`
+  tersimpan sebagai `'01    '`; SQL Server menganggap keduanya sama, kunci dict
+  Python tidak. Kolom seperti ini **di-RTRIM**. Bukan hipotesis: di grosirPusat
+  `t_penjualan.kd_voucher` benar-benar berspasi ekor pada **277.070 dari 474.595
+  baris** (penanda `V1`/`V2` yang cuma 2 huruf di kolom `char(6)`), dan
+  `m_supplier.kd_supplier` pada 150 dari 517 baris di testGUdang.
+* **`varchar(n)`** tidak pernah dipadatkan mesin. Spasi ekor di sana adalah DATA
+  yang memang ditulis aplikasi, dan membuangnya berarti mengubah data. Kolom
+  seperti ini **tidak di-RTRIM**: `kd_customer`, `no_transaksi`, `kd_barang`,
+  `kd_telp`.
 
-Predikat join **tidak** di-RTRIM, dan itu disengaja: perbandingan `char` di SQL
+**Modul ini semula memakai aturan seragam: RTRIM semua kolom kode, termasuk yang
+`varchar`.** Alasannya masuk akal -- memutuskan per kolom berarti menyimpan
+pengetahuan tentang skema yang bukan milik kita. Yang membatalkannya bukan selera
+melainkan pengukuran: `RTRIM(kolom) = ?` **tidak bisa dipakai menyeek indeks**,
+jadi tiap penyaring berbasis kode berhenti menyaring dan berubah jadi pemindaian.
+Proyeksi kolom yang persis sama di grosirPusat, lewat `arunika_src.penjualan`:
+
+    penyaring `tanggal` satu hari (tak ber-RTRIM)    0,01 dtk     299 baris
+    penyaring `pelanggan_kode` ber-RTRIM             2,72 dtk     885 baris
+    penyaring `pelanggan_kode` tanpa RTRIM           0,03 dtk     885 baris
+
+Yang tengah memulangkan LEBIH SEDIKIT baris dari pekerjaan ratusan kali lebih
+besar. Panel detail Klasifikasi Pelanggan turun **1,81 -> 0,10 dtk** (favorit)
+dan **2,26 -> 0,01 dtk** (nota) hanya karena baris ketiga.
+
+Aturan barunya tetap aturan, bukan daftar: ia ditentukan TIPE kolom, bukan nama.
+Dan kalau vendor suatu hari mengubah sebuah `varchar` jadi `char`, pertahanannya
+sudah ada di tempat yang benar -- `_k()` di `apps/inventory/services.py`, yang
+memang lahir karena ketidakcocokan kunci seperti itu pernah menjatuhkan baris
+tanpa suara.
+
+Predikat join **tidak** di-RTRIM, dan itu tak berubah: perbandingan `char` di SQL
 Server sudah mengabaikan spasi ekor, sementara membungkus kolom dengan fungsi
-justru membatalkan index seek. Yang berbahaya hanyalah nilai yang KELUAR lalu
-dipakai sebagai kunci di Python.
+justru membatalkan index seek -- persis masalah yang baru saja diukur di atas.
 
 Hak Cipta (c) 2026 Naufal Rifqi Zuhrian. Lihat LICENSE.
 """
@@ -107,7 +128,7 @@ _MASTER: dict[str, dict] = {
     "negara": _referensi("m_negara", "kd_negara", "negara"),
     "kota": {
         "kolom": ["kode", "nama", "kode_telepon", "negara_kode", "aktif"],
-        "legacy": "SELECT RTRIM(kd_kota), nama, RTRIM(kd_telp), RTRIM(kd_negara), "
+        "legacy": "SELECT RTRIM(kd_kota), nama, kd_telp, RTRIM(kd_negara), "
                   "CASE WHEN status = 1 THEN 1 ELSE 0 END FROM {db}.dbo.m_kota",
         "arunika": "SELECT k.kode, k.nama, k.kode_telepon, n.kode, CAST(k.aktif AS int) "
                    "FROM dbo.kota k LEFT JOIN dbo.negara n ON n.id = k.negara_id",
@@ -124,7 +145,7 @@ _MASTER: dict[str, dict] = {
         # `limit_kredit` -> batas_piutang, `disc` -> diskon_persen. Tempo
         # pembayaran TIDAK dipetakan: `m_customer` punya 19 kolom dan tak satu
         # pun menyimpannya (lihat catatan di model Pelanggan).
-        "legacy": "SELECT RTRIM(kd_customer), nama, alamat, RTRIM(kd_kota), telepon, hp, email, "
+        "legacy": "SELECT kd_customer, nama, alamat, RTRIM(kd_kota), telepon, hp, email, "
                   "kontak, keterangan, limit_kredit, disc, "
                   "CASE WHEN status = 1 THEN 1 ELSE 0 END FROM {db}.dbo.m_customer",
         "arunika": "SELECT p.kode, p.nama, p.alamat, k.kode, p.telepon, p.hp, p.email, "
@@ -204,7 +225,7 @@ _MASTER: dict[str, dict] = {
         # menggandakan barisnya. Faktornya sama-sama 1, jadi pilih satu -- cara
         # yang PERSIS sama dengan blok [0] `_movement_sql`. Berbeda sedikit saja
         # di sini, stok dan katalog akan bercabang tanpa satu pun galat.
-        "legacy": "SELECT RTRIM(b.kd_barang), b.nama, b.keterangan, RTRIM(b.kd_merk), "
+        "legacy": "SELECT b.kd_barang, b.nama, b.keterangan, RTRIM(b.kd_merk), "
                   "RTRIM(b.kd_kategori), RTRIM(b.kd_model), RTRIM(b.kd_warna), "
                   "RTRIM(b.kd_jenis_bahan), "
                   "(SELECT MIN(RTRIM(bs.kd_satuan)) FROM {db}.dbo.m_barang_satuan bs "
@@ -296,8 +317,8 @@ _MASTER: dict[str, dict] = {
         # tetap benar dan terbaca. Diperiksa: selisih SUM(d.total) terhadap
         # GetTotalPenjualan persis sebesar diskon tingkat-nota (540.000 - 539.500
         # = 500 = diskon_uang), jadi `d.total` = nilai baris SESUDAH diskon baris.
-        "legacy": "SELECT RTRIM(d.no_transaksi), h.tanggal, RTRIM(h.kd_divisi), "
-                  "RTRIM(d.kd_barang), RTRIM(d.kd_satuan), d.qty, d.harga_jual, d.total "
+        "legacy": "SELECT d.no_transaksi, h.tanggal, RTRIM(h.kd_divisi), "
+                  "d.kd_barang, RTRIM(d.kd_satuan), d.qty, d.harga_jual, d.total "
                   "FROM {db}.dbo.t_penjualan_detail d "
                   "INNER JOIN {db}.dbo.t_penjualan h ON h.no_transaksi = d.no_transaksi",
         "arunika": "SELECT p.nomor, p.tanggal, dv.kode, b.kode, s.kode, pb.qty, pb.harga, pb.total "
@@ -311,13 +332,32 @@ _MASTER: dict[str, dict] = {
         "kolom": ["barang_kode", "satuan_kode", "isi", "harga_jual"],
         # `jumlah` -> isi. Nama legacy itu berkali-kali terbaca sebagai kuantitas
         # stok, padahal artinya berapa satuan dasar di dalam satu satuan ini.
-        "legacy": "SELECT RTRIM(kd_barang), RTRIM(kd_satuan), jumlah, harga_jual "
+        "legacy": "SELECT kd_barang, RTRIM(kd_satuan), jumlah, harga_jual "
                   "FROM {db}.dbo.m_barang_satuan",
         "arunika": "SELECT b.kode, s.kode, bs.isi, bs.harga_jual "
                    "FROM dbo.barang_satuan bs "
                    "INNER JOIN dbo.barang b ON b.id = bs.barang_id "
                    "INNER JOIN dbo.satuan s ON s.id = bs.satuan_id",
     },
+}
+
+# Kolom kode yang SENGAJA tidak di-RTRIM, dengan sumber legacy-nya.
+#
+# Ditulis eksplisit supaya menghapus satu `RTRIM` lagi tak bisa jadi kelalaian:
+# ia harus lewat sini dulu. Nilainya dipakai dua arah --
+# `test_master_src` memastikan tak ada kolom kode LAIN yang kehilangan RTRIM-nya,
+# dan `manage.py cek_arunika` memeriksa tiap sumber di bawah memang masih
+# `varchar` di server sungguhan. Kalau vendor mengubahnya jadi `char`, pemeriksa
+# itu yang memberi tahu -- bukan baris yang diam-diam hilang dari laporan.
+TANPA_RTRIM = {
+    ("kota", "kode_telepon"): ("m_kota", "kd_telp"),
+    ("pelanggan", "kode"): ("m_customer", "kd_customer"),
+    ("barang", "kode"): ("m_barang", "kd_barang"),
+    ("barang_satuan", "barang_kode"): ("m_barang_satuan", "kd_barang"),
+    ("penjualan", "nomor"): ("t_penjualan", "no_transaksi"),
+    ("penjualan", "pelanggan_kode"): ("t_penjualan", "kd_customer"),
+    ("penjualan_baris", "penjualan_nomor"): ("t_penjualan_detail", "no_transaksi"),
+    ("penjualan_baris", "barang_kode"): ("t_penjualan_detail", "kd_barang"),
 }
 
 MODE = ("legacy", "arunika")

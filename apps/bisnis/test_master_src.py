@@ -113,11 +113,22 @@ class JebakanYangSudahTerbukti(SimpleTestCase):
             spec = master_src._MASTER[nama]
             kolom_kode = [k for k in spec["kolom"]
                           if k == "kode" or k.endswith("_kode") or k.endswith("nomor")]
+            dikecualikan = [k for k in kolom_kode if (nama, k) in master_src.TANPA_RTRIM]
             n = master_src.badan_legacy(nama, "X").count("RTRIM(")
             self.assertGreaterEqual(
-                n, len(kolom_kode),
-                f"{nama}: {len(kolom_kode)} kolom kode tapi hanya {n} RTRIM",
+                n, len(kolom_kode) - len(dikecualikan),
+                f"{nama}: {len(kolom_kode)} kolom kode, {len(dikecualikan)} dikecualikan "
+                f"di TANPA_RTRIM, tapi hanya {n} RTRIM",
             )
+
+    def test_pengecualian_rtrim_harus_didaftarkan(self):
+        """Menghapus satu RTRIM lagi tak boleh jadi kelalaian: `TANPA_RTRIM`
+        hanya boleh menyebut kolom yang benar-benar ada di bentuk baca."""
+        for (entitas, kolom), (tabel, _kol) in master_src.TANPA_RTRIM.items():
+            self.assertIn(entitas, master_src.daftar(), f"entitas asing: {entitas}")
+            self.assertIn(kolom, master_src._MASTER[entitas]["kolom"],
+                          f"{entitas}: kolom {kolom} tak ada di bentuk baca")
+            self.assertTrue(tabel.startswith(("m_", "t_")), f"sumber aneh: {tabel}")
 
 
 class ModeArunika(SimpleTestCase):

@@ -735,15 +735,48 @@ Baris kedua tampak baik-baik saja hanya karena tanggalnya yang menyaring, bukan 
 Panel detail memakai rentang pilihan pengguna (bawaan 730 hari), jadi ongkosnya **sebanding
 periode, bukan sebanding satu pelanggan** — dan di situlah 2 dtik itu.
 
-Ini keputusan lintas-laporan, bukan perbaikan satu berkas: **bolehkah view adapter memulangkan
-kolom kunci tanpa `RTRIM`?** `master_src` memilih `RTRIM` dengan alasan yang benar — nilai yang
-keluar lalu dipakai sebagai kunci dict Python harus rapi, sebab SQL Server mengabaikan spasi ekor
-sementara Python tidak. Tapi basis kode ini **sudah punya** `_k()` untuk persis itu
-(`CLAUDE.md` § key normalization). Memindahkan perapian dari SQL ke Python akan membuat tiap
-kunci bisa di-seek lagi, dengan ongkos: tiap pembaca baru wajib ingat memanggil `_k()`.
+### Keputusannya: `RTRIM` pada `char`, tidak pada `varchar`
 
-Belum diputuskan. Yang sudah pasti: selama `RTRIM` ada di sana, **tak satu pun penyaring kunci
-di bentuk Arunika bekerja sebagai penyaring** — ia cuma menyaring hasil pemindaian.
+Pertanyaannya tampak seperti pilihan selera — rapi vs cepat. Ternyata bukan, dan yang
+menyelesaikannya satu pemeriksaan tipe kolom. Kunci legacy ada **dua jenis**:
+
+| Jenis | Dipadatkan mesin? | Spasi ekor artinya | Keputusan |
+|---|---|---|---|
+| `char(n)` | ya | artefak penyimpanan | **RTRIM** |
+| `varchar(n)` | tidak pernah | **data yang memang ditulis aplikasi** | jangan RTRIM |
+
+Jadi `RTRIM` pada `varchar` bukan sekadar mahal — ia **salah**: ia membuang karakter yang benar-
+benar ada di data. Dan yang mahal itu hanya kolom-kolom `varchar`, karena justru merekalah kunci
+utama yang dipakai untuk pencarian titik: `kd_customer`, `no_transaksi`, `kd_barang`.
+
+Bahwa `RTRIM` tetap perlu pada `char` juga terukur, bukan hipotesis: `t_penjualan.kd_voucher`
+benar-benar berspasi ekor pada **277.070 dari 474.595 baris** grosirPusat (penanda `V1`/`V2`
+yang cuma dua huruf di kolom `char(6)`), dan `m_supplier.kd_supplier` pada 150 dari 517 baris
+testGUdang — kasus `'01'` → `'01    '` yang sudah dicatat sejak awal.
+
+Hasilnya:
+
+| | sebelum | sesudah |
+|---|---|---|
+| penyaring `pelanggan_kode` (proyeksi kolom uang) | 2,72 dtk | **0,03 dtk** |
+| panel detail — favorit satu pelanggan | 1,81 dtk | **0,10 dtk** |
+| panel detail — nota satu pelanggan | 2,26 dtk | **0,01 dtk** (sama dengan legacy) |
+
+Kelima laporan yang sudah pindah tetap identik di kedua server.
+
+**Aturan lama sengaja seragam, dan itu bukan kelalaian yang diperbaiki — itu pertukaran yang
+berubah karena harganya baru terukur.** Alasan aslinya kuat: memutuskan per kolom berarti
+menyimpan pengetahuan tentang skema milik vendor, yang bisa berubah. Dua hal menjawabnya:
+
+1. Aturan barunya tetap **aturan**, ditentukan tipe kolom, bukan daftar nama.
+2. Pengecualiannya tetap ditulis eksplisit (`master_src.TANPA_RTRIM`, 8 kolom) dan
+   **diperiksa terhadap server sungguhan** oleh `manage.py cek_arunika` langkah [5]: kalau
+   vendor mengubah salah satu `varchar` jadi `char`, pemeriksa itu yang memberi tahu — bukan
+   baris yang diam-diam hilang dari laporan berbulan-bulan kemudian.
+
+Pertahanan lapis terakhirnya sudah ada sejak dulu di tempat yang benar: `_k()` di
+`apps/inventory/services.py`, yang memang lahir karena ketidakcocokan kunci seperti itu pernah
+menjatuhkan baris tanpa suara.
 
 ## 7.6 Laporan keempat, dan satu angka yang memang berbeda
 

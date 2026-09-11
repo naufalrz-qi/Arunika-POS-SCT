@@ -281,7 +281,7 @@ def badan_penjualan(db_legacy: str) -> str:
             "Bentuknya berubah; perbarui adapter ini alih-alih menebak."
         )
     return (
-        "SELECT RTRIM(n.no_transaksi), n.tanggal, RTRIM(n.kd_divisi), RTRIM(n.kd_customer), "
+        "SELECT n.no_transaksi, n.tanggal, RTRIM(n.kd_divisi), n.kd_customer, "
         # Dipulangkan APA ADANYA, penanda "tanpa voucher" sekalipun (`V1`, `V2`,
         # `VAA000`). Memetakannya ke NULL akan terasa lebih rapi dan langsung
         # memecah laporan Voucher: di sana "dipakai" dihitung sebagai

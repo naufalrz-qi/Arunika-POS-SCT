@@ -145,6 +145,36 @@ class Command(BaseCommand):
                     "(voucher; keputusan akuntansi yang belum diambil, bukan galat)"
                 )
 
+            # [5] Kebijakan RTRIM. Kolom di `TANPA_RTRIM` sengaja dipulangkan
+            # mentah karena sumbernya `varchar` -- yang tak pernah dipadatkan
+            # mesin, sehingga RTRIM di sana cuma mematikan index seek (terukur
+            # 2,72 -> 0,03 dtk). Kalau vendor mengubah salah satunya jadi `char`,
+            # nilainya mulai berspasi ekor dan kunci dict Python berhenti cocok
+            # -- baris hilang dari laporan tanpa satu pun galat. Diperiksa di
+            # sini, bukan ditunggu.
+            salah_tipe = []
+            for (entitas, kolom), (tabel, kol) in master_src.TANPA_RTRIM.items():
+                lc.execute(
+                    "SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+                    "WHERE TABLE_NAME = ? AND COLUMN_NAME = ?", [tabel, kol]
+                )
+                r = lc.fetchone()
+                if not r:
+                    salah_tipe.append(f"{tabel}.{kol} tak ada")
+                elif r[0] not in ("varchar", "nvarchar"):
+                    salah_tipe.append(
+                        f"{tabel}.{kol} kini {r[0]} -- {entitas}.{kolom} butuh RTRIM lagi"
+                    )
+            if salah_tipe:
+                beda.extend(salah_tipe)
+                self.stdout.write(self.style.ERROR(
+                    f"  [5] kebijakan RTRIM: {len(salah_tipe)} sumber berubah tipe"))
+            else:
+                self.stdout.write(
+                    f"  [5] kebijakan RTRIM: {len(master_src.TANPA_RTRIM)} kolom "
+                    "tanpa RTRIM, sumbernya masih varchar"
+                )
+
         if beda:
             raise CommandError("TIDAK COCOK:\n  - " + "\n  - ".join(beda))
         self.stdout.write(self.style.SUCCESS("OK: bentuk Arunika cocok dengan sumber legacy."))
