@@ -666,9 +666,84 @@ Tiga sisanya terhalang **kolom**, bukan tabel — kelasnya lebih murah:
 * **Laporan Voucher** — ~~butuh `voucher_kode`~~ **selesai, lihat §7.6.**
 * **Master Produk** — butuh `ukuran`, `pabrik`, `status_pinjam` di `arunika_src.barang`, dan
   ketiganya ternyata **bukan penambahan kolom biasa** — lihat §7.6.
-* **Klasifikasi Pelanggan** — kolomnya lengkap, tapi layar itu **bukan `_report_view`**: ia
-  kolumnar dengan export dua-sheet sendiri, jadi `inner_arunika` di spec-nya tak akan pernah
-  dibaca. Memindahkannya berarti menyentuh `tx.klasifikasi_kolumnar`, bukan menambah satu spec.
+* **Klasifikasi Pelanggan** — ~~bukan `_report_view`~~ **selesai, lihat §7.7.**
+
+## 7.7 Laporan kelima: satu layar, enam kueri, tiga rute
+
+Klasifikasi Pelanggan bukan "satu laporan lagi". Ia tak punya satu `inner` untuk diganti:
+
+| Rute | Kueri |
+|---|---|
+| Layar (kolumnar) | agregat per pelanggan |
+| Export (2 sheet) | agregat yang sama + favorit massal |
+| Panel detail (JSON) | profil pelanggan, favorit satu orang, nota terakhir |
+
+Kelimanya pindah sekaligus, dan itu syarat bukan preferensi: memindahkan yang di layar saja tak
+memunculkan galat apa pun — ia cuma membuat **layar membaca bentuk baru sementara file Excel
+membaca yang lama**, dari dua kueri yang tak pernah dibandingkan siapa pun. Yang paling mudah
+tertinggal justru `profil_pelanggan`: di jalur lama ia `SELECT` mentah ke `m_customer` yang
+ditulis langsung di dalam view, satu-satunya rujukan legacy layar ini yang tak lewat
+`reports.py`.
+
+Gerbangnya juga beda bentuk. `inner_arunika` hanya dibaca `_report_view`, jadi memasangnya di
+spec ini akan menyesatkan — ada test yang menahannya. Yang dipakai `_arunika_siap(profile)`:
+dua syarat yang tak bergantung laporan (saklar env + profil punya database Arunika).
+
+**`jenis_bayar` akhirnya ada.** Panel detail menampilkan Kredit/Tunai/Lunas, dan di legacy
+ketiganya tinggal di `t_penjualan.status` — kolom yang sama yang orang kira penanda batal.
+§5.E sudah mencantumkan `jenis_bayar` sejak awal; sekarang ia benar-benar ada, **terpisah** dari
+`status`, sehingga nota batal punya tempatnya sendiri dan penjualan kredit tak pernah salah
+dilabeli.
+
+### Hasil: identik, dan layar utamanya justru 2× lebih cepat
+
+grosirPusat, rentang dua tahun (2024–2025):
+
+| Kueri | legacy | Arunika | |
+|---|---|---|---|
+| agregat utama (3.937 baris) | 6,85 dtk | **3,30 dtk** | identik |
+| favorit massal (18.588 baris) | 14,62 dtk | 16,24 dtk | identik |
+| favorit satu pelanggan | 0,05 dtk | 1,81 dtk | identik |
+| nota satu pelanggan | 0,01 dtk | 2,26 dtk | identik |
+| profil pelanggan | 0,00 dtk | 0,00 dtk | identik |
+
+testGUdang identik di kelimanya.
+
+> **Jebakan saat memverifikasinya.** Favorit massal semula terbaca "2.595 baris berbeda" padahal
+> isinya sama persis. Sebabnya `ORDER BY y.customer, y.rn` — dan **ribuan pelanggan bernama
+> kosong**, sehingga urutan antar-mereka tak ditentukan apa pun. Diurut ulang menurut kunci,
+> keduanya 18.588 baris identik. Ini cacat jalur lama juga: urutan baris sheet kedua file Excel
+> tidak reproducible. Sengaja belum diubah di sini — memperbaikinya berarti mengubah urutan file
+> yang sudah dipakai orang, dan itu perubahan tersendiri.
+
+### Temuan 3: `RTRIM` di kolom kunci membuat penyaring kehilangan gunanya
+
+Panel detail 2 dtk per klik, dan sebabnya bukan apa yang kelihatan. Kolom kunci di view
+ber-`RTRIM` (`pelanggan_kode` = `RTRIM(kd_customer)`), dan `RTRIM(kolom) = ?` **tidak bisa
+dipakai menyeek indeks**. Proyeksi kolom yang persis sama di grosirPusat:
+
+| Penyaring | Waktu | Baris |
+|---|---|---|
+| `tanggal` satu hari (tak ber-RTRIM) | 0,01 dtk | 299 |
+| `divisi_kode` + `tanggal` satu hari | 0,01 dtk | 299 |
+| `pelanggan_kode` saja (ber-RTRIM) | **2,72 dtk** | 885 |
+
+Baris terakhir memulangkan **lebih sedikit** baris dari pekerjaan ~270× lebih besar. Artinya
+selektivitas seluruhnya datang dari rentang tanggal; kunci ber-`RTRIM` tidak menyumbang apa pun.
+Baris kedua tampak baik-baik saja hanya karena tanggalnya yang menyaring, bukan divisinya.
+
+Panel detail memakai rentang pilihan pengguna (bawaan 730 hari), jadi ongkosnya **sebanding
+periode, bukan sebanding satu pelanggan** — dan di situlah 2 dtik itu.
+
+Ini keputusan lintas-laporan, bukan perbaikan satu berkas: **bolehkah view adapter memulangkan
+kolom kunci tanpa `RTRIM`?** `master_src` memilih `RTRIM` dengan alasan yang benar — nilai yang
+keluar lalu dipakai sebagai kunci dict Python harus rapi, sebab SQL Server mengabaikan spasi ekor
+sementara Python tidak. Tapi basis kode ini **sudah punya** `_k()` untuk persis itu
+(`CLAUDE.md` § key normalization). Memindahkan perapian dari SQL ke Python akan membuat tiap
+kunci bisa di-seek lagi, dengan ongkos: tiap pembaca baru wajib ingat memanggil `_k()`.
+
+Belum diputuskan. Yang sudah pasti: selama `RTRIM` ada di sana, **tak satu pun penyaring kunci
+di bentuk Arunika bekerja sebagai penyaring** — ia cuma menyaring hasil pemindaian.
 
 ## 7.6 Laporan keempat, dan satu angka yang memang berbeda
 

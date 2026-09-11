@@ -108,7 +108,7 @@ KLASIFIKASI_COLS = [
 ]
 
 
-def klasifikasi_kolumnar(profile, f) -> dict:
+def klasifikasi_kolumnar(profile, f, arunika: bool = False) -> dict:
     """Seluruh baris klasifikasi pelanggan dalam bentuk kolom-mayor.
 
     Halaman ini mengirim SATU payload berisi semua pelanggan supaya pencarian
@@ -120,12 +120,22 @@ def klasifikasi_kolumnar(profile, f) -> dict:
     Ambang segmen TIDAK bisa dihitung ulang di klien: ia bagian dari SQL, dan
     menduplikasinya ke JavaScript berarti dua definisi yang bisa menyimpang —
     termasuk menyimpang dari file Excel, yang tetap dibuat server.
+
+    `arunika` diputuskan pemanggil, bukan di sini: gerbangnya (saklar env +
+    profil punya database Arunika) hidup di `monitoring.views`, dan modul
+    layanan tidak boleh mengimpor balik dari view. Bentuk Arunika dibaca dari
+    database pendamping, jadi ia tak punya replica untuk di-fallback-i.
     """
     from apps.inventory.services import _kolumnar  # kamus + tipe kolom, satu definisi
     from apps.transactions import reports as rpt
 
-    inner, params = rpt.klasifikasi_pelanggan(f)
-    with mssql.report_cursor(profile) as cur:
+    if arunika:
+        inner, params = rpt.klasifikasi_pelanggan_arunika(f)
+        buka = mssql.arunika_cursor
+    else:
+        inner, params = rpt.klasifikasi_pelanggan(f)
+        buka = mssql.report_cursor
+    with buka(profile) as cur:
         cur.execute(f"SELECT * FROM ({inner}) AS q ORDER BY q.segmen_urut, q.customer", params)
         rows = _dictify(cur)
 

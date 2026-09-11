@@ -2112,3 +2112,188 @@ def voucher_arunika(f):
         f"WHERE {' AND '.join(where)}"
     )
     return inner, params
+
+
+# --- Klasifikasi Pelanggan di atas bentuk Arunika --------------------------
+#
+# Layar ini BUKAN `_report_view`: ia kolumnar, export-nya dua sheet, dan panel
+# detailnya punya rutenya sendiri. Akibatnya `inner_arunika` di spec tak akan
+# pernah dibaca -- lihat `test_laporan_arunika.DibacaOlehLayarnya`. Yang dipakai
+# adalah keempat fungsi di bawah, dipilih langsung oleh view-nya.
+#
+# Keempatnya harus pindah SEKALIGUS. Memindahkan yang di layar saja tidak
+# memunculkan galat apa pun; ia cuma membuat layar membaca bentuk baru sementara
+# file Excel-nya membaca yang lama, dari dua kueri yang tak pernah dibandingkan
+# siapa pun.
+#
+# ## Ongkos panel detail: SEBANDING PERIODE, bukan sebanding satu pelanggan
+#
+# Kolom kunci di view ber-`RTRIM` (`pelanggan_kode` = `RTRIM(kd_customer)`),
+# dan `RTRIM(kolom) = ?` tidak bisa dipakai menyeek indeks. Akibatnya penyaring
+# pelanggan TIDAK menyumbang selektivitas apa pun; yang menyaring hanya rentang
+# tanggal. Terukur di grosirPusat, proyeksi kolom yang sama persis:
+#
+#     tanggal SATU HARI (tak ber-RTRIM)    0,01 dtk   299 baris
+#     divisi_kode + tanggal SATU HARI      0,01 dtk   299 baris
+#     pelanggan_kode saja (ber-RTRIM)      2,72 dtk   885 baris
+#
+# Baris ketiga memulangkan LEBIH SEDIKIT baris dari pekerjaan 270x lebih besar.
+# Karena panel detail memakai rentang yang dipilih pengguna (bawaan 730 hari),
+# tiap klik baris memakan ~2 dtk di sini vs ~0,04 dtk di jalur lama.
+#
+# Bukan sesuatu yang bisa diperbaiki di berkas ini: yang menentukan adalah
+# apakah view adapter boleh memulangkan kolom kunci TANPA `RTRIM` dan
+# menyerahkan perapian ke `_k()` di Python (yang memang sudah ada untuk itu).
+# Itu keputusan lintas-laporan; lihat dokumen rancangan Sec 7.7.
+
+_FAVORIT_SELECT_ARUNIKA = (
+    "SELECT p.pelanggan_kode AS kd_customer, COALESCE(c.nama, '') AS customer, "
+    "pb.barang_kode AS kd_barang, COALESCE(b.nama, '') AS barang, "
+    "COALESCE(SUM(pb.qty), 0) AS qty, COALESCE(SUM(pb.total), 0) AS nilai, "
+    "COUNT(DISTINCT pb.penjualan_nomor) AS jml_nota, MAX(pb.tanggal) AS terakhir "
+    f"FROM {SRC}.penjualan_baris pb "
+    f"INNER JOIN {SRC}.penjualan p ON p.nomor = pb.penjualan_nomor "
+    f"LEFT JOIN {SRC}.pelanggan c ON c.kode = p.pelanggan_kode "
+    f"LEFT JOIN {SRC}.barang b ON b.kode = pb.barang_kode "
+)
+# `HAVING SUM(total) > 0` membuang bonus & pembungkus, persis seperti jalur lama
+# -- alasannya di `_FAVORIT_GROUP`. `pb.total` menggantikan `_line_net()`;
+# identitasnya diuji per baris, lihat `fmi_penjualan_arunika`.
+_FAVORIT_GROUP_ARUNIKA = (
+    " GROUP BY p.pelanggan_kode, c.nama, pb.barang_kode, b.nama"
+    " HAVING COALESCE(SUM(pb.total), 0) > 0"
+)
+
+
+def _favorit_where_arunika(f):
+    """Penyaring bersama kedua kueri favorit.
+
+    Tanggal & divisi disaring di `pb`, bukan lewat `p`: baris sudah membawa
+    keduanya, jadi penyaringnya tidak perlu menunggu view uang dihitung.
+    """
+    return _base_where_arunika(f, date_col="pb.tanggal", div_col="pb.divisi_kode")
+
+
+def _klasifikasi_grouped_arunika(f) -> tuple[str, list]:
+    """Padanan `_klasifikasi_grouped`.
+
+    Jauh lebih pendek, dan sebabnya sama dengan `penjualan_customer_arunika`:
+    nilai bersih per nota sudah jadi kolom (`p.total`), jadi subquery
+    `_nota_net()` yang harus disusun lalu di-join itu tidak ada lagi.
+
+    URUTAN PARAMETER tetap tidak intuitif dan tetap penting: kedua `?` DATEDIFF
+    ada di daftar SELECT, yang dirender SEBELUM klausa WHERE -- jadi kedua
+    tanggal acuan mendahului parameter penyaring, bukan sesudahnya.
+    """
+    where, params = _base_where_arunika(f)
+    _pseudo_where(where, params, "p.pelanggan_kode", "c.nama")
+    if f["search"]:
+        where.append("(c.nama LIKE ? OR p.pelanggan_kode LIKE ?)")
+        params.extend([f"%{f['search']}%"] * 2)
+
+    anchor = f["date_to"]
+    grouped = (
+        "SELECT p.pelanggan_kode AS kd_customer, COALESCE(c.nama, '') AS customer, "
+        "COALESCE(c.hp, '') AS hp, COALESCE(c.telepon, '') AS telepon, "
+        "COALESCE(kt.nama, '') AS kota, "
+        "COUNT(p.nomor) AS jml_nota, "
+        "COALESCE(SUM(p.total), 0) AS total_belanja, "
+        "COALESCE(SUM(p.total) / NULLIF(COUNT(p.nomor), 0), 0) AS rata_nota, "
+        "MIN(p.tanggal) AS nota_pertama, MAX(p.tanggal) AS nota_terakhir, "
+        "DATEDIFF(day, MAX(p.tanggal), ?) AS jeda_hari, "
+        "DATEDIFF(day, MIN(p.tanggal), ?) AS umur_hari "
+        f"FROM {SRC}.penjualan p "
+        f"LEFT JOIN {SRC}.pelanggan c ON c.kode = p.pelanggan_kode "
+        f"LEFT JOIN {SRC}.kota kt ON kt.kode = c.kota_kode "
+        f"WHERE {' AND '.join(where)} "
+        "GROUP BY p.pelanggan_kode, c.nama, c.hp, c.telepon, kt.nama"
+    )
+    return grouped, [anchor, anchor] + params
+
+
+def klasifikasi_pelanggan_arunika(f):
+    """Padanan `klasifikasi_pelanggan`. Ambang segmen dipakai bersama jalur lama
+    (`_segmen_case`) -- menyalinnya berarti dua definisi segmen yang bisa
+    menyimpang tanpa satu pun galat."""
+    grouped, params = _klasifikasi_grouped_arunika(f)
+    urut, label = _segmen_case(f)
+    besar, sedang = _amb(f, "tier_besar"), _amb(f, "tier_sedang")
+    tier = (
+        f"CASE WHEN g.rata_nota >= {besar} THEN 'Besar'"
+        f" WHEN g.rata_nota >= {sedang} THEN 'Sedang' ELSE 'Kecil' END"
+    )
+    inner = f"SELECT g.*, {urut} AS segmen_urut, {label} AS segmen, {tier} AS tier_nilai FROM ({grouped}) g"
+    return inner, params
+
+
+def barang_favorit_pelanggan_arunika(f, kd_customer: str, top_n: int = 20):
+    """Padanan `barang_favorit_pelanggan` (panel detail)."""
+    where, params = _favorit_where_arunika(f)
+    where.append("p.pelanggan_kode = ?")
+    params.append(kd_customer)
+    sql = (
+        f"SELECT TOP {int(top_n)} * FROM ({_FAVORIT_SELECT_ARUNIKA}"
+        f"WHERE {' AND '.join(where)}{_FAVORIT_GROUP_ARUNIKA}) x "
+        "ORDER BY x.qty DESC, x.kd_barang"
+    )
+    return sql, params
+
+
+def barang_favorit_massal_arunika(f, top_n: int = 5):
+    """Padanan `barang_favorit_massal` (sheet kedua export).
+
+    Sama seperti aslinya, ia TIDAK menyaring segmen/kota/kelas nilai: ketiganya
+    kolom turunan yang baru ada sesudah agregasi laporan utama. Caller yang
+    menyaringnya di Python atas himpunan kd_customer sheet pertama.
+    """
+    where, params = _favorit_where_arunika(f)
+    _pseudo_where(where, params, "p.pelanggan_kode", "c.nama")
+    if f["search"]:
+        where.append("(c.nama LIKE ? OR p.pelanggan_kode LIKE ?)")
+        params.extend([f"%{f['search']}%"] * 2)
+    ranked = (
+        "SELECT x.*, ROW_NUMBER() OVER (PARTITION BY x.kd_customer "
+        "ORDER BY x.qty DESC, x.kd_barang) AS rn "
+        f"FROM ({_FAVORIT_SELECT_ARUNIKA}WHERE {' AND '.join(where)}{_FAVORIT_GROUP_ARUNIKA}) x"
+    )
+    sql = (
+        f"SELECT {', '.join('y.' + c['key'] for c in FAVORIT_COLUMNS)} "
+        f"FROM ({ranked}) y WHERE y.rn <= {int(top_n)} "
+        "ORDER BY y.customer, y.rn"
+    )
+    return sql, params
+
+
+def nota_pelanggan_arunika(f, kd_customer: str, top_n: int = 20):
+    """Padanan `nota_pelanggan` (panel detail).
+
+    Kolom `status` di layar ini adalah CARA BAYAR, bukan batal-tidaknya nota.
+    Di legacy keduanya berbagi satu kolom `t_penjualan.status`; di bentuk baru
+    mereka dua kolom, dan yang dibaca di sini `jenis_bayar`. Labelnya dibentuk
+    di sini supaya view tetap memulangkan token, bukan teks layar.
+    """
+    where, params = _base_where_arunika(f)
+    where.append("p.pelanggan_kode = ?")
+    params.append(kd_customer)
+    sql = (
+        f"SELECT TOP {int(top_n)} p.nomor AS no_transaksi, p.tanggal, "
+        "CASE p.jenis_bayar WHEN 'kredit' THEN 'Kredit' WHEN 'tunai' THEN 'Tunai' "
+        "WHEN 'lunas' THEN 'Lunas' ELSE '' END AS status, "
+        "COALESCE(dv.nama, '') AS divisi, p.total AS nilai "
+        f"FROM {SRC}.penjualan p "
+        f"LEFT JOIN {SRC}.divisi dv ON dv.kode = p.divisi_kode "
+        f"WHERE {' AND '.join(where)} "
+        "ORDER BY p.tanggal DESC"
+    )
+    return sql, params
+
+
+def profil_pelanggan_arunika(kd_customer: str):
+    """Kepala panel detail. Di jalur lama ini `SELECT` mentah ke `m_customer`
+    yang ditulis langsung di view -- satu-satunya rujukan tabel legacy yang
+    tersisa di layar ini, dan yang paling gampang terlewat."""
+    return (
+        "SELECT kode AS kd_customer, nama, alamat, hp, telepon, email, "
+        "CASE WHEN aktif = 1 THEN 1 ELSE 0 END AS status "
+        f"FROM {SRC}.pelanggan WHERE kode = ?"
+    ), [kd_customer]

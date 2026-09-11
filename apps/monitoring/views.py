@@ -1933,17 +1933,24 @@ def _spec_filters(f, spec):
 LAPORAN_ARUNIKA = os.environ.get("ARUNIKA_LAPORAN", "0").lower() in ("1", "true", "yes", "on")
 
 
+def _arunika_siap(profile) -> bool:
+    """Dua syarat yang tak bergantung laporan: saklar env + profil punya
+    database Arunika.
+
+    Dipakai langsung oleh layar yang BUKAN `_report_view` — Klasifikasi
+    Pelanggan, yang kolumnar dengan export dua sheet dan panel detail sendiri,
+    jadi tak punya satu `inner` untuk diganti.
+    """
+    return bool(LAPORAN_ARUNIKA and mssql.punya_arunika(profile))
+
+
 def _pakai_bentuk_arunika(spec, profile) -> bool:
     """Tiga syarat, semuanya harus benar; kalau tidak, jalur legacy apa adanya.
 
     Spec yang belum punya `inner_arunika` otomatis tetap di jalur lama, jadi
     pemindahan bisa dilakukan satu laporan per satu tanpa menyentuh sisanya.
     """
-    return bool(
-        LAPORAN_ARUNIKA
-        and spec.get("inner_arunika")
-        and mssql.punya_arunika(profile)
-    )
+    return bool(spec.get("inner_arunika") and _arunika_siap(profile))
 
 
 def _report_view(spec):
@@ -3338,9 +3345,14 @@ def klasifikasi_pelanggan(request):
         if not profile:
             return {"tabel": None, "options": {}, "conn_error": CONN_ERROR, "notice": None}
         try:
-            for read_profile in mssql.report_read_profiles(profile):
+            # Bentuk Arunika dibaca dari database pendamping di instans yang
+            # sama, jadi tak ada replica untuk di-fallback-i — daftar kandidat
+            # menciut jadi profil itu sendiri, persis seperti di `_report_view`.
+            lewat_arunika = _arunika_siap(profile)
+            kandidat = [profile] if lewat_arunika else mssql.report_read_profiles(profile)
+            for read_profile in kandidat:
                 try:
-                    tabel = tx.klasifikasi_kolumnar(read_profile, f)
+                    tabel = tx.klasifikasi_kolumnar(read_profile, f, arunika=lewat_arunika)
                     options = {"divisi": _opt_divisi(read_profile)}
                     conn_error = None
                     break
@@ -3374,19 +3386,29 @@ def klasifikasi_pelanggan_export(request):
         request.session["flash_error"] = CONN_ERROR
         return redirect(spec["url"])
 
-    inner, params = spec["inner"](f)
+    # Kedua sheet pindah BERSAMAAN atau tidak sama sekali. Memindahkan yang
+    # pertama saja tak memunculkan galat apa pun — ia cuma membuat satu file
+    # memuat dua sumber yang tak pernah dibandingkan siapa pun.
+    lewat_arunika = _arunika_siap(profile)
+    if lewat_arunika:
+        inner, params = rpt.klasifikasi_pelanggan_arunika(f)
+        favorit_sql, favorit_params = rpt.barang_favorit_massal_arunika(f, top_n=5)
+    else:
+        inner, params = spec["inner"](f)
+        favorit_sql, favorit_params = rpt.barang_favorit_massal(f, top_n=5)
     inner, params = reporting.apply_column_filters(inner, params, f)
     utama_sql = (f"SELECT TOP {reporting.EXPORT_CAP} * FROM ({inner}) AS q "
                  f"ORDER BY {f['order_by']}")
-    favorit_sql, favorit_params = rpt.barang_favorit_massal(f, top_n=5)
 
     kolom_utama = _kolom_tanpa_uang(request, spec)
     kolom_favorit = _kolom_tanpa_uang(request, spec, rpt.FAVORIT_COLUMNS)
 
     resp, last_exc = None, None
-    for read_profile in mssql.report_read_profiles(profile):
+    kandidat = [profile] if lewat_arunika else mssql.report_read_profiles(profile)
+    buka = mssql.arunika_cursor if lewat_arunika else mssql.report_cursor
+    for read_profile in kandidat:
         try:
-            with mssql.report_cursor(read_profile) as cur:
+            with buka(read_profile) as cur:
                 cur.execute(utama_sql, params)
                 utama = reporting.clean_rows(reporting.dictify(cur))
                 cur.execute(favorit_sql, favorit_params)
@@ -3444,17 +3466,33 @@ def klasifikasi_pelanggan_detail(request):
             return rows
         return [{k: v for k, v in r.items() if k != "nilai"} for r in rows]
 
+    # Rute ini punya TIGA kueri, dan yang pertama dulu ditulis langsung di sini
+    # sebagai SELECT mentah ke `m_customer` — satu-satunya rujukan tabel legacy
+    # di layar ini yang tak lewat `reports.py`, dan karena itu yang paling
+    # gampang tertinggal saat sisanya pindah.
+    lewat_arunika = _arunika_siap(profile)
+    if lewat_arunika:
+        profil_sql, profil_prm = rpt.profil_pelanggan_arunika(kd_customer)
+        favorit = rpt.barang_favorit_pelanggan_arunika(f, kd_customer, top_n=20)
+        nota_q = rpt.nota_pelanggan_arunika(f, kd_customer, top_n=20)
+        buka = mssql.arunika_cursor
+    else:
+        profil_sql, profil_prm = ("SELECT kd_customer, nama, alamat, hp, telepon, email, status "
+                                  "FROM m_customer WHERE kd_customer = ?"), [kd_customer]
+        favorit = rpt.barang_favorit_pelanggan(f, kd_customer, top_n=20)
+        nota_q = rpt.nota_pelanggan(f, kd_customer, top_n=20)
+        buka = mssql.report_cursor
+
     try:
-        with mssql.report_cursor(profile) as cur:
-            cur.execute("SELECT kd_customer, nama, alamat, hp, telepon, email, status "
-                        "FROM m_customer WHERE kd_customer = ?", [kd_customer])
+        with buka(profile) as cur:
+            cur.execute(profil_sql, profil_prm)
             profil = (reporting.clean_rows(reporting.dictify(cur)) or [None])[0]
 
-            sql, prm = rpt.barang_favorit_pelanggan(f, kd_customer, top_n=20)
+            sql, prm = favorit
             cur.execute(sql, prm)
             favorit = reporting.clean_rows(reporting.dictify(cur))
 
-            sql, prm = rpt.nota_pelanggan(f, kd_customer, top_n=20)
+            sql, prm = nota_q
             cur.execute(sql, prm)
             nota = reporting.clean_rows(reporting.dictify(cur))
     except pyodbc.Error as exc:

@@ -129,3 +129,53 @@ class DibacaOlehLayarnya(SimpleTestCase):
                 f"{nama}: punya inner_arunika tapi layarnya bukan _report_view, "
                 "jadi bentuk Arunika-nya tak akan pernah dibaca",
             )
+
+
+class KlasifikasiBespoke(SimpleTestCase):
+    """Klasifikasi Pelanggan tak punya satu `inner` untuk diganti.
+
+    Enam kueri di tiga rute: agregat utama (layar + sheet 1), favorit massal
+    (sheet 2), favorit satu pelanggan, nota satu pelanggan, dan profil pelanggan
+    — yang terakhir dulu `SELECT` mentah ke `m_customer` di dalam view, satu-
+    satunya rujukan legacy layar ini yang tak lewat `reports.py`.
+
+    Kalau salah satu tertinggal, layarnya tetap jalan: ia cuma membaca dua
+    sumber sekaligus, dan di database Arunika yang tertinggal itu meledak.
+    """
+
+    def _f(self):
+        req = RequestFactory().get("/x?date_from=2026-01-01&date_to=2026-01-31")
+        f = reporting.parse_report_params(
+            req, rpt.SORTS_KLASIFIKASI_PELANGGAN, "segmen", max_range_days=None
+        )
+        f.setdefault("kd_divisi", "")
+        for k, v in rpt.AMBANG_KLASIFIKASI.items():
+            f.setdefault(k, v[0])
+        return f
+
+    def _semua_sql(self):
+        f = self._f()
+        yield "klasifikasi_pelanggan_arunika", rpt.klasifikasi_pelanggan_arunika(f)[0]
+        yield "barang_favorit_massal_arunika", rpt.barang_favorit_massal_arunika(f, top_n=5)[0]
+        yield "barang_favorit_pelanggan_arunika", rpt.barang_favorit_pelanggan_arunika(f, "X", 20)[0]
+        yield "nota_pelanggan_arunika", rpt.nota_pelanggan_arunika(f, "X", 20)[0]
+        yield "profil_pelanggan_arunika", rpt.profil_pelanggan_arunika("X")[0]
+
+    def test_tak_menyentuh_tabel_legacy(self):
+        for nama, sql in self._semua_sql():
+            tersisa = re.findall(r"\b(?:FROM|JOIN)\s+((?:m_|t_)\w+)", sql, re.IGNORECASE)
+            self.assertEqual(tersisa, [], f"{nama}: masih membaca {tersisa}")
+            self.assertIn(f"{rpt.SRC}.", sql, f"{nama}: tak menyentuh {rpt.SRC}")
+
+    def test_spec_tak_diberi_inner_arunika(self):
+        """Layar ini BUKAN `_report_view`, jadi `inner_arunika` di spec-nya tak
+        akan pernah dibaca — memasangnya justru menyesatkan."""
+        self.assertNotIn("inner_arunika", views._KLASIFIKASI_PELANGGAN)
+
+    def test_segmen_tak_disalin(self):
+        """Ambang segmen harus datang dari `_segmen_case` yang sama dengan jalur
+        lama; dua definisi segmen bisa menyimpang tanpa satu pun galat."""
+        f = self._f()
+        urut, label = rpt._segmen_case(f)
+        self.assertIn(urut, rpt.klasifikasi_pelanggan_arunika(f)[0])
+        self.assertIn(label, rpt.klasifikasi_pelanggan_arunika(f)[0])

@@ -284,6 +284,26 @@ class StatusPenjualan(models.TextChoices):
     BATAL = "batal", "Batal"
 
 
+class JenisBayar(models.TextChoices):
+    """Cara nota ini dibayar.
+
+    Kolom TERPISAH dari `status`, dan itu memperbaiki penggabungan yang jadi
+    sumber salah baca di legacy: di sana `t_penjualan.status` dipakai untuk
+    KEDUANYA sekaligus (0=Kredit, 1=Tunai, 2=Lunas), sehingga tak ada tempat
+    untuk menyatakan nota batal sama sekali -- dan siapa pun yang membacanya
+    sebagai penanda batal akan melabeli setiap penjualan kredit sebagai batal.
+
+    `LUNAS` memang bukan cara bayar, melainkan kredit yang sudah selesai. Ia
+    tetap ada karena itulah yang tersimpan di data yang harus tetap terbaca;
+    memecahnya jadi `kredit` + kolom pelunasan adalah keputusan yang butuh data
+    cicilan, dan `t_piutang_cicilan` belum punya padanan di sini.
+    """
+
+    KREDIT = "kredit", "Kredit"
+    TUNAI = "tunai", "Tunai"
+    LUNAS = "lunas", "Lunas"
+
+
 class Penjualan(models.Model):
     """Kepala nota penjualan.
 
@@ -320,6 +340,7 @@ class Penjualan(models.Model):
     total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     dibayar = models.DecimalField(max_digits=18, decimal_places=2, default=0)
 
+    jenis_bayar = models.CharField(max_length=10, choices=JenisBayar.choices, default=JenisBayar.TUNAI)
     status = models.CharField(max_length=10, choices=StatusPenjualan.choices, default=StatusPenjualan.AKTIF)
     dibuat_oleh = models.IntegerField(null=True, blank=True)  # id user aplikasi
     dibuat_pada = models.DateTimeField(auto_now_add=True)

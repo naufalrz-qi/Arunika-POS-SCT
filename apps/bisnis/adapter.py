@@ -290,10 +290,15 @@ def badan_penjualan(db_legacy: str) -> str:
         # pendapat lain tentang datanya.
         "RTRIM(n.kd_voucher), "
         "n.total_kotor, n.total_kotor - (n.total_bersih - n.pajak), n.pajak, n.total_bersih, "
-        # Kepala nota legacy tidak punya kolom pembatalan. `t_penjualan.status`
-        # adalah JENIS PEMBAYARAN (0=Kredit, 1=Tunai, 2=Lunas), bukan penanda
-        # batal -- memetakannya ke 'batal' akan melabeli setiap penjualan kredit
-        # sebagai nota batal.
+        # `t_penjualan.status` adalah JENIS PEMBAYARAN, bukan penanda batal --
+        # ia keluar di kolomnya sendiri. Nilainya token huruf kecil, sebentuk
+        # dengan `status` di bawah; label untuk layar dibentuk pembacanya.
+        "CASE n.status_raw WHEN 0 THEN 'kredit' WHEN 1 THEN 'tunai' "
+        "WHEN 2 THEN 'lunas' ELSE '' END, "
+        # Kepala nota legacy tidak punya kolom pembatalan sama sekali, jadi
+        # seluruh nota yang terbaca dari sana adalah nota aktif. Memetakan
+        # `status` ke sini -- yang sempat terlihat masuk akal -- akan melabeli
+        # setiap penjualan kredit sebagai nota batal.
         "'aktif' "
         f"FROM ({inti}) n"
     )
