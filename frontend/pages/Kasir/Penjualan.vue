@@ -647,13 +647,19 @@ const KELAS_PILIH =
                       </select>
                     </td>
                     <td class="px-2 py-1">
-                      <input v-model="b.qty" data-nav inputmode="decimal" :class="KELAS_SEL" />
+                      <!-- @blur menulis balik hasil `angka()`. Kotak-kotak ini sengaja
+                           type="text" + inputmode (papan angka di tablet, koma desimal
+                           Indonesia tetap boleh), tapi itu berarti "abc" bisa duduk di
+                           layar sementara `angka()` sudah membacanya 0 dan total di
+                           kanan ikut 0. Menormalkan saat fokus lepas membuat kotaknya
+                           menunjukkan angka yang benar-benar akan tersimpan. -->
+                      <input v-model="b.qty" data-nav inputmode="decimal" :class="KELAS_SEL" @blur="b.qty = angka(b.qty)" />
                     </td>
                     <td class="px-2 py-1">
-                      <input v-model="b.harga_jual" data-nav inputmode="decimal" :class="KELAS_SEL" />
+                      <input v-model="b.harga_jual" data-nav inputmode="decimal" :class="KELAS_SEL" @blur="b.harga_jual = angka(b.harga_jual)" />
                     </td>
                     <td class="px-2 py-1">
-                      <input v-model="b.diskon1" data-nav inputmode="decimal" :class="KELAS_SEL" />
+                      <input v-model="b.diskon1" data-nav inputmode="decimal" :class="KELAS_SEL" @blur="b.diskon1 = angka(b.diskon1)" />
                     </td>
                     <td class="px-2 py-1 text-right tabular-nums">{{ formatRupiah(subtotal(b)) }}</td>
                     <td class="px-2 py-1 text-right">
@@ -934,8 +940,8 @@ const KELAS_PILIH =
             <Select v-model="tab.kd_kas" label="Kas" :options="opsi.kas || []" />
             <Select v-model="tab.kd_voucher" label="Voucher" :options="opsi.voucher || []" />
             <Input v-model="tab.keterangan" label="Keterangan" placeholder="-" />
-            <Input v-model="tab.pajak" type="number" step="any" label="Pajak (fraksi, 0.05 = 5%)" />
-            <Input v-model="tab.diskon_uang" type="number" label="Diskon (Rp)" />
+            <Input v-model="tab.pajak" type="number" inputmode="decimal" step="any" min="0" max="1" label="Pajak (fraksi, 0.05 = 5%)" />
+            <Input v-model="tab.diskon_uang" type="number" inputmode="numeric" step="1" min="0" label="Diskon (Rp)" />
           </div>
 
           <div class="mt-4 space-y-1 border-t border-border-default pt-3 text-sm">
@@ -946,7 +952,7 @@ const KELAS_PILIH =
             <!-- Order belum dibayar: uang berpindah nanti, saat ordernya
                  diambil dan jadi nota. -->
             <template v-if="!order">
-              <Input v-model="tab.bayar" type="number" label="Bayar" />
+              <Input v-model="tab.bayar" type="number" inputmode="numeric" step="1" min="0" label="Bayar" />
               <div class="flex justify-between">
                 <span class="text-ink-subtle">Kembali</span>
                 <strong class="tabular-nums text-ink">{{ formatRupiah(kembali) }}</strong>

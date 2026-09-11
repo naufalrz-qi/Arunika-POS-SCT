@@ -230,12 +230,15 @@ function confirmDelete() {
         <Select v-model="form.db_type" label="Tipe Database" :options="typeOptions" />
         <Input v-model="form.db_name" label="Database" :error="form.errors.db_name" required />
         <Input v-model="form.host" label="Host / IP" :error="form.errors.host" required />
-        <Input v-model="form.port" label="Port" type="number" :error="form.errors.port" />
+        <Input v-model="form.port" label="Port" type="number" inputmode="numeric" min="1" max="65535" :error="form.errors.port" />
         <Input v-model="form.username" label="Username" :error="form.errors.username" required />
+        <!-- Sandi SERVER, bukan sandi orang: `new-password` menahan pengelola
+             kata sandi browser mengisikan sandi login Arunika ke sini. -->
         <Input
           v-model="form.password"
           label="Password"
           type="password"
+          autocomplete="new-password"
           :placeholder="form.id ? 'Kosongkan jika tidak diubah' : ''"
           :error="form.errors.password"
         />

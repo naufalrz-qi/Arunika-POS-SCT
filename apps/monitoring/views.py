@@ -3652,6 +3652,10 @@ def _master_index(request, entitas: str, aksi_url: str | None = None, pemilih=No
         "angka": s["angka"],
         "lookup_fields": list(s["lookup"]),
         "wajib": s["wajib"],
+        # Batas panjang tiap kolom teks. `_bersihkan` memotong diam-diam yang
+        # kepanjangan, jadi tanpa `maxlength` di layar isian hilang sebagian
+        # tanpa pesan apa pun. Angkanya dari master_crud, tidak disalin ke Vue.
+        "panjang": master_crud.panjang(entitas),
         # Bentuk tabel & form ikut spec, bukan daftar tetap di Vue: tanpa ini
         # layar Merk merender kolom Alamat/Telepon/HP yang tabelnya tak punya.
         "kolom_tabel": s.get("kolom_tabel", []),

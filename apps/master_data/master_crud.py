@@ -215,6 +215,28 @@ def _kolom_nama(s) -> str:
     return s.get("kolom_nama", "nama")
 
 
+def _batas(entitas: str, k: str) -> int:
+    """Panjang maksimum satu kolom teks. Satu rumus, dipakai `_bersihkan` DAN layar."""
+    if k == "keterangan":
+        return _PANJANG_KETERANGAN.get(entitas, _PANJANG_KETERANGAN_BAWAAN)
+    return _PANJANG.get(k, 50)
+
+
+def panjang(entitas: str) -> dict:
+    """Batas panjang tiap kolom teks, untuk `maxlength` di layar.
+
+    `_bersihkan` MEMOTONG isian yang kepanjangan (`[:batas]`) alih-alih menolak —
+    itu pilihan yang benar di server, sebab galat ODBC "String or binary data
+    would be truncated" tak menyebut kolom mana yang salah. Tapi tanpa batas yang
+    sama di layar, operator mengetik alamat 60 huruf, menekan Simpan, melihat
+    "tersimpan", dan sepuluh huruf terakhirnya hilang tanpa sepatah kata pun.
+    Angkanya diambil dari sini, bukan disalin ke Vue, supaya tak ada dua daftar
+    yang pelan-pelan berbeda.
+    """
+    s = spec(entitas)
+    return {k: _batas(entitas, k) for k in s["teks"]}
+
+
 def list_master(profile, entitas: str, cari: str = "", limit: int = 200) -> list[dict]:
     """Daftar satu entitas master, disaring di server.
 
@@ -287,9 +309,7 @@ def _bersihkan(entitas: str, data) -> dict:
     s = spec(entitas)
     keluar: dict = {}
     for k in [*s["teks"], *s["lookup"]]:
-        batas = (_PANJANG_KETERANGAN.get(entitas, _PANJANG_KETERANGAN_BAWAAN)
-                 if k == "keterangan" else _PANJANG.get(k, 50))
-        keluar[k] = _st(data.get(k))[:batas]
+        keluar[k] = _st(data.get(k))[:_batas(entitas, k)]
     for k in s["angka"]:
         nilai = data.get(k)
         # Kolom berpilihan (status) jatuh ke opsi PERTAMA saat kosong, bukan ke

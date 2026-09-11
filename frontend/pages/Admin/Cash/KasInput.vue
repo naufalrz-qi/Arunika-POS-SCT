@@ -90,11 +90,14 @@ function simpan() {
           />
           <!-- Nominal tetap type="text": servernya menerima "250.000" maupun
                "250000" (pemisah ribuan Indonesia), dan input[type=number] justru
-               menolak bentuk pertama tanpa mengatakan apa-apa. -->
+               menolak bentuk pertama tanpa mengatakan apa-apa. `inputmode` yang
+               memunculkan papan angka di tablet — itu yang hilang kalau kotaknya
+               text tanpa petunjuk apa pun. -->
           <Input
             v-else
             v-model="formData[f.name]"
             :label="f.label"
+            :inputmode="f.tipe === 'uang' ? 'decimal' : undefined"
             :placeholder="f.tipe === 'uang' ? 'mis. 250000' : ''"
             :class="f.name === 'keterangan' ? 'sm:col-span-2' : ''"
           />

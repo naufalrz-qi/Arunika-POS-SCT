@@ -161,3 +161,49 @@ class SupplierTidakDisinkronTests(SimpleTestCase):
     def test_supplier_tetap_bisa_diedit(self):
         """Larangannya soal menyeberang, bukan soal mengelola."""
         self.assertIn("supplier", mc._MASTER)
+
+
+class PanjangSamaDenganPemotonganTests(SimpleTestCase):
+    """`panjang()` HARUS memulangkan batas yang persis dipakai `_bersihkan`.
+
+    `_bersihkan` memotong diam-diam (`[:batas]`) alih-alih menolak, dan itu
+    pilihan yang benar di server — galat ODBC "String or binary data would be
+    truncated" tak menyebut kolom mana yang salah. Harganya: kalau layar tak
+    membatasi kotak isian dengan angka YANG SAMA, operator mengetik alamat 60
+    huruf, menekan Simpan, membaca "tersimpan", dan sepuluh huruf terakhirnya
+    lenyap tanpa sepatah kata pun.
+
+    Karena itu `maxlength` di layar diambil dari fungsi ini, bukan disalin ke
+    Vue. Tes ini yang menjaga keduanya tak pelan-pelan berbeda.
+    """
+
+    def test_setiap_kolom_teks_punya_batas(self):
+        for entitas in mc._MASTER:
+            batas = mc.panjang(entitas)
+            self.assertEqual(
+                sorted(batas), sorted(mc._MASTER[entitas]["teks"]),
+                f"{entitas}: daftar kolom teks dan batasnya tidak sepadan")
+            for kolom, nilai in batas.items():
+                self.assertIsInstance(nilai, int, f"{entitas}.{kolom}")
+                self.assertGreater(nilai, 0, f"{entitas}.{kolom}")
+
+    def test_batas_persis_sama_dengan_yang_dipotong(self):
+        """Bukti lewat perilaku: isi kepanjangan, lihat berapa yang tersisa."""
+        for entitas, s in mc._MASTER.items():
+            batas = mc.panjang(entitas)
+            mentah = {k: "x" * (batas[k] + 25) for k in s["teks"]}
+            # `wajib` di-lolos-kan dengan isi apa adanya; yang diuji panjangnya.
+            mentah.update({k: "KODE01" for k in s["lookup"]})
+            hasil = mc._bersihkan(entitas, mentah)
+            for kolom, maks in batas.items():
+                self.assertEqual(
+                    len(hasil[kolom]), maks,
+                    f"{entitas}.{kolom}: layar membatasi {maks}, "
+                    f"server memotong ke {len(hasil[kolom])}")
+
+    def test_keterangan_berbeda_per_entitas(self):
+        """Justru `keterangan` yang paling mudah salah: 200 di pelanggan, 50 di
+        seluruh tabel referensi. Satu angka tetap di Vue akan salah di salah
+        satunya."""
+        self.assertEqual(mc.panjang("pelanggan")["keterangan"], 200)
+        self.assertEqual(mc.panjang("merk")["keterangan"], 50)

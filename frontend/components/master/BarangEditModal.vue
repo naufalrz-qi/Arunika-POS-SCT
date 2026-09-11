@@ -262,7 +262,18 @@ function saveStatus(table) {
               <span class="text-ink-muted">×{{ num(u.jumlah) }}</span>
             </div>
             <div class="sm:w-32">
-              <Input v-model="priceForm.prices[u.kd_satuan]" type="number" label="Harga" size="sm" />
+              <!-- min/step mencerminkan `hargaBulat` di atas: rupiah bulat, tak negatif.
+                   Tanpa keduanya panah naik-turun melangkahi pecahan dan kotaknya
+                   menerima minus, lalu Simpan terkunci tanpa alasan yang terlihat. -->
+              <Input
+                v-model="priceForm.prices[u.kd_satuan]"
+                type="number"
+                inputmode="numeric"
+                min="0"
+                step="1"
+                label="Harga"
+                size="sm"
+              />
               <button
                 v-if="suggestion && suggestion.kd_satuan === u.kd_satuan"
                 type="button"
@@ -295,6 +306,8 @@ function saveStatus(table) {
                 :model-value="liveMargin(u).toFixed(2)"
                 @update:model-value="(v) => setHargaFromMargin(u, v)"
                 type="number"
+                inputmode="decimal"
+                step="0.01"
                 label="Margin (%)"
                 size="sm"
                 class="sm:w-24"

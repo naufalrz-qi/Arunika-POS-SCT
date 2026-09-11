@@ -51,6 +51,7 @@ function save() {
           v-model="form.password"
           label="Password Baru"
           type="password"
+          autocomplete="new-password"
           placeholder="Kosongkan jika tidak diubah"
           :error="form.errors.password"
         />
@@ -59,6 +60,7 @@ function save() {
           v-model="form.password_lama"
           label="Password Saat Ini"
           type="password"
+          autocomplete="current-password"
           placeholder="Wajib diisi untuk mengganti password"
           :error="form.errors.password_lama"
         />

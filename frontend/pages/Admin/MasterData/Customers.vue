@@ -118,8 +118,8 @@ const exportColumns = columns.map(({ key, label }) => ({ key, label }));
               :options="[{ value: '1', label: 'Ya' }, { value: '0', label: 'Tidak' }]"
               placeholder="Semua"
             />
-            <Input v-model="filters.disc_min" label="Diskon Min (%)" type="number" />
-            <Input v-model="filters.disc_max" label="Diskon Maks (%)" type="number" />
+            <Input v-model="filters.disc_min" label="Diskon Min (%)" type="number" inputmode="decimal" min="0" max="100" />
+            <Input v-model="filters.disc_max" label="Diskon Maks (%)" type="number" inputmode="decimal" min="0" max="100" />
           </FilterSection>
         </template>
       </FilterPanel>

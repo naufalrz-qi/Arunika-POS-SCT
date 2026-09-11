@@ -278,7 +278,7 @@ function simpan() {
                  "No. PP Order", "Penerimaan", "Jaminan / U.M.". -->
             <Input v-if="punyaKolom('no_pp_order')" v-model="form.no_pp_order" label="No. PP Order" placeholder="-" />
             <Input v-if="punyaKolom('tanggal_terima')" v-model="form.tanggal_terima" type="date" label="Tgl. Penerimaan" />
-            <Input v-if="punyaKolom('jaminan')" v-model="form.jaminan" type="number" label="Jaminan / U.M. (Rp)" />
+            <Input v-if="punyaKolom('jaminan')" v-model="form.jaminan" type="number" inputmode="numeric" step="1" min="0" label="Jaminan / U.M. (Rp)" />
             <Input v-model="form.keterangan" label="Keterangan" placeholder="-" />
           </div>
 
@@ -322,13 +322,19 @@ function simpan() {
                     </select>
                   </td>
                   <td class="px-2 py-1">
-                    <input v-model="b.qty" data-nav inputmode="decimal" :class="KELAS_SEL" />
+                    <!-- @blur menulis balik hasil `angka()`. Kotak-kotak ini sengaja
+                         type="text" + inputmode (papan angka di tablet, koma desimal
+                         Indonesia tetap boleh), tapi itu berarti "abc" bisa duduk di
+                         layar sementara `angka()` sudah membacanya 0 dan total di
+                         kanan ikut 0. Menormalkan saat fokus lepas membuat kotaknya
+                         menunjukkan angka yang benar-benar akan tersimpan. -->
+                    <input v-model="b.qty" data-nav inputmode="decimal" :class="KELAS_SEL" @blur="b.qty = angka(b.qty)" />
                   </td>
                   <td class="px-2 py-1">
-                    <input v-model="b.harga" data-nav inputmode="decimal" :class="KELAS_SEL" />
+                    <input v-model="b.harga" data-nav inputmode="decimal" :class="KELAS_SEL" @blur="b.harga = angka(b.harga)" />
                   </td>
                   <td class="px-2 py-1">
-                    <input v-model="b.diskon1" data-nav inputmode="decimal" :class="KELAS_SEL" />
+                    <input v-model="b.diskon1" data-nav inputmode="decimal" :class="KELAS_SEL" @blur="b.diskon1 = angka(b.diskon1)" />
                   </td>
                   <td class="px-2 py-1 text-right tabular-nums">{{ formatRupiah(subtotal(b)) }}</td>
                   <td class="px-2 py-1 text-right">
@@ -378,8 +384,8 @@ function simpan() {
           <p v-if="pesan" class="mt-2 text-sm text-warning-fg">{{ pesan }}</p>
 
           <div class="mt-4 grid gap-3 sm:grid-cols-2">
-            <Input v-model="pajak" type="number" step="any" label="Pajak (fraksi, 0.05 = 5%)" />
-            <Input v-model="ppnbm" type="number" step="any" label="PPnBM (fraksi)" />
+            <Input v-model="pajak" type="number" inputmode="decimal" step="any" min="0" max="1" label="Pajak (fraksi, 0.05 = 5%)" />
+            <Input v-model="ppnbm" type="number" inputmode="decimal" step="any" min="0" max="1" label="PPnBM (fraksi)" />
           </div>
 
           <div class="mt-4 flex items-center justify-between border-t border-border-default pt-3">

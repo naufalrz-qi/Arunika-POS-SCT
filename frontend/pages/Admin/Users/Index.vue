@@ -150,10 +150,14 @@ function confirmDelete() {
         <Input v-model="form.username" label="Username" :error="form.errors.username" required />
         <Input v-model="form.name" label="Nama Lengkap" :error="form.errors.name" required />
         <Select v-model="form.role" label="Role" :options="roleOptions" />
+        <!-- `new-password`, bukan bawaan: tanpa ini pengelola kata sandi
+             mengisikan sandi ADMIN yang sedang login ke kotak sandi user baru,
+             dan akun itu lahir dengan sandi yang bukan miliknya. -->
         <Input
           v-model="form.password"
           label="Password"
           type="password"
+          autocomplete="new-password"
           :placeholder="form.id ? 'Kosongkan jika tidak diubah' : ''"
           :error="form.errors.password"
         />
@@ -189,7 +193,7 @@ function confirmDelete() {
         <p class="text-sm text-ink-muted">
           Password baru untuk <strong>{{ resetTarget?.name }}</strong>:
         </p>
-        <Input v-model="resetPassword" label="Password Baru" type="password" />
+        <Input v-model="resetPassword" label="Password Baru" type="password" autocomplete="new-password" />
       </div>
       <template #footer>
         <Button variant="secondary" @click="resetTarget = null">Batal</Button>
