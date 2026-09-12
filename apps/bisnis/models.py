@@ -124,6 +124,9 @@ class Divisi(Referensi):
     """
 
     awalan_nota = models.CharField(max_length=5, blank=True)
+    # Ditampilkan sebagai kolom tersendiri di laporan Retur Penjualan, di samping
+    # `nama` dan `awalan_nota`.
+    keterangan = models.CharField(max_length=100, blank=True)
 
     class Meta(Referensi.Meta):
         abstract = False
@@ -866,3 +869,100 @@ class PenjualanOrderBaris(models.Model):
     class Meta:
         db_table = "penjualan_order_baris"
         indexes = [models.Index(fields=["barang"], name="ix_order_jual_baris_brg")]
+
+
+class CaraBayar(Referensi):
+    """Alat bayar sebuah dokumen — `m_jenis_bayar` di legacy (TUNAI, BON, DEBIT,
+    BG, CEK, KREDIT).
+
+    Dinamai berbeda dari `JenisBayar` dengan sengaja: yang itu kredit/tunai/lunas
+    dari `t_penjualan.status`, yang ini alat bayarnya. Keduanya hidup
+    berdampingan di dokumen retur.
+
+    `m_jenis_bayar.status` TIDAK dipetakan ke `aktif`. Ia klasifikasi, bukan
+    bendera hidup-mati — pengelompokannya identik di kedua server (1 = lunas
+    seketika: TUNAI/BON/DEBIT; 2 = tertunda: BG/CEK/KREDIT) dan tak satu pun
+    view legacy menyaringnya. Ini kejadian ketiga sesudah `m_biaya` dan
+    `m_pegawai`, jadi `_referensi()` sengaja tidak dipakai untuk tabel ini.
+    """
+
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "cara_bayar"
+
+
+class _ReturBase(models.Model):
+    """Kepala retur — bentuk yang sama di kedua sisi.
+
+    Abstrak, bukan satu tabel berkolom `sisi`: retur jual menunjuk pelanggan dan
+    retur beli menunjuk pemasok, dan FK sungguhan lebih murah daripada
+    pemeriksaan di aplikasi.
+    """
+
+    nomor = models.CharField(max_length=30, unique=True)
+    tanggal = models.DateTimeField()
+    no_bukti = models.CharField(max_length=30, blank=True)
+    divisi = models.ForeignKey("Divisi", on_delete=models.PROTECT)
+    cara_bayar = models.ForeignKey("CaraBayar", null=True, blank=True, on_delete=models.PROTECT)
+    kas = models.ForeignKey("Kas", null=True, blank=True, on_delete=models.PROTECT)
+    keterangan = models.CharField(max_length=100, blank=True)
+    pengguna = models.ForeignKey("Pengguna", null=True, blank=True, on_delete=models.PROTECT)
+    dibuat_oleh = models.IntegerField(null=True, blank=True)  # id user aplikasi
+    dibuat_pada = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        abstract = True
+
+    def __str__(self):
+        return self.nomor
+
+
+class PenjualanRetur(_ReturBase):
+    pelanggan = models.ForeignKey("Pelanggan", null=True, blank=True, on_delete=models.PROTECT)
+
+    class Meta(_ReturBase.Meta):
+        abstract = False
+        db_table = "penjualan_retur"
+        indexes = [models.Index(fields=["tanggal"], name="ix_retur_jual_tgl")]
+
+
+class PenjualanReturBaris(models.Model):
+    retur = models.ForeignKey(PenjualanRetur, on_delete=models.CASCADE, related_name="baris")
+    barang = models.ForeignKey("Barang", on_delete=models.PROTECT)
+    satuan = models.ForeignKey("Satuan", on_delete=models.PROTECT)
+    # Sales ada di baris, sama seperti `PenjualanBaris` -- `kd_pegawai` memang
+    # kolom `t_penjualan_retur_detail`.
+    sales = models.ForeignKey("Pegawai", null=True, blank=True, on_delete=models.PROTECT)
+    qty = models.DecimalField(max_digits=18, decimal_places=3)
+    harga = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = "penjualan_retur_baris"
+        indexes = [models.Index(fields=["barang"], name="ix_retur_jual_baris_brg")]
+
+
+class PembelianRetur(_ReturBase):
+    pemasok = models.ForeignKey("Pemasok", null=True, blank=True, on_delete=models.PROTECT)
+
+    class Meta(_ReturBase.Meta):
+        abstract = False
+        db_table = "pembelian_retur"
+        indexes = [models.Index(fields=["tanggal"], name="ix_retur_beli_tgl")]
+
+
+class PembelianReturBaris(models.Model):
+    """Tanpa `sales`, dan itu bukan kelalaian: `t_pembelian_retur_detail` tak
+    punya `kd_pegawai`. Yang menjual barang adalah orang, yang memasoknya
+    perusahaan."""
+
+    retur = models.ForeignKey(PembelianRetur, on_delete=models.CASCADE, related_name="baris")
+    barang = models.ForeignKey("Barang", on_delete=models.PROTECT)
+    satuan = models.ForeignKey("Satuan", on_delete=models.PROTECT)
+    qty = models.DecimalField(max_digits=18, decimal_places=3)
+    harga = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = "pembelian_retur_baris"
+        indexes = [models.Index(fields=["barang"], name="ix_retur_beli_baris_brg")]

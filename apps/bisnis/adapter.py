@@ -284,6 +284,53 @@ def badan_pembelian(db_legacy: str) -> str:
     )
 
 
+_RETUR = {
+    # sisi: (tabel detail, tabel kepala, harga, kolom sales atau None)
+    "penjualan": ("t_penjualan_retur_detail", "t_penjualan_retur", "harga_jual", "kd_pegawai"),
+    "pembelian": ("t_pembelian_retur_detail", "t_pembelian_retur", "harga", None),
+}
+
+
+def badan_retur_baris(db_legacy: str, *, sisi: str) -> str:
+    """Badan view `{sisi}_retur_baris`, dengan `total` dari `reports._line_net()`.
+
+    Satu fungsi untuk kedua sisi karena bentuknya memang cermin; yang berbeda
+    cuma nama tabel, kolom harga, dan ada-tidaknya `kd_pegawai` --
+    `t_pembelian_retur_detail` tak punya sales, dan itu benar: yang menjual
+    barang adalah orang, yang memasoknya adalah perusahaan.
+
+    `_line_net()` dipanggil, tidak disalin. Kedua tabel detail membawa
+    `diskon1-4` sendiri dan SELURUHNYA nol di data hari ini -- yang justru
+    alasan untuk tidak menuliskan rumusnya dengan tangan: sebuah salinan yang
+    menyimpang tak akan memunculkan galat apa pun sampai ada yang mengisi kolom
+    itu, lalu diam-diam memulangkan angka lain.
+
+    Baris membawa `tanggal` + `divisi_kode` kepalanya, sebab yang sama seperti
+    `penjualan_baris`: laporan tingkat-baris tak perlu menyentuh kepala untuk
+    menyaring rentang tanggal.
+    """
+    from apps.transactions import reports  # lokal: hindari lingkaran impor
+
+    detail, kepala, harga, sales = _RETUR[sisi]
+    net = reports._line_net(harga, "d")
+    kol_sales = f"NULLIF(RTRIM(d.{sales}), ''), " if sales else ""
+    # Nama tabel ditulis TELANJANG; `_kualifikasi` yang memberi awalan `[db].dbo.`
+    # dan sekalian menghitung berapa rujukan yang benar-benar dikenalinya.
+    badan = (
+        f"SELECT d.no_retur, h.tanggal, RTRIM(h.kd_divisi), d.kd_barang, "
+        f"RTRIM(d.kd_satuan), {kol_sales}d.qty, d.{harga}, ({net}) "
+        f"FROM {detail} d "
+        f"INNER JOIN {kepala} h ON h.no_retur = d.no_retur"
+    )
+    hasil, n = _kualifikasi(badan, db_legacy)
+    if n == 0:
+        raise RuntimeError(
+            f"Tak satu pun rujukan tabel legacy dikenali di badan_retur_baris({sisi}). "
+            "Bentuknya berubah; perbarui adapter ini alih-alih menebak."
+        )
+    return hasil
+
+
 def badan_penjualan_order(db_legacy: str) -> str:
     """Badan view `penjualan_order`, dibangkitkan dari `reports._penjualan_order_net()`.
 

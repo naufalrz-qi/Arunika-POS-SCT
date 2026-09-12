@@ -116,6 +116,20 @@ def _badan_penjualan_order(db_legacy: str) -> str:
     return adapter.badan_penjualan_order(db_legacy)
 
 
+def _badan_penjualan_retur_baris(db_legacy: str) -> str:
+    """Baris retur jual; `total` dari `reports._line_net()`."""
+    from apps.bisnis import adapter
+
+    return adapter.badan_retur_baris(db_legacy, sisi="penjualan")
+
+
+def _badan_pembelian_retur_baris(db_legacy: str) -> str:
+    """Baris retur beli; `total` dari `reports._line_net()`."""
+    from apps.bisnis import adapter
+
+    return adapter.badan_retur_baris(db_legacy, sisi="pembelian")
+
+
 def _case_jenis_biaya(kolom: str) -> str:
     """Token jenis biaya, dari satu sumber (`reports.JENIS_BIAYA`).
 
@@ -250,14 +264,42 @@ _MASTER: dict[str, dict] = {
     "model_barang": _referensi("m_model", "kd_model", "model_barang"),
     "warna": _referensi("m_warna", "kd_warna", "warna"),
     "bahan": _referensi("m_jenis_bahan", "kd_jenis_bahan", "bahan"),
+    # `m_jenis_bayar` -> `cara_bayar`, dan namanya sengaja BEDA dari
+    # `penjualan.jenis_bayar`. Keduanya bukan dua nama untuk hal yang sama:
+    # `jenis_bayar` adalah kredit/tunai/lunas dari `t_penjualan.status`,
+    # sedangkan ini ALAT bayarnya -- TUNAI, BON, DEBIT, BG, CEK, KREDIT.
+    #
+    # ## `status` di sini KLASIFIKASI, bukan bendera aktif -- kejadian ketiga
+    #
+    # Sesudah `m_biaya` dan `m_pegawai`, pola yang sama muncul lagi, dan kali
+    # ini `_referensi()` yang jadi godaannya: ia memetakan `aktif = (status=1)`,
+    # yang di sini akan mematikan 3 dari 5 baris di testGUdang dan 3 dari 6 di
+    # grosirPusat. Isinya menjelaskan kenapa -- pengelompokannya identik di
+    # kedua server:
+    #
+    #     status 1: TUNAI, BON, (DEBIT di grosirPusat)   -- lunas seketika
+    #     status 2: BG, CEK, KREDIT                      -- tertunda/berinstrumen
+    #
+    # Dan tak SATU pun view legacy menyaring kolom ini, jadi tak ada yang pernah
+    # memperlakukannya sebagai hidup-mati. `aktif` karena itu KONSTAN 1, sama
+    # seperti `kategori_biaya` dan `pemasok`. Klasifikasinya sendiri belum
+    # dipetakan: belum ada laporan yang memerlukannya.
+    "cara_bayar": {
+        "kolom": ["kode", "nama", "aktif"],
+        "legacy": "SELECT RTRIM(kd_jenis), nama, 1 FROM {db}.dbo.m_jenis_bayar",
+        "arunika": "SELECT kode, nama, CAST(aktif AS int) FROM dbo.cara_bayar",
+    },
     "divisi": {
-        "kolom": ["kode", "nama", "awalan_nota", "aktif"],
+        # `keterangan` ada karena laporan Retur Penjualan menampilkannya sebagai
+        # kolom tersendiri, di samping `nama` dan `awalan_nota`.
+        "kolom": ["kode", "nama", "keterangan", "awalan_nota", "aktif"],
         # `kepala_nota` -> awalan_nota. Namanya diganti karena artinya memang itu:
         # awalan nomor dokumen, dan ia PER DIVISI, bukan per server -- GUDANG
         # punya lima divisi dengan awalan berbeda.
-        "legacy": "SELECT RTRIM(kd_divisi), nama, kepala_nota, "
+        "legacy": "SELECT RTRIM(kd_divisi), nama, keterangan, kepala_nota, "
                   "CASE WHEN status = 1 THEN 1 ELSE 0 END FROM {db}.dbo.m_divisi",
-        "arunika": "SELECT kode, nama, awalan_nota, CAST(aktif AS int) FROM dbo.divisi",
+        "arunika": "SELECT kode, nama, keterangan, awalan_nota, CAST(aktif AS int) "
+                   "FROM dbo.divisi",
     },
     # --- Aktor ------------------------------------------------------------
     #
@@ -461,6 +503,73 @@ _MASTER: dict[str, dict] = {
                    "INNER JOIN dbo.satuan s ON s.id = pb.satuan_id",
     },
     # --- Kas ---------------------------------------------------------------
+    # --- Retur --------------------------------------------------------------
+    #
+    # Cermin di kedua sisi, dan bentuknya nyaris identik. Yang berbeda cuma
+    # lawannya (`pelanggan_kode` vs `pemasok_kode`), kolom harga (`harga_jual`
+    # vs `harga`), dan `sales_kode` -- yang HANYA ada di sisi jual, sebab
+    # `t_pembelian_retur_detail` memang tak punya `kd_pegawai`.
+    #
+    # `total` per baris dibangkitkan dari `reports._line_net()`, bukan ditulis
+    # ulang: kedua tabel detail membawa `diskon1-4` sendiri, seluruhnya nol di
+    # data sekarang tapi tak dijamin tetap begitu -- persis alasan rumusnya tak
+    # boleh disalin dengan tangan. Bentuk baca tidak memulangkan keempat slot
+    # itu, sama seperti `penjualan_baris`.
+    "penjualan_retur": {
+        "kolom": ["nomor", "tanggal", "no_bukti", "divisi_kode", "pelanggan_kode",
+                  "cara_bayar_kode", "kas_kode", "keterangan", "pengguna_kode"],
+        "legacy": "SELECT no_retur, tanggal, no_bukti, RTRIM(kd_divisi), kd_customer, "
+                  "NULLIF(RTRIM(kd_jenis), ''), NULLIF(RTRIM(kd_kas), ''), keterangan, "
+                  "NULLIF(RTRIM(kd_user), '') FROM {db}.dbo.t_penjualan_retur",
+        "arunika": "SELECT r.nomor, r.tanggal, r.no_bukti, d.kode, pl.kode, cb.kode, "
+                   "ks.kode, r.keterangan, pg.kode "
+                   "FROM dbo.penjualan_retur r "
+                   "INNER JOIN dbo.divisi d ON d.id = r.divisi_id "
+                   "LEFT JOIN dbo.pelanggan pl ON pl.id = r.pelanggan_id "
+                   "LEFT JOIN dbo.cara_bayar cb ON cb.id = r.cara_bayar_id "
+                   "LEFT JOIN dbo.kas ks ON ks.id = r.kas_id "
+                   "LEFT JOIN dbo.pengguna pg ON pg.id = r.pengguna_id",
+    },
+    "penjualan_retur_baris": {
+        "kolom": ["retur_nomor", "tanggal", "divisi_kode", "barang_kode",
+                  "satuan_kode", "sales_kode", "qty", "harga", "total"],
+        "legacy": _badan_penjualan_retur_baris,
+        "arunika": "SELECT r.nomor, r.tanggal, dv.kode, b.kode, s.kode, pg.kode, "
+                   "rb.qty, rb.harga, rb.total "
+                   "FROM dbo.penjualan_retur_baris rb "
+                   "INNER JOIN dbo.penjualan_retur r ON r.id = rb.retur_id "
+                   "INNER JOIN dbo.divisi dv ON dv.id = r.divisi_id "
+                   "INNER JOIN dbo.barang b ON b.id = rb.barang_id "
+                   "INNER JOIN dbo.satuan s ON s.id = rb.satuan_id "
+                   "LEFT JOIN dbo.pegawai pg ON pg.id = rb.sales_id",
+    },
+    "pembelian_retur": {
+        "kolom": ["nomor", "tanggal", "no_bukti", "divisi_kode", "pemasok_kode",
+                  "cara_bayar_kode", "kas_kode", "keterangan", "pengguna_kode"],
+        "legacy": "SELECT no_retur, tanggal, no_bukti, RTRIM(kd_divisi), RTRIM(kd_supplier), "
+                  "NULLIF(RTRIM(kd_jenis), ''), NULLIF(RTRIM(kd_kas), ''), keterangan, "
+                  "NULLIF(RTRIM(kd_user), '') FROM {db}.dbo.t_pembelian_retur",
+        "arunika": "SELECT r.nomor, r.tanggal, r.no_bukti, d.kode, pm.kode, cb.kode, "
+                   "ks.kode, r.keterangan, pg.kode "
+                   "FROM dbo.pembelian_retur r "
+                   "INNER JOIN dbo.divisi d ON d.id = r.divisi_id "
+                   "LEFT JOIN dbo.pemasok pm ON pm.id = r.pemasok_id "
+                   "LEFT JOIN dbo.cara_bayar cb ON cb.id = r.cara_bayar_id "
+                   "LEFT JOIN dbo.kas ks ON ks.id = r.kas_id "
+                   "LEFT JOIN dbo.pengguna pg ON pg.id = r.pengguna_id",
+    },
+    "pembelian_retur_baris": {
+        "kolom": ["retur_nomor", "tanggal", "divisi_kode", "barang_kode",
+                  "satuan_kode", "qty", "harga", "total"],
+        "legacy": _badan_pembelian_retur_baris,
+        "arunika": "SELECT r.nomor, r.tanggal, dv.kode, b.kode, s.kode, "
+                   "rb.qty, rb.harga, rb.total "
+                   "FROM dbo.pembelian_retur_baris rb "
+                   "INNER JOIN dbo.pembelian_retur r ON r.id = rb.retur_id "
+                   "INNER JOIN dbo.divisi dv ON dv.id = r.divisi_id "
+                   "INNER JOIN dbo.barang b ON b.id = rb.barang_id "
+                   "INNER JOIN dbo.satuan s ON s.id = rb.satuan_id",
+    },
     # --- Order penjualan --------------------------------------------------
     #
     # `status` di sini berarti apa adanya, dan itu perbaikan yang disengaja:
@@ -621,6 +730,17 @@ TANPA_RTRIM = {
     # Diperiksa di kedua server: `no_transaksi` varchar(20) dan `kd_barang`
     # varchar(30), sedangkan `kd_divisi`/`kd_satuan`/`kd_user` char(6) -- dan
     # ketiga yang char itu memang di-RTRIM.
+    # Retur: `no_retur`/`no_bukti`/`kd_barang` varchar; `kd_customer` varchar di
+    # sisi jual tapi `kd_supplier` CHAR di sisi beli -- karena itu yang beli
+    # di-RTRIM dan yang jual tidak. Bukan ketidakkonsistenan kami; itu memang
+    # bentuk kedua tabelnya.
+    ("penjualan_retur", "nomor"): ("t_penjualan_retur", "no_retur"),
+    ("penjualan_retur", "pelanggan_kode"): ("t_penjualan_retur", "kd_customer"),
+    ("penjualan_retur_baris", "retur_nomor"): ("t_penjualan_retur_detail", "no_retur"),
+    ("penjualan_retur_baris", "barang_kode"): ("t_penjualan_retur_detail", "kd_barang"),
+    ("pembelian_retur", "nomor"): ("t_pembelian_retur", "no_retur"),
+    ("pembelian_retur_baris", "retur_nomor"): ("t_pembelian_retur_detail", "no_retur"),
+    ("pembelian_retur_baris", "barang_kode"): ("t_pembelian_retur_detail", "kd_barang"),
     # Order: hanya `kd_divisi` dan `kd_satuan` yang char; sisanya varchar.
     ("penjualan_order", "nomor"): ("t_penjualan_order", "no_order"),
     ("penjualan_order", "pelanggan_kode"): ("t_penjualan_order", "kd_customer"),
@@ -669,6 +789,11 @@ SUMBER_UTAMA = {
     "penjualan_baris": "t_penjualan_detail",
     "pembelian": "t_pembelian",
     "pembelian_baris": "t_pembelian_detail",
+    "cara_bayar": "m_jenis_bayar",
+    "penjualan_retur": "t_penjualan_retur",
+    "penjualan_retur_baris": "t_penjualan_retur_detail",
+    "pembelian_retur": "t_pembelian_retur",
+    "pembelian_retur_baris": "t_pembelian_retur_detail",
     "penjualan_order": "t_penjualan_order",
     "penjualan_order_baris": "t_penjualan_order_detail",
     # Keduanya membaca tabel DATAR yang sama; proyeksinya 1:1, jadi jumlah baris

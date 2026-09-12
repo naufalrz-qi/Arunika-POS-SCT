@@ -2059,6 +2059,79 @@ _JENIS_BAYAR_LABEL = (
 )
 
 
+def retur_penjualan_arunika(f):
+    """`retur_penjualan` di atas bentuk Arunika.
+
+    `nilai` berhenti dihitung di laporan. Jalur lama memanggil `_line_net()` di
+    sini; bentuk baru sudah menyimpannya sebagai `rb.total`, dibangkitkan
+    `adapter.badan_retur_baris` dari fungsi yang SAMA. Pola yang sudah dipakai
+    `penjualan_baris.total` untuk FMI Penjualan.
+
+    `no_rekening` datang dari `kas`, `bank` dari `kas.bank_kode` — dua lompatan
+    persis seperti jalur lama (`m_kas` lalu `m_bank`).
+    """
+    where, params = _base_where_arunika(f, date_col="rb.tanggal", div_col="rb.divisi_kode")
+    if f.get("kd_customer"):
+        where.append("r.pelanggan_kode = ?")
+        params.append(f["kd_customer"])
+    _search(where, params, f, ["r.nomor", "b.nama", "pl.nama"])
+    inner = (
+        "SELECT r.nomor AS no_retur, rb.tanggal, r.no_bukti, "
+        "COALESCE(dv.nama, '') AS divisi, "
+        "COALESCE(dv.keterangan, '') AS keterangan_divisi, "
+        "COALESCE(dv.awalan_nota, '') AS kepala_nota, "
+        "COALESCE(pl.nama, '') AS customer, b.nama AS barang, "
+        "COALESCE(st.nama, '') AS satuan, COALESCE(cb.nama, '') AS jenis_bayar, "
+        "COALESCE(ks.no_rekening, '') AS no_rekening, COALESCE(bk.nama, '') AS bank, "
+        "rb.harga AS harga_jual, COALESCE(pg.nama, '') AS sales, rb.qty, "
+        "rb.total AS nilai "
+        f"FROM {SRC}.penjualan_retur_baris rb "
+        f"INNER JOIN {SRC}.penjualan_retur r ON r.nomor = rb.retur_nomor "
+        f"INNER JOIN {SRC}.barang b ON b.kode = rb.barang_kode "
+        f"LEFT JOIN {SRC}.pelanggan pl ON pl.kode = r.pelanggan_kode "
+        f"LEFT JOIN {SRC}.divisi dv ON dv.kode = rb.divisi_kode "
+        f"LEFT JOIN {SRC}.satuan st ON st.kode = rb.satuan_kode "
+        f"LEFT JOIN {SRC}.cara_bayar cb ON cb.kode = r.cara_bayar_kode "
+        f"LEFT JOIN {SRC}.kas ks ON ks.kode = r.kas_kode "
+        f"LEFT JOIN {SRC}.bank bk ON bk.kode = ks.bank_kode "
+        f"LEFT JOIN {SRC}.pegawai pg ON pg.kode = rb.sales_kode "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
+
+
+def retur_pembelian_arunika(f):
+    """`retur_pembelian` di atas bentuk Arunika. Cermin `retur_penjualan_arunika`.
+
+    Dua beda, dan keduanya bawaan sisi beli: `petugas` dari `pengguna` (kepala
+    retur, `kd_user`) menggantikan `sales` per baris — `t_pembelian_retur_detail`
+    memang tak punya `kd_pegawai` — dan `keterangan` kepala retur ikut tampil.
+    """
+    where, params = _base_where_arunika(f, date_col="rb.tanggal", div_col="rb.divisi_kode")
+    _search(where, params, f, ["r.nomor", "b.nama", "pm.nama"])
+    inner = (
+        "SELECT r.nomor AS no_retur, rb.tanggal, r.no_bukti, "
+        "COALESCE(dv.nama, '') AS divisi, COALESCE(pm.nama, '') AS supplier, "
+        "COALESCE(cb.nama, '') AS pembayaran, COALESCE(bk.nama, '') AS bank, "
+        "COALESCE(ks.no_rekening, '') AS no_rekening, "
+        "COALESCE(pg.nama, '') AS petugas, rb.barang_kode AS kd_barang, "
+        "b.nama AS barang, rb.harga, COALESCE(st.nama, '') AS satuan, "
+        "COALESCE(r.keterangan, '') AS keterangan, rb.qty, rb.total AS nilai "
+        f"FROM {SRC}.pembelian_retur_baris rb "
+        f"INNER JOIN {SRC}.pembelian_retur r ON r.nomor = rb.retur_nomor "
+        f"INNER JOIN {SRC}.barang b ON b.kode = rb.barang_kode "
+        f"LEFT JOIN {SRC}.pemasok pm ON pm.kode = r.pemasok_kode "
+        f"LEFT JOIN {SRC}.divisi dv ON dv.kode = rb.divisi_kode "
+        f"LEFT JOIN {SRC}.satuan st ON st.kode = rb.satuan_kode "
+        f"LEFT JOIN {SRC}.cara_bayar cb ON cb.kode = r.cara_bayar_kode "
+        f"LEFT JOIN {SRC}.kas ks ON ks.kode = r.kas_kode "
+        f"LEFT JOIN {SRC}.bank bk ON bk.kode = ks.bank_kode "
+        f"LEFT JOIN {SRC}.pengguna pg ON pg.kode = r.pengguna_kode "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
+
+
 _STATUS_ORDER_LABEL = "CASE o.status WHEN 'terbuka' THEN 'Terbuka' ELSE 'Jadi Nota' END"
 
 
