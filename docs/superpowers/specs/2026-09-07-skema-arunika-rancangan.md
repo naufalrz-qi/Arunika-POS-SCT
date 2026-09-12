@@ -652,14 +652,15 @@ belum ada di `arunika_src`**, bukan terhalang penulisan SQL.
 | Yang dibutuhkan | Laporan yang menunggunya |
 |---|---|
 | ~~`t_pembelian` + `t_pembelian_detail`~~ | **selesai — lihat §7.8** (per Supplier & per Periode pindah; Pembelian dan Hutang masih menunggu hal lain) |
-| `m_userx` | Penjualan per Nota, per User, Laba HPP, Retur Pembelian |
-| `m_pegawai` | Penjualan Detail, Retur Penjualan, Shift |
-| `t_penjualan_retur` / `t_pembelian_retur` (+ detail) | Retur Penjualan, Retur Pembelian |
-| `t_*_order` (+ detail) | Order Penjualan, Order Pembelian |
+| ~~`m_userx`~~ | **selesai — §7.11** (per Nota & per User pindah; Laba HPP terhalang diskon 4 slot, Retur Pembelian pindah) |
+| ~~`m_pegawai`~~ | **selesai — §7.11** (Retur Penjualan pindah; Penjualan Detail terhalang diskon 4 slot, Shift nol baris) |
+| ~~`t_penjualan_retur` / `t_pembelian_retur`~~ | **selesai — §7.12** |
+| ~~`t_penjualan_order`~~ | **selesai — §7.12.** `t_pembelian_order` nol baris di kedua server |
+| ~~`t_opname_stok`~~ | **selesai — §7.12** |
 | ~~`t_biaya_operasional`~~ | **selesai — lihat §7.9** (jadi `jurnal_kas`; Kas Harian ikut, §7.10) |
-| `t_piutang_cicilan`, `t_hutang_cicilan` | Piutang, Hutang |
-| `t_opname_stok` | Opname |
-| `m_barang_promo` (+ detail) | Promo |
+| `t_piutang_cicilan`, `t_hutang_cicilan` | Piutang (5 baris grosirPusat), Hutang (**nol baris**) |
+| ~~`t_opname_stok`~~ | **selesai — §7.12** |
+| `m_barang_promo` (+ detail) | Promo (**nol baris di kedua server**) |
 
 Tiga sisanya terhalang **kolom**, bukan tabel — kelasnya lebih murah:
 
@@ -1108,6 +1109,58 @@ Label kas (§7.10) ikut diputuskan di sesi yang sama, dan grosirPusat memperliha
 bukan kosmetik belaka: server itu punya **dua** akun kas, `KAA000` dan `KAA001`, yang `keterangan`
 (`'-'`), `kd_index` (`1101`), dan `cabang` (`MATARAM`) -nya **identik**. Kotak filternya dulu
 menawarkan dua pilihan yang keduanya berbunyi `-`. Sekarang keduanya bisa dibedakan.
+
+## 7.12 Empat laporan lagi, dan batas yang akhirnya kelihatan
+
+Penjualan per Nota, Opname, Order Penjualan, dan kedua laporan retur pindah. **Sisa 9 dari 24
+spec.** Semua diukur baris-per-baris di kedua server, nol beda.
+
+### Tiga temuan yang berulang, dan satu yang baru
+
+**`MIN(tanggal)` mengunci riwayat — lagi.** §7.5 menemukannya di `_nota_net()`; ia muncul utuh di
+`_order_net()`, dan dengan sebab yang persis sama: view dibangkitkan dengan `"1=1"`, jadi seluruh
+penyaringan terjadi di luar, dan agregat menghalangi predikat tanggal turun ke bawah `GROUP BY`.
+testGUdang sebulan **2,72 → 0,13 dtk (21×)** sesudah kolom kepala jadi kunci `GROUP BY`. Syaratnya
+diperiksa dulu: `no_order` unik 40.975/40.975 dan 7.209/7.209.
+
+**Dokumen tanpa baris detail — lagi.** 4 order testGUdang (grosirPusat nol). Jalur legacy pun
+meng-INNER JOIN, jadi keempatnya memang tak pernah muncul di laporan mana pun; `penjualan_order`
+tinggal didaftarkan di `_DARI_SUBQUERY_NOTA`.
+
+**Kolom `status` yang ternyata klasifikasi — kejadian KETIGA.** Sesudah `m_biaya` dan
+`m_pegawai`, giliran `m_jenis_bayar`, dan kali ini yang menggoda justru helper kami sendiri:
+`_referensi()` memetakan `aktif = (status = 1)`, yang akan mematikan 3 dari 5 baris di testGUdang
+dan 3 dari 6 di grosirPusat. Pengelompokannya identik di kedua server — 1 = TUNAI/BON/DEBIT
+(lunas seketika), 2 = BG/CEK/KREDIT (tertunda) — dan tak satu view pun menyaringnya.
+
+> **Aturan, bukan anekdot.** Tiga kali berturut-turut sebuah kolom bernama `status` ternyata bukan
+> bendera aktif. Sebelum memetakannya: hitung sebarannya di **kedua** server, lalu cari view yang
+> menyaringnya. Kalau tak ada yang menyaring, ia bukan bendera hidup-mati.
+
+**Baru: perbandingan butuh urutan TOTAL.** Retur Penjualan sempat melaporkan 19 baris berbeda.
+Bukan data — dua baris dalam satu retur dengan barang dan qty sama tapi harga berbeda, dan
+`ORDER BY` pembandingnya tidak menentukan urutan di antara keduanya. Dengan harga + nilai sebagai
+tiebreaker: nol. Alat ukur yang urutannya tak total melaporkan selisih yang tidak ada.
+
+### Yang tersisa, dan kenapa bukan soal usaha
+
+| Laporan | Penghalang |
+|---|---|
+| **Penjualan Detail**, **Laba HPP**, **Pembelian** | **diskon 4 slot** — satu keputusan, tiga laporan |
+| Master Produk | kodifikasi `ukuran` (14 nilai) & arti `pabrik` tak ada di skema — §7.6 |
+| Order Pembelian, Promo, Hutang, Shift | tabelnya **nol baris di kedua server** |
+| Piutang | 5 baris, hanya grosirPusat |
+
+Yang paling berharga di sini koreksi terhadap perkiraan sebelumnya: diskon 4 slot dikira
+menghalangi **satu** laporan. Ternyata **tiga**. Penjualan Detail menampilkan kedelapan slot
+(DD1–DD4, DT1–DT4) sebagai kolom, dan Laba HPP memakainya ganda — `_disk4("h")` di sisi jual
+*dan* `_disk4("pd")` + `ppnbm` di sisi beli. Itu menjadikannya keputusan dengan daya ungkit
+tertinggi yang tersisa.
+
+Empat laporan bertabel kosong sengaja **tidak** dibangun. Adapternya bisa ditulis; yang tak bisa
+adalah membuktikannya — "identik" atas nol baris lawan nol baris tidak menyatakan apa pun, dan
+kode yang tak pernah dijalankan atas satu baris pun rusak diam-diam saat data pertama masuk.
+Mereka menunggu **data**, bukan menunggu kode.
 
 ## 8. Yang harus diverifikasi sebelum rancangan ini dibekukan
 
