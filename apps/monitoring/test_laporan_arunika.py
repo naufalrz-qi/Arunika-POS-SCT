@@ -29,6 +29,32 @@ def _spec_arunika():
             yield nama, obj
 
 
+def _select_terluar(sql: str) -> str:
+    """Potong daftar SELECT terluar: dari `SELECT` pertama sampai `FROM` yang
+    sepadan dengannya (kedalaman kurung nol).
+
+    Yang menentukan nama kolom keluaran hanya bagian ini. Sisa SQL-nya penuh
+    kecocokan palsu -- nama tabel, alias join, kolom di WHERE -- dan itu bukan
+    kekhawatiran teoretis: versi pertama test pemanggilnya mencari di seluruh
+    teks dan lolos saat alias `kota` sengaja dirusak, karena `arunika_src.kota`
+    masih tertulis di klausa JOIN.
+    """
+    m = re.search(r"\bSELECT\b", sql, re.IGNORECASE)
+    if not m:
+        return ""
+    i, dalam = m.end(), 0
+    while i < len(sql):
+        c = sql[i]
+        if c == "(":
+            dalam += 1
+        elif c == ")":
+            dalam -= 1
+        elif dalam == 0 and sql.startswith("FROM", i) and re.match(r"FROM\b", sql[i:], re.I):
+            return sql[m.end():i]
+        i += 1
+    return sql[m.end():]
+
+
 def _filter(spec):
     req = RequestFactory().get("/x?date_from=2026-01-01&date_to=2026-01-31")
     f = reporting.parse_report_params(
@@ -69,6 +95,53 @@ class BentukArunikaSaja(SimpleTestCase):
             baru, _ = spec["inner_arunika"](f)
             for alias in spec["sorts"].values():
                 self.assertIn(alias, baru, f"{nama}: kolom sort '{alias}' hilang")
+
+    def test_kolom_pajangan_dan_penyaring_ikut_ada(self):
+        """`sorts` saja tidak cukup, dan celahnya beda gejala untuk masing-masing.
+
+        Kolom yang cuma ada di `columns` hilang tanpa suara: selnya kosong, dan
+        tak satu pun test lama merah. Kolom yang cuma ada di `filters` lebih
+        buruk -- `_report_view` menyusun `WHERE <alias> ...` dari nilainya, jadi
+        aliasnya yang absen membuat laporan MELEDAK, tapi hanya ketika seseorang
+        benar-benar mengetik di kotak filter itu.
+
+        ## Kenapa hanya daftar SELECT terluar yang diperiksa
+
+        Versi pertama test ini mencari nama kolom di SELURUH teks SQL dan karena
+        itu **tidak menggigit sama sekali**: diuji dengan sengaja mengganti alias
+        `kota` jadi `kotaXX` di Penjualan per Nota, dan ia tetap hijau -- sebab
+        kata `kota` masih muncul sebagai NAMA TABEL di
+        `JOIN arunika_src.kota kt`. Nama tabel, alias join, dan predikat WHERE
+        semuanya memberi kecocokan palsu.
+
+        Yang menentukan keluaran hanyalah daftar SELECT terluar, jadi itu yang
+        dipotong (`_select_terluar`) sebelum dicocokkan.
+        """
+        for nama, spec in _spec_arunika():
+            sql, _ = spec["inner_arunika"](_filter(spec))
+            keluaran = _select_terluar(sql)
+            # `SELECT g.*` (FMI Penjualan) menurunkan kolomnya dari subquery,
+            # jadi daftar terluar tak bisa menjawab apa-apa. Turun ke pencarian
+            # seluruh teks di kasus itu -- lebih lemah, dan memang begitu:
+            # tanpa menjalankan SQL-nya, bintang tak bisa dipecahkan.
+            berbintang = "*" in keluaran
+            ruang = sql if berbintang else keluaran
+
+            def ada(kol):
+                if berbintang:
+                    return re.search(r"\b" + re.escape(kol) + r"\b", ruang) is not None
+                # `]?` wajib: alias yang bertabrakan dengan kata terpesan ditulis
+                # berkurung siku -- `AS [user]` di Penjualan per User.
+                pola = r"\b" + re.escape(kol) + r"\]?\s*(?:,|$)"
+                return re.search(pola, ruang) is not None
+
+            for kol in spec.get("columns", []):
+                self.assertTrue(ada(kol["key"]),
+                                f"{nama}: kolom layar '{kol['key']}' tak ada di SELECT terluar")
+            for nilai in (spec.get("filters") or {}).values():
+                alias = nilai[0] if isinstance(nilai, (tuple, list)) else nilai
+                self.assertTrue(ada(alias),
+                                f"{nama}: kolom penyaring '{alias}' tak ada di SELECT terluar")
 
 
 class GerbangnyaMati(SimpleTestCase):
