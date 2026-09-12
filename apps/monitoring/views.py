@@ -2499,6 +2499,7 @@ _PEMBELIAN = {
     "component": "Admin/Reports/Pembelian",
     "url": "/admin-panel/laporan/pembelian",
     "inner": rpt.pembelian,
+    "inner_arunika": rpt.pembelian_arunika,
     "sorts": rpt.SORTS_PEMBELIAN,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_PEMBELIAN,

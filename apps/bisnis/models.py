@@ -471,6 +471,16 @@ class Pembelian(models.Model):
     pajak = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
 
+    # Satu slot persen, sama seperti sisi jual -- lihat `PenjualanBaris.diskon_persen`.
+    # Kedua TARIF disimpan sebagai fraksi (0,1 = 10%), bukan rupiah: `pajak` di
+    # atas hasil hitungnya, `pajak_persen` di sini tarifnya. Laporan Pembelian
+    # menampilkan yang tarif.
+    diskon_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
+    pajak_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
+    ppnbm_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
+    nomor_order = models.CharField(max_length=30, blank=True, null=True)
+    keterangan = models.CharField(max_length=100, blank=True)
+
     jenis_bayar = models.CharField(max_length=10, choices=JenisBayar.choices, default=JenisBayar.TUNAI)
     status = models.CharField(max_length=10, choices=StatusPenjualan.choices, default=StatusPenjualan.AKTIF)
     dibuat_oleh = models.IntegerField(null=True, blank=True)
@@ -501,6 +511,7 @@ class PembelianBaris(models.Model):
     diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
 
+    diskon_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
     class Meta:
         db_table = "pembelian_baris"
         indexes = [models.Index(fields=["barang"], name="ix_beli_baris_barang")]

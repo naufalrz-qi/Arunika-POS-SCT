@@ -481,17 +481,23 @@ _MASTER: dict[str, dict] = {
     # voucher -- voucher adalah alat jual, bukan alat beli.
     "pembelian": {
         "kolom": ["nomor", "tanggal", "divisi_kode", "pemasok_kode",
-                  "subtotal", "diskon", "pajak", "total", "jenis_bayar", "status"],
+                  "subtotal", "diskon", "pajak", "total",
+                  "diskon1", "diskon2", "diskon3", "diskon4",
+                  "pajak_persen", "ppnbm_persen", "nomor_order", "keterangan",
+                  "jenis_bayar", "status"],
         "legacy": _badan_pembelian,
         "arunika": "SELECT p.nomor, p.tanggal, d.kode, pm.kode, "
-                   "p.subtotal, p.diskon, p.pajak, p.total, p.jenis_bayar, p.status "
+                   "p.subtotal, p.diskon, p.pajak, p.total, "
+                   "p.diskon_persen, 0, 0, 0, p.pajak_persen, p.ppnbm_persen, "
+                   "p.nomor_order, p.keterangan, p.jenis_bayar, p.status "
                    "FROM dbo.pembelian p "
                    "INNER JOIN dbo.divisi d ON d.id = p.divisi_id "
                    "LEFT JOIN dbo.pemasok pm ON pm.id = p.pemasok_id",
     },
     "pembelian_baris": {
         "kolom": ["pembelian_nomor", "tanggal", "divisi_kode",
-                  "barang_kode", "satuan_kode", "qty", "harga", "total"],
+                  "barang_kode", "satuan_kode", "qty", "harga",
+                  "diskon1", "diskon2", "diskon3", "diskon4", "total"],
         # `tanggal` + `divisi_kode` dibawa baris, alasan sama dengan
         # `penjualan_baris`: tanpa keduanya tiap laporan tingkat-baris harus
         # men-join view kepala yang menghitung seluruh nilai uang per nota,
@@ -501,10 +507,13 @@ _MASTER: dict[str, dict] = {
         # terhadap `_line_net('harga_beli')` diuji per baris: **0 beda dari
         # 150.920** di grosirPusat.
         "legacy": "SELECT d.no_transaksi, h.tanggal, RTRIM(h.kd_divisi), "
-                  "d.kd_barang, RTRIM(d.kd_satuan), d.qty, d.harga_beli, d.total "
+                  "d.kd_barang, RTRIM(d.kd_satuan), d.qty, d.harga_beli, "
+                  "COALESCE(d.diskon1, 0), COALESCE(d.diskon2, 0), "
+                  "COALESCE(d.diskon3, 0), COALESCE(d.diskon4, 0), d.total "
                   "FROM {db}.dbo.t_pembelian_detail d "
                   "INNER JOIN {db}.dbo.t_pembelian h ON h.no_transaksi = d.no_transaksi",
-        "arunika": "SELECT p.nomor, p.tanggal, dv.kode, b.kode, s.kode, pb.qty, pb.harga, pb.total "
+        "arunika": "SELECT p.nomor, p.tanggal, dv.kode, b.kode, s.kode, pb.qty, pb.harga, "
+                   "pb.diskon_persen, 0, 0, 0, pb.total "
                    "FROM dbo.pembelian_baris pb "
                    "INNER JOIN dbo.pembelian p ON p.id = pb.pembelian_id "
                    "INNER JOIN dbo.divisi dv ON dv.id = p.divisi_id "

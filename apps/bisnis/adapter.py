@@ -276,6 +276,11 @@ def badan_pembelian(db_legacy: str) -> str:
     return (
         "SELECT n.no_transaksi, n.tanggal, RTRIM(n.kd_divisi), RTRIM(n.kd_supplier), "
         "n.total_kotor, n.total_kotor - (n.total_bersih - n.pajak), n.pajak, n.total_bersih, "
+        # Empat slot diskon persen tingkat nota, kedua TARIF (fraksi, bukan
+        # rupiah), plus `no_order` dan `keterangan`. Mode Arunika mengisi slot
+        # pertama dari `diskon_persen` dan sisanya nol.
+        "n.hd1, n.hd2, n.hd3, n.hd4, n.pajak_rate, n.ppnbm_rate, "
+        "NULLIF(LTRIM(RTRIM(n.no_order)), ''), n.keterangan, "
         "CASE n.status_raw WHEN 0 THEN 'kredit' WHEN 1 THEN 'tunai' "
         "WHEN 2 THEN 'lunas' ELSE '' END, "
         # Sama seperti penjualan: kepala nota legacy tak punya kolom pembatalan.

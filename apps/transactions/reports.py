@@ -606,11 +606,18 @@ def _pembelian_nota(where_sql: str) -> str:
     disisihkan sebagai fitur terpisah nanti."""
     net_pre_tax = _ghb("net_lines", ["hd1", "hd2", "hd3", "hd4"])
     return (
-        "SELECT no_transaksi, tanggal, kd_supplier, kd_divisi, status_raw, total_kotor, "
+        # `hd1..hd4`, kedua tarif, `no_order` dan `keterangan` ikut keluar supaya
+        # `badan_pembelian` bisa memaparkannya tanpa subquery kedua. Perhatikan
+        # `pajak` (RUPIAH, hasil hitung) berbeda dari `pajak_rate` (fraksi, kolom
+        # asli) -- laporan Pembelian menampilkan yang kedua.
+        "SELECT no_transaksi, no_order, tanggal, kd_supplier, kd_divisi, status_raw, "
+        "keterangan, total_kotor, hd1, hd2, hd3, hd4, pajak_rate, ppnbm_rate, "
         f"({net_pre_tax}) * pajak_rate AS pajak, "
         f"({net_pre_tax}) * (1 + pajak_rate) * (1 + ppnbm_rate) AS total_bersih "
         "FROM ("
-        "SELECT h.no_transaksi, h.tanggal, h.kd_supplier, h.kd_divisi, h.status AS status_raw, "
+        "SELECT h.no_transaksi, COALESCE(h.no_order, '') AS no_order, h.tanggal, "
+        "h.kd_supplier, h.kd_divisi, h.status AS status_raw, "
+        "COALESCE(h.keterangan, '') AS keterangan, "
         "SUM(d.qty * d.harga_beli) AS total_kotor, "
         "COALESCE(h.pajak, 0) AS pajak_rate, COALESCE(h.ppnbm, 0) AS ppnbm_rate, "
         "COALESCE(h.diskon1, 0) AS hd1, COALESCE(h.diskon2, 0) AS hd2, "
@@ -619,7 +626,8 @@ def _pembelian_nota(where_sql: str) -> str:
         "FROM t_pembelian h "
         "INNER JOIN t_pembelian_detail d ON h.no_transaksi = d.no_transaksi "
         f"WHERE {where_sql} "
-        "GROUP BY h.no_transaksi, h.tanggal, h.kd_supplier, h.kd_divisi, h.status, "
+        "GROUP BY h.no_transaksi, h.no_order, h.tanggal, h.kd_supplier, h.kd_divisi, "
+        "h.status, h.keterangan, "
         "h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.pajak, h.ppnbm"
         ") nz"
     )
@@ -2063,6 +2071,42 @@ _JENIS_BAYAR_LABEL = (
     "CASE p.jenis_bayar WHEN 'kredit' THEN 'Kredit' WHEN 'tunai' THEN 'Tunai' "
     "WHEN 'lunas' THEN 'Lunas' ELSE '' END"
 )
+
+
+def pembelian_arunika(f):
+    """`pembelian` di atas bentuk Arunika. Cermin `penjualan_detail_arunika`.
+
+    Satu-satunya laporan yang menampilkan **kedua tarif** (`pajak`, `ppnbm`)
+    sebagai fraksi, bukan rupiah — dan itu jebakan penamaan yang perlu disebut:
+    `arunika_src.pembelian.pajak` adalah pajak dalam RUPIAH (hasil hitung
+    `_pembelian_nota()`), sementara yang ditampilkan layar ini `pajak_persen`,
+    kolom aslinya. Keduanya ada di view justru supaya tak tertukar.
+
+    Sisi beli inilah yang benar-benar memakai slot diskon kedua — 10 baris detail
+    dan 2 kepala di testGUdang, nilainya 0,05. Semuanya terbaca utuh di mode
+    legacy, karena adapter membaca `diskon1..4` yang asli.
+    """
+    where, params = _base_where_arunika(f, date_col="pb.tanggal", div_col="pb.divisi_kode")
+    _search(where, params, f, ["pb.pembelian_nomor", "b.nama", "pm.nama"])
+    inner = (
+        "SELECT pb.pembelian_nomor AS no_transaksi, "
+        "COALESCE(p.nomor_order, '') AS no_order, pb.tanggal, "
+        "COALESCE(pm.nama, '') AS supplier, COALESCE(p.keterangan, '') AS note, "
+        "b.nama AS barang, pb.qty, COALESCE(st.nama, '') AS satuan, pb.harga, "
+        "pb.diskon1 AS diskon_item1, pb.diskon2 AS diskon_item2, "
+        "pb.diskon3 AS diskon_item3, pb.diskon4 AS diskon_item4, "
+        "p.diskon1 AS diskon_total1, p.diskon2 AS diskon_total2, "
+        "p.diskon3 AS diskon_total3, p.diskon4 AS diskon_total4, "
+        "p.pajak_persen AS pajak, p.ppnbm_persen AS ppnbm, "
+        f"{_line_net('harga', 'pb')} AS subtotal "
+        f"FROM {SRC}.pembelian_baris pb "
+        f"INNER JOIN {SRC}.pembelian p ON p.nomor = pb.pembelian_nomor "
+        f"INNER JOIN {SRC}.barang b ON b.kode = pb.barang_kode "
+        f"LEFT JOIN {SRC}.pemasok pm ON pm.kode = p.pemasok_kode "
+        f"LEFT JOIN {SRC}.satuan st ON st.kode = pb.satuan_kode "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
 
 
 def penjualan_detail_arunika(f):
