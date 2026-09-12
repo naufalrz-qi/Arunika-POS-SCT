@@ -2201,6 +2201,7 @@ _PENJUALAN_HPP = {
     "component": "Admin/Reports/PenjualanHpp",
     "url": "/admin-panel/laporan/penjualan-hpp",
     "inner": rpt.penjualan_hpp,
+    "inner_arunika": rpt.penjualan_hpp_arunika,
     "sorts": rpt.SORTS_PENJUALAN_HPP,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_PENJUALAN_HPP,

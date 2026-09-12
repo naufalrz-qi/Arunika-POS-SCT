@@ -132,7 +132,7 @@ def _nota_net(where_sql: str) -> str:
         # Detail), berbeda dari `diskon_uang` yang rupiah flat.
         "SELECT no_transaksi, tanggal, kd_customer, kd_divisi, status_raw, kd_voucher, "
         "kd_user, kd_kas, tanggal_jatuh_tempo, keterangan, total_kotor, "
-        "hd1, hd2, hd3, hd4, "
+        "hd1, hd2, hd3, hd4, pajak_rate, "
         f"({net_pre_tax}) * pajak_rate AS pajak, "
         f"({net_pre_tax}) * (1 + pajak_rate) - diskon_uang AS total_bersih "
         "FROM ("
@@ -2071,6 +2071,89 @@ _JENIS_BAYAR_LABEL = (
     "CASE p.jenis_bayar WHEN 'kredit' THEN 'Kredit' WHEN 'tunai' THEN 'Tunai' "
     "WHEN 'lunas' THEN 'Lunas' ELSE '' END"
 )
+
+
+def penjualan_hpp_arunika(f):
+    """`penjualan_hpp` di atas bentuk Arunika. Laporan paling berlapis di sini.
+
+    Empat hal yang membuatnya bukan sekadar tukar nama tabel:
+
+    **1. Harga pokok tetap "pembelian terakhir", bukan rata-rata.** Laporan ini
+    replika `mon_t_penjualan_per_barang_harga_pokok`, dan valuasinya memang
+    berbeda dari Laba Rugi (yang sengaja memakai rata-rata tertimbang karena
+    LIFO legacy dilarang PSAK 14). Perpindahan ini TIDAK menyatukan keduanya —
+    itu perubahan angka, bukan migrasi.
+
+    **2. `_purchase_prices()` tidak dipakai, dan tidak boleh.** Ia membagi
+    pembilang DAN penyebut dengan `bs.jumlah`, sehingga memulangkan harga per
+    satuan *pembelian* sementara kuantitas pengalinya dalam satuan *dasar* —
+    terbukti 10,00x pada `AMP013`. `cost_sub` di sini membagi sekali saja, di
+    tempat yang benar.
+
+    **3. `pajak_persen`, bukan `pajak`.** Tarif, bukan rupiah. Kekeliruan yang
+    sama nyaris terjadi di sisi pembelian; kini keduanya kolom terpisah di view.
+
+    **4. `barang_divisi` menyediakan cadangan `harga_beli_awal`** untuk barang
+    yang belum pernah dibeli — `MAX()` per barang, persis seperti jalur lama.
+    """
+    where, params = _base_where_arunika(f, date_col="pb.tanggal", div_col="pb.divisi_kode")
+    _search(where, params, f, ["pb.penjualan_nomor", "b.nama", "pl.nama"])
+
+    item_net = _unit_net("harga", "pb")
+    harga_net = _ghb(item_net, _disk4("p"), pajak="COALESCE(p.pajak_persen, 0)")
+    cost_net = _ghb("cb.harga", _disk4("cb"),
+                    pajak="COALESCE(cp.pajak_persen, 0)", ppnbm="COALESCE(cp.ppnbm_persen, 0)")
+    cost_sub = (
+        "SELECT barang_kode, harga_net_cost FROM ("
+        "SELECT cb.barang_kode, "
+        f"({cost_net}) / NULLIF(bs.isi, 0) AS harga_net_cost, "
+        "ROW_NUMBER() OVER (PARTITION BY cb.barang_kode "
+        "ORDER BY cp.tanggal DESC, cp.nomor DESC) AS rn "
+        f"FROM {SRC}.pembelian_baris cb "
+        f"INNER JOIN {SRC}.pembelian cp ON cp.nomor = cb.pembelian_nomor "
+        f"INNER JOIN {SRC}.barang_satuan bs "
+        "ON bs.barang_kode = cb.barang_kode AND bs.satuan_kode = cb.satuan_kode "
+        "WHERE cb.harga > 0"
+        ") z WHERE z.rn = 1"
+    )
+    base = (
+        "SELECT pb.penjualan_nomor AS no_transaksi, pb.tanggal, "
+        "COALESCE(dv.nama, '') AS divisi, COALESCE(pl.nama, '') AS customer, "
+        "pb.barang_kode AS kd_barang, COALESCE(b.nama, '') AS barang, "
+        "COALESCE(kg.nama, '') AS kategori, pb.qty, COALESCE(st.nama, '') AS satuan, "
+        "COALESCE(pgn.nama, '') AS petugas, bst.isi AS konv, "
+        f"({harga_net}) AS harga_net, "
+        "ISNULL(cost.harga_net_cost, opening.harga_beli_awal) AS harga_pokok "
+        f"FROM {SRC}.penjualan_baris pb "
+        f"INNER JOIN {SRC}.penjualan p ON p.nomor = pb.penjualan_nomor "
+        f"INNER JOIN {SRC}.barang b ON b.kode = pb.barang_kode "
+        f"LEFT JOIN {SRC}.pelanggan pl ON pl.kode = p.pelanggan_kode "
+        f"LEFT JOIN {SRC}.divisi dv ON dv.kode = pb.divisi_kode "
+        f"LEFT JOIN {SRC}.kategori kg ON kg.kode = b.kategori_kode "
+        f"LEFT JOIN {SRC}.pengguna pgn ON pgn.kode = p.pengguna_kode "
+        f"LEFT JOIN {SRC}.satuan st ON st.kode = pb.satuan_kode "
+        f"INNER JOIN {SRC}.barang_satuan bst "
+        "ON bst.barang_kode = pb.barang_kode AND bst.satuan_kode = pb.satuan_kode "
+        f"LEFT JOIN ({cost_sub}) cost ON cost.barang_kode = pb.barang_kode "
+        "INNER JOIN (SELECT barang_kode, MAX(harga_beli_awal) AS harga_beli_awal "
+        f"FROM {SRC}.barang_divisi GROUP BY barang_kode) opening "
+        "ON opening.barang_kode = pb.barang_kode "
+        f"WHERE {' AND '.join(where)}"
+    )
+    inner = (
+        "SELECT x.no_transaksi, x.tanggal, x.divisi, x.customer, x.kd_barang, x.barang, "
+        "x.kategori, x.qty, x.satuan, x.petugas, "
+        "ROUND(x.harga_net / NULLIF(x.konv, 0), 2) AS harga, "
+        "ROUND(x.harga_pokok, 2) AS harga_pokok, "
+        "ROUND(x.harga_net * x.qty, 2) AS total_bersih, "
+        "ROUND(x.harga_pokok * x.qty * x.konv, 2) AS total_harga_pokok, "
+        "ROUND(x.harga_net * x.qty - x.harga_pokok * x.qty * x.konv, 2) AS laba, "
+        "ROUND((x.harga_net * x.qty - x.harga_pokok * x.qty * x.konv) / "
+        "(CASE WHEN x.harga_pokok * x.qty * x.konv = 0 THEN 1 "
+        "ELSE x.harga_pokok * x.qty * x.konv END) * 100, 2) AS margin "
+        f"FROM ({base}) x"
+    )
+    return inner, params
 
 
 def pembelian_arunika(f):

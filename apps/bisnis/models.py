@@ -364,6 +364,11 @@ class Penjualan(models.Model):
     # Satu slot, bukan empat -- lihat catatan di `PenjualanBaris.diskon_persen`.
     diskon_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
     pajak = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    # TARIF pajak (fraksi, 0,1 = 10%), terpisah dari `pajak` yang rupiah. Laba
+    # HPP memerlukan tarifnya untuk menyusun harga net per unit; menyatukan
+    # keduanya di satu nama adalah persis kekeliruan yang bikin sisi pembelian
+    # nyaris salah baca.
+    pajak_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
     total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     dibayar = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     jatuh_tempo = models.DateTimeField(null=True, blank=True)
@@ -997,3 +1002,28 @@ class PembelianReturBaris(models.Model):
     class Meta:
         db_table = "pembelian_retur_baris"
         indexes = [models.Index(fields=["barang"], name="ix_retur_beli_baris_brg")]
+
+
+class BarangDivisi(models.Model):
+    """Saldo & harga awal sebuah barang di satu divisi — `m_barang_divisi`.
+
+    Entitas sendiri, bukan kolom tempelan di `Barang`: Laba HPP memakai
+    `harga_beli_awal` sebagai cadangan ketika sebuah barang belum pernah dibeli,
+    dan menaruh agregat itu di dalam view `barang` akan membebani setiap
+    pembacanya demi satu laporan.
+
+    Bukan 1:1 dengan barang — gudang punya lima divisi: 35.309 baris untuk
+    30.938 barang di testGUdang, 53.411 untuk 53.411 di grosirPusat.
+    """
+
+    barang = models.ForeignKey("Barang", on_delete=models.CASCADE, related_name="per_divisi")
+    divisi = models.ForeignKey("Divisi", on_delete=models.PROTECT)
+    stok_awal = models.DecimalField(max_digits=18, decimal_places=3, default=0)
+    harga_beli_awal = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    stok_min = models.DecimalField(max_digits=18, decimal_places=3, default=0)
+
+    class Meta:
+        db_table = "barang_divisi"
+        constraints = [
+            models.UniqueConstraint(fields=["barang", "divisi"], name="uq_barang_divisi"),
+        ]

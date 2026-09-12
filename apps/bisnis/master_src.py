@@ -373,8 +373,8 @@ _MASTER: dict[str, dict] = {
     "penjualan": {
         "kolom": ["nomor", "tanggal", "divisi_kode", "pelanggan_kode", "voucher_kode",
                   "kas_kode", "pengguna_kode", "subtotal", "diskon", "pajak", "total",
-                  "diskon1", "diskon2", "diskon3", "diskon4", "jatuh_tempo", "keterangan",
-                  "jenis_bayar", "status"],
+                  "diskon1", "diskon2", "diskon3", "diskon4", "pajak_persen",
+                  "jatuh_tempo", "keterangan", "jenis_bayar", "status"],
         # ## Kenapa memanggil fungsi vendor, bukan menulis formulanya sendiri
         #
         # `t_penjualan_total` hanya menutup 55% nota di grosirPusat (259.258 dari
@@ -418,8 +418,8 @@ _MASTER: dict[str, dict] = {
         # memang tak pernah memakai lebih dari satu slot.
         "arunika": "SELECT p.nomor, p.tanggal, d.kode, pl.kode, v.kode, ks.kode, pg.kode, "
                    "p.subtotal, p.diskon, p.pajak, p.total, "
-                   "p.diskon_persen, 0, 0, 0, p.jatuh_tempo, p.keterangan, "
-                   "p.jenis_bayar, p.status "
+                   "p.diskon_persen, 0, 0, 0, p.pajak_persen, "
+                   "p.jatuh_tempo, p.keterangan, p.jenis_bayar, p.status "
                    "FROM dbo.penjualan p "
                    "INNER JOIN dbo.divisi d ON d.id = p.divisi_id "
                    "LEFT JOIN dbo.pelanggan pl ON pl.id = p.pelanggan_id "
@@ -521,6 +521,23 @@ _MASTER: dict[str, dict] = {
                    "INNER JOIN dbo.satuan s ON s.id = pb.satuan_id",
     },
     # --- Kas ---------------------------------------------------------------
+    # `m_barang_divisi` -> `barang_divisi`. Entitas sendiri, bukan kolom tempelan
+    # di `barang`: Laba HPP memerlukan `harga_beli_awal` sebagai cadangan ketika
+    # sebuah barang belum pernah dibeli, dan menaruh agregat itu di dalam view
+    # `barang` akan membebani SETIAP pembacanya -- padahal cuma satu laporan yang
+    # memakainya. `stok_awal`/`stok_min` ikut karena gratis dan sebentuk.
+    #
+    # Bukan 1:1 dengan barang: 35.309 baris untuk 30.938 barang di testGUdang
+    # (gudang punya lima divisi), 53.411 untuk 53.411 di grosirPusat.
+    "barang_divisi": {
+        "kolom": ["barang_kode", "divisi_kode", "stok_awal", "harga_beli_awal", "stok_min"],
+        "legacy": "SELECT kd_barang, RTRIM(kd_divisi), stok_awal, harga_beli_awal, stok_min "
+                  "FROM {db}.dbo.m_barang_divisi",
+        "arunika": "SELECT b.kode, d.kode, bd.stok_awal, bd.harga_beli_awal, bd.stok_min "
+                   "FROM dbo.barang_divisi bd "
+                   "INNER JOIN dbo.barang b ON b.id = bd.barang_id "
+                   "INNER JOIN dbo.divisi d ON d.id = bd.divisi_id",
+    },
     # --- Retur --------------------------------------------------------------
     #
     # Cermin di kedua sisi, dan bentuknya nyaris identik. Yang berbeda cuma
@@ -748,6 +765,7 @@ TANPA_RTRIM = {
     # Diperiksa di kedua server: `no_transaksi` varchar(20) dan `kd_barang`
     # varchar(30), sedangkan `kd_divisi`/`kd_satuan`/`kd_user` char(6) -- dan
     # ketiga yang char itu memang di-RTRIM.
+    ("barang_divisi", "barang_kode"): ("m_barang_divisi", "kd_barang"),
     # Retur: `no_retur`/`no_bukti`/`kd_barang` varchar; `kd_customer` varchar di
     # sisi jual tapi `kd_supplier` CHAR di sisi beli -- karena itu yang beli
     # di-RTRIM dan yang jual tidak. Bukan ketidakkonsistenan kami; itu memang
@@ -807,6 +825,7 @@ SUMBER_UTAMA = {
     "penjualan_baris": "t_penjualan_detail",
     "pembelian": "t_pembelian",
     "pembelian_baris": "t_pembelian_detail",
+    "barang_divisi": "m_barang_divisi",
     "cara_bayar": "m_jenis_bayar",
     "penjualan_retur": "t_penjualan_retur",
     "penjualan_retur_baris": "t_penjualan_retur_detail",
