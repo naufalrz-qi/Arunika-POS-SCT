@@ -422,6 +422,11 @@ def badan_penjualan(db_legacy: str) -> str:
         # sama seperti `kd_kas` di atas.
         "NULLIF(RTRIM(n.kd_user), ''), "
         "n.total_kotor, n.total_kotor - (n.total_bersih - n.pajak), n.pajak, n.total_bersih, "
+        # Empat slot diskon PERSEN tingkat nota (DT1-DT4 di layar Penjualan
+        # Detail), berbeda dari kolom `diskon` di kiri yang rupiah. Dipaparkan
+        # apa adanya di mode legacy; mode Arunika mengisi slot pertama dari
+        # `diskon_persen` dan sisanya nol -- lihat `PenjualanBaris.diskon_persen`.
+        "n.hd1, n.hd2, n.hd3, n.hd4, n.tanggal_jatuh_tempo, n.keterangan, "
         # `t_penjualan.status` adalah JENIS PEMBAYARAN, bukan penanda batal --
         # ia keluar di kolomnya sendiri. Nilainya token huruf kecil, sebentuk
         # dengan `status` di bawah; label untuk layar dibentuk pembacanya.

@@ -2156,6 +2156,7 @@ _PENJUALAN_ALL = {
     "component": "Admin/Reports/PenjualanAll",
     "url": "/admin-panel/laporan/penjualan",
     "inner": rpt.penjualan_detail,
+    "inner_arunika": rpt.penjualan_detail_arunika,
     "sorts": rpt.SORTS_PENJUALAN_DETAIL,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_PENJUALAN_DETAIL,

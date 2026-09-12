@@ -126,13 +126,19 @@ def _nota_net(where_sql: str) -> str:
     lihat catatan di bagian Piutang."""
     net_pre_tax = _ghb("net_lines", ["hd1", "hd2", "hd3", "hd4"])
     return (
+        # `hd1..hd4` dan `keterangan` ikut dipulangkan supaya
+        # `adapter.badan_penjualan` bisa memaparkannya tanpa subquery kedua.
+        # Keempat slot itu PERSEN tingkat nota (kolom DT1-DT4 di layar Penjualan
+        # Detail), berbeda dari `diskon_uang` yang rupiah flat.
         "SELECT no_transaksi, tanggal, kd_customer, kd_divisi, status_raw, kd_voucher, "
-        "kd_user, kd_kas, tanggal_jatuh_tempo, total_kotor, "
+        "kd_user, kd_kas, tanggal_jatuh_tempo, keterangan, total_kotor, "
+        "hd1, hd2, hd3, hd4, "
         f"({net_pre_tax}) * pajak_rate AS pajak, "
         f"({net_pre_tax}) * (1 + pajak_rate) - diskon_uang AS total_bersih "
         "FROM ("
         "SELECT h.no_transaksi, h.tanggal, h.kd_customer, h.kd_divisi, "
         "h.status AS status_raw, h.kd_voucher, h.kd_user, h.kd_kas, h.tanggal_jatuh_tempo, "
+        "COALESCE(h.keterangan, '') AS keterangan, "
         "SUM(d.qty * d.harga_jual) AS total_kotor, "
         "COALESCE(h.pajak, 0) AS pajak_rate, "
         "COALESCE(h.diskon_uang, 0) AS diskon_uang, "
@@ -143,7 +149,7 @@ def _nota_net(where_sql: str) -> str:
         "INNER JOIN t_penjualan_detail d ON h.no_transaksi = d.no_transaksi "
         f"WHERE {where_sql} "
         "GROUP BY h.no_transaksi, h.tanggal, h.kd_customer, h.kd_divisi, h.status, "
-        "h.kd_voucher, h.kd_user, h.kd_kas, h.tanggal_jatuh_tempo, "
+        "h.kd_voucher, h.kd_user, h.kd_kas, h.tanggal_jatuh_tempo, h.keterangan, "
         "h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.diskon_uang, h.pajak"
         ") nz"
     )
@@ -2057,6 +2063,53 @@ _JENIS_BAYAR_LABEL = (
     "CASE p.jenis_bayar WHEN 'kredit' THEN 'Kredit' WHEN 'tunai' THEN 'Tunai' "
     "WHEN 'lunas' THEN 'Lunas' ELSE '' END"
 )
+
+
+def penjualan_detail_arunika(f):
+    """`penjualan_detail` di atas bentuk Arunika.
+
+    Satu-satunya laporan penjualan yang menampilkan **rantai diskon empat slot**
+    apa adanya (DD1-DD4 per baris, DT1-DT4 per nota). Bentuk baca memaparkan
+    keempatnya, jadi layarnya tidak berubah sedikit pun.
+
+    Yang berbeda hanya di mode Arunika sendiri, dan itu keputusan yang diukur:
+    model native menyimpan satu `diskon_persen`, sehingga slot 2-4 konstan nol.
+    Sisi jual memang tak pernah memakai lebih dari satu -- slot 2, 3, dan 4 nol
+    pada SELURUH 570.190 + 2.990.368 baris detail dan 52.801 + 474.595 kepala
+    nota, di kedua server. Baris legacy yang merantai dua diskon (hanya ada di
+    sisi BELI, 10 baris) tetap terbaca utuh, sebab di mode legacy adapter
+    membaca `diskon1..4` yang asli.
+
+    `harga_bersih` dan `subtotal` disusun ulang di sini dengan `_unit_net()` dan
+    `_line_net()` yang sama — bukan diambil dari `pb.total` — supaya kedua jalur
+    memakai ekspresi GHB yang identik, termasuk kedua penjaga `harga > 0`.
+    """
+    where, params = _base_where_arunika(f, date_col="pb.tanggal", div_col="pb.divisi_kode")
+    _search(where, params, f, ["pb.penjualan_nomor", "b.nama", "pl.nama"])
+    inner = (
+        "SELECT pb.penjualan_nomor AS no_transaksi, pb.tanggal, "
+        "COALESCE(dv.nama, '') AS divisi, COALESCE(pl.nama, '') AS customer, "
+        "COALESCE(kt.nama, '') AS kota, p.jatuh_tempo AS jth_tempo, "
+        f"{_JENIS_BAYAR_LABEL} AS status, COALESCE(p.keterangan, '') AS keterangan, "
+        "pb.barang_kode AS kd_barang, b.nama AS barang, "
+        "COALESCE(kg.nama, '') AS kategori, COALESCE(pg.nama, '') AS sales, "
+        "pb.qty, COALESCE(st.nama, '') AS satuan, pb.harga, "
+        "pb.diskon1 AS dd1, pb.diskon2 AS dd2, pb.diskon3 AS dd3, pb.diskon4 AS dd4, "
+        "p.diskon1 AS dt1, p.diskon2 AS dt2, p.diskon3 AS dt3, p.diskon4 AS dt4, "
+        f"{_unit_net('harga', 'pb')} AS harga_bersih, "
+        f"{_line_net('harga', 'pb')} AS subtotal "
+        f"FROM {SRC}.penjualan_baris pb "
+        f"INNER JOIN {SRC}.penjualan p ON p.nomor = pb.penjualan_nomor "
+        f"INNER JOIN {SRC}.barang b ON b.kode = pb.barang_kode "
+        f"LEFT JOIN {SRC}.pelanggan pl ON pl.kode = p.pelanggan_kode "
+        f"LEFT JOIN {SRC}.divisi dv ON dv.kode = pb.divisi_kode "
+        f"LEFT JOIN {SRC}.kota kt ON kt.kode = pl.kota_kode "
+        f"LEFT JOIN {SRC}.kategori kg ON kg.kode = b.kategori_kode "
+        f"LEFT JOIN {SRC}.satuan st ON st.kode = pb.satuan_kode "
+        f"LEFT JOIN {SRC}.pegawai pg ON pg.kode = pb.sales_kode "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
 
 
 def retur_penjualan_arunika(f):

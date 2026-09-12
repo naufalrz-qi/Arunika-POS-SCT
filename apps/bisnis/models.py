@@ -360,9 +360,14 @@ class Penjualan(models.Model):
 
     subtotal = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    # Diskon tingkat nota sebagai PERSEN, terpisah dari `diskon` yang rupiah.
+    # Satu slot, bukan empat -- lihat catatan di `PenjualanBaris.diskon_persen`.
+    diskon_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
     pajak = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     dibayar = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    jatuh_tempo = models.DateTimeField(null=True, blank=True)
+    keterangan = models.CharField(max_length=100, blank=True)
 
     jenis_bayar = models.CharField(max_length=10, choices=JenisBayar.choices, default=JenisBayar.TUNAI)
     status = models.CharField(max_length=10, choices=StatusPenjualan.choices, default=StatusPenjualan.AKTIF)
@@ -406,6 +411,21 @@ class PenjualanBaris(models.Model):
     qty = models.DecimalField(max_digits=18, decimal_places=3)
     harga = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    # ## SATU slot diskon persen, bukan empat -- dan itu diukur, bukan disederhanakan
+    #
+    # Legacy merantai `diskon1..4` sebagai persen berurutan (`_ghb`). Diukur di
+    # KEDUA server, sisi jual tak pernah memakai lebih dari satu: slot 2, 3, dan
+    # 4 bernilai nol pada SELURUH 570.190 + 2.990.368 baris detail dan
+    # 52.801 + 474.595 kepala nota. Sisi beli memakai slot kedua pada 10 baris
+    # dan ketiga pada 1 kepala, seluruhnya di testGUdang.
+    #
+    # Baris-baris berantai itu tidak hilang: di mode legacy adapter membaca
+    # `diskon1..4` yang asli, jadi laporan tetap memulangkannya utuh. Yang
+    # dibatasi hanya data yang KELAK ditulis Arunika sendiri -- dan di sana satu
+    # kolom persen adalah bentuk yang jujur, bukan rantai empat slot yang
+    # pengukurannya menunjukkan nyaris tak pernah dipakai.
+    diskon_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
     total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
 
     class Meta:

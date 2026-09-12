@@ -373,6 +373,7 @@ _MASTER: dict[str, dict] = {
     "penjualan": {
         "kolom": ["nomor", "tanggal", "divisi_kode", "pelanggan_kode", "voucher_kode",
                   "kas_kode", "pengguna_kode", "subtotal", "diskon", "pajak", "total",
+                  "diskon1", "diskon2", "diskon3", "diskon4", "jatuh_tempo", "keterangan",
                   "jenis_bayar", "status"],
         # ## Kenapa memanggil fungsi vendor, bukan menulis formulanya sendiri
         #
@@ -412,8 +413,13 @@ _MASTER: dict[str, dict] = {
         # `total + diskon - pajak == SUM(qty * harga_jual)` -- diuji 50/50 nota
         # berdiskon. Jadi `subtotal` adalah nilai kotor sebelum diskon apa pun.
         "legacy": _badan_penjualan,
+        # Slot 2-4 KONSTAN nol di mode Arunika: model native menyimpan satu
+        # `diskon_persen`, dan pengukuran di kedua server menunjukkan sisi jual
+        # memang tak pernah memakai lebih dari satu slot.
         "arunika": "SELECT p.nomor, p.tanggal, d.kode, pl.kode, v.kode, ks.kode, pg.kode, "
-                   "p.subtotal, p.diskon, p.pajak, p.total, p.jenis_bayar, p.status "
+                   "p.subtotal, p.diskon, p.pajak, p.total, "
+                   "p.diskon_persen, 0, 0, 0, p.jatuh_tempo, p.keterangan, "
+                   "p.jenis_bayar, p.status "
                    "FROM dbo.penjualan p "
                    "INNER JOIN dbo.divisi d ON d.id = p.divisi_id "
                    "LEFT JOIN dbo.pelanggan pl ON pl.id = p.pelanggan_id "
@@ -423,7 +429,8 @@ _MASTER: dict[str, dict] = {
     },
     "penjualan_baris": {
         "kolom": ["penjualan_nomor", "tanggal", "divisi_kode",
-                  "barang_kode", "satuan_kode", "sales_kode", "qty", "harga", "total"],
+                  "barang_kode", "satuan_kode", "sales_kode", "qty", "harga",
+                  "diskon1", "diskon2", "diskon3", "diskon4", "total"],
         # ## Kenapa baris membawa tanggal & divisi kepalanya
         #
         # Bukan denormalisasi yang kebablasan -- ini bentuk BACA, dan `tanggal`
@@ -453,11 +460,13 @@ _MASTER: dict[str, dict] = {
         # sah dan harus terbaca sebagai ketiadaan, bukan sebagai kode kosong.
         "legacy": "SELECT d.no_transaksi, h.tanggal, RTRIM(h.kd_divisi), "
                   "d.kd_barang, RTRIM(d.kd_satuan), NULLIF(RTRIM(d.kd_pegawai), ''), "
-                  "d.qty, d.harga_jual, d.total "
+                  "d.qty, d.harga_jual, "
+                  "COALESCE(d.diskon1, 0), COALESCE(d.diskon2, 0), "
+                  "COALESCE(d.diskon3, 0), COALESCE(d.diskon4, 0), d.total "
                   "FROM {db}.dbo.t_penjualan_detail d "
                   "INNER JOIN {db}.dbo.t_penjualan h ON h.no_transaksi = d.no_transaksi",
         "arunika": "SELECT p.nomor, p.tanggal, dv.kode, b.kode, s.kode, pg.kode, "
-                   "pb.qty, pb.harga, pb.total "
+                   "pb.qty, pb.harga, pb.diskon_persen, 0, 0, 0, pb.total "
                    "FROM dbo.penjualan_baris pb "
                    "INNER JOIN dbo.penjualan p ON p.id = pb.penjualan_id "
                    "INNER JOIN dbo.divisi dv ON dv.id = p.divisi_id "
