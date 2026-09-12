@@ -252,6 +252,45 @@ _MASTER: dict[str, dict] = {
                   "CASE WHEN status = 1 THEN 1 ELSE 0 END FROM {db}.dbo.m_divisi",
         "arunika": "SELECT kode, nama, awalan_nota, CAST(aktif AS int) FROM dbo.divisi",
     },
+    # --- Aktor ------------------------------------------------------------
+    #
+    # Dua entitas, bukan satu. `m_userx` adalah yang MENGETIK dokumen dan
+    # `m_pegawai` yang MENJUAL, dan laporan Penjualan Detail menampilkan
+    # keduanya berdampingan (`petugas` dan `sales`). Tak ada satu kolom pun di
+    # legacy yang menghubungkan sebuah baris `m_userx` ke sebuah baris
+    # `m_pegawai`, jadi menggabungkannya berarti menebak.
+    #
+    # ## `status <> 0`, dan itu diperiksa bukan ditebak
+    #
+    # Godaannya menulis `status = 1`, seperti `m_divisi` di atas. Itu SALAH di
+    # sini, dan bentuk datanya persis jebakan `m_biaya`: `m_pegawai.status` di
+    # testGUdang bernilai 1 pada lima baris dan 2 pada lima baris lainnya.
+    # `status = 1` akan memulangkan separuh pegawai sebagai NONAKTIF.
+    #
+    # Jawabannya di view legacy, seperti biasa: SETIAP view yang menyentuh tabel
+    # ini menyaring `<> 0` -- `GetAbsenSemuaPegawai`, `GetAbsenSemuaPegawai2`,
+    # `GetKodeShiftPegawai`, `GetPegawaiTidakMasuk`, `mon_t_awal_kerja`,
+    # `mon_t_hutang_pegawai_detail`, `v_t_pegawai_ganti_shift_detail`,
+    # `v_t_kendaraan_tanggung_jawab`. Jadi 1 dan 2 sama-sama aktif; 0 yang mati.
+    # `m_userx` mengikuti pola yang sama (`mon_t_kendaraan_pengisian_bbm`).
+    "pengguna": {
+        "kolom": ["kode", "nama", "aktif"],
+        # `passwd` dan `passweb` sengaja TIDAK diproyeksikan. Tak satu laporan
+        # pun membutuhkannya, dan kolom yang tak ada di view tak bisa bocor
+        # lewat view.
+        "legacy": "SELECT RTRIM(kd_user), nama, "
+                  "CASE WHEN status <> 0 THEN 1 ELSE 0 END FROM {db}.dbo.m_userx",
+        "arunika": "SELECT kode, nama, CAST(aktif AS int) FROM dbo.pengguna",
+    },
+    "pegawai": {
+        "kolom": ["kode", "nama", "aktif"],
+        # Tiga kolom dari 23. Sisanya rekam kepegawaian (foto, KTP, agama,
+        # tanggal lahir, status kawin/lembur) yang §6 sudah nyatakan tidak
+        # diwarisi bersama seluruh cabang HR-nya.
+        "legacy": "SELECT RTRIM(kd_pegawai), nama, "
+                  "CASE WHEN status <> 0 THEN 1 ELSE 0 END FROM {db}.dbo.m_pegawai",
+        "arunika": "SELECT kode, nama, CAST(aktif AS int) FROM dbo.pegawai",
+    },
     "barang": {
         "kolom": ["kode", "nama", "keterangan", "merek_kode", "kategori_kode",
                   "model_kode", "warna_kode", "bahan_kode", "satuan_dasar_kode", "aktif"],
@@ -333,7 +372,7 @@ _MASTER: dict[str, dict] = {
     },
     "penjualan_baris": {
         "kolom": ["penjualan_nomor", "tanggal", "divisi_kode",
-                  "barang_kode", "satuan_kode", "qty", "harga", "total"],
+                  "barang_kode", "satuan_kode", "sales_kode", "qty", "harga", "total"],
         # ## Kenapa baris membawa tanggal & divisi kepalanya
         #
         # Bukan denormalisasi yang kebablasan -- ini bentuk BACA, dan `tanggal`
@@ -355,16 +394,25 @@ _MASTER: dict[str, dict] = {
         # tetap benar dan terbaca. Diperiksa: selisih SUM(d.total) terhadap
         # GetTotalPenjualan persis sebesar diskon tingkat-nota (540.000 - 539.500
         # = 500 = diskon_uang), jadi `d.total` = nilai baris SESUDAH diskon baris.
+        #
+        # `sales_kode` ada di BARIS karena di legacy pun begitu: `kd_pegawai`
+        # adalah kolom `t_penjualan_detail`. RTRIM karena `char(6)`, dan
+        # NULLIF('') supaya baris tanpa sales memulangkan NULL alih-alih string
+        # kosong -- jalur legacy meng-LEFT JOIN-nya, jadi ketiadaan sales itu
+        # sah dan harus terbaca sebagai ketiadaan, bukan sebagai kode kosong.
         "legacy": "SELECT d.no_transaksi, h.tanggal, RTRIM(h.kd_divisi), "
-                  "d.kd_barang, RTRIM(d.kd_satuan), d.qty, d.harga_jual, d.total "
+                  "d.kd_barang, RTRIM(d.kd_satuan), NULLIF(RTRIM(d.kd_pegawai), ''), "
+                  "d.qty, d.harga_jual, d.total "
                   "FROM {db}.dbo.t_penjualan_detail d "
                   "INNER JOIN {db}.dbo.t_penjualan h ON h.no_transaksi = d.no_transaksi",
-        "arunika": "SELECT p.nomor, p.tanggal, dv.kode, b.kode, s.kode, pb.qty, pb.harga, pb.total "
+        "arunika": "SELECT p.nomor, p.tanggal, dv.kode, b.kode, s.kode, pg.kode, "
+                   "pb.qty, pb.harga, pb.total "
                    "FROM dbo.penjualan_baris pb "
                    "INNER JOIN dbo.penjualan p ON p.id = pb.penjualan_id "
                    "INNER JOIN dbo.divisi dv ON dv.id = p.divisi_id "
                    "INNER JOIN dbo.barang b ON b.id = pb.barang_id "
-                   "INNER JOIN dbo.satuan s ON s.id = pb.satuan_id",
+                   "INNER JOIN dbo.satuan s ON s.id = pb.satuan_id "
+                   "LEFT JOIN dbo.pegawai pg ON pg.id = pb.sales_id",
     },
     # --- Pembelian --------------------------------------------------------
     #
@@ -519,6 +567,8 @@ SUMBER_UTAMA = {
     "warna": "m_warna",
     "bahan": "m_jenis_bahan",
     "divisi": "m_divisi",
+    "pengguna": "m_userx",
+    "pegawai": "m_pegawai",
     "barang": "m_barang",
     "penjualan": "t_penjualan",
     "penjualan_baris": "t_penjualan_detail",

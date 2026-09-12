@@ -385,6 +385,14 @@ class PenjualanBaris(models.Model):
     barang = models.ForeignKey(Barang, on_delete=models.PROTECT)
     satuan = models.ForeignKey(Satuan, on_delete=models.PROTECT)
 
+    # Sales ada di BARIS, bukan di kepala nota, dan itu mengikuti legacy:
+    # `kd_pegawai` adalah kolom `t_penjualan_detail`, sehingga satu nota boleh
+    # memuat barang yang dijual orang berbeda. Memindahkannya ke kepala akan
+    # terlihat lebih rapi dan diam-diam membuang kemungkinan yang datanya
+    # izinkan. NULL-able karena jalur legacy meng-LEFT JOIN-nya: baris tanpa
+    # sales yang sah tetap harus muncul.
+    sales = models.ForeignKey("Pegawai", on_delete=models.PROTECT, null=True, blank=True)
+
     qty = models.DecimalField(max_digits=18, decimal_places=3)
     harga = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
@@ -691,3 +699,46 @@ class Voucher(Referensi):
     class Meta(Referensi.Meta):
         abstract = False
         db_table = "voucher"
+
+
+class Pengguna(Referensi):
+    """Akun yang MENGETIK dokumen — `m_userx` di legacy, kolom `kd_user`.
+
+    Terpisah dari `Pegawai` karena keduanya memang beda peran, bukan dua nama
+    untuk hal yang sama: laporan Penjualan Detail menampilkan keduanya
+    berdampingan (`petugas` dari sini, `sales` dari sana), dan tak ada satu
+    kolom pun di legacy yang menghubungkan sebuah baris `m_userx` ke sebuah
+    baris `m_pegawai`. Menggabungkannya berarti menebak.
+
+    Ini BUKAN `User` aplikasi Arunika (`apps/auth_app`). Yang itu login ke panel
+    ini; yang ini identitas di server legacy, dan `kd_user` dibangkitkan sendiri
+    oleh tiap server sehingga kode yang sama berarti orang berbeda di server
+    lain — persis alasan `TautanUser` ada satu baris per user x koneksi.
+
+    Tanpa kolom sandi, dan itu disengaja: `m_userx` menyimpan `passwd` dan
+    `passweb`, keduanya tak pernah dibutuhkan laporan mana pun. Adapter tidak
+    memproyeksikannya, jadi keduanya tak bisa bocor lewat view.
+    """
+
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "pengguna"
+
+
+class Pegawai(Referensi):
+    """Orang yang MENJUAL — `m_pegawai` di legacy, kolom `kd_pegawai`.
+
+    Hanya kode + nama + aktif. `m_pegawai` legacy punya 23 kolom berisi rekam
+    kepegawaian penuh (foto, KTP, agama, tempat/tanggal lahir, status kawin,
+    status lembur, jabatan, shift), dan §6 sudah menyatakan seluruh cabang HR
+    tidak diwarisi — `t_absensi`, `t_gaji`, `m_jabatan_gaji`, `m_pegawai_komisi`.
+    Mewarisi kolomnya saja tanpa cabangnya cuma memindahkan data pribadi ke
+    tempat yang tak punya alasan menyimpannya.
+
+    `divisi` sengaja belum ditarik meski `m_pegawai.kd_divisi` ada: belum satu
+    pun laporan memakainya. Tambahkan saat ada yang benar-benar membacanya.
+    """
+
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "pegawai"
