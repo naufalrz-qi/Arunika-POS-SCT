@@ -1048,6 +1048,67 @@ ini bukan cacat vendor yang diwarisi, melainkan kelalaian yang bisa diperbaiki �
 memperbaikinya **mengubah angka sebuah laporan keuangan**, jadi ia keputusan pemilik data dan
 sengaja tidak diselipkan ke dalam perpindahan ini.
 
+## 7.11 Aktor: dua entitas, dan satu jebakan yang nyaris terulang
+
+§5 hanya merancang `dibuat_oleh int` — id user aplikasi. Itu tidak cukup, dan laporan yang
+membuktikannya Penjualan Detail: ia menampilkan **`petugas` dan `sales` berdampingan**, dari
+`m_userx` dan `m_pegawai`. Dua peran berbeda, dan tak ada satu kolom pun di legacy yang
+menghubungkan sebuah baris `m_userx` ke sebuah baris `m_pegawai` — menggabungkannya berarti
+menebak. Jadi dua entitas: `pengguna` dan `pegawai`.
+
+`dibuat_oleh` tetap seperti rancangan, dan justru karena keduanya tidak sama: yang satu identitas
+di server legacy, yang lain akun panel ini. `TautanUser` ada persis supaya yang satu bisa
+ditelusuri ke yang lain.
+
+### `status <> 0`, dan grosirPusat yang membuktikannya
+
+Godaannya menulis `status = 1`, mengikuti `m_divisi`. Itu salah, dan bentuknya **persis jebakan
+`m_biaya` di §f6e4fc3** — kali ini tertangkap sebelum mendarat:
+
+| | status 1 | status 2 | total | kalau ditulis `= 1` |
+|---|---|---|---|---|
+| `m_pegawai` testGUdang | 5 | 5 | 10 | 5 mati |
+| `m_pegawai` grosirPusat | 4 | **17** | 21 | **17 mati** |
+| `m_userx` (keduanya) | semua | — | 11 / 39 | — |
+
+Jawabannya di VIEW, seperti biasa: setiap view yang menyentuh `m_pegawai` menyaring `<> 0` —
+`GetAbsenSemuaPegawai`(2), `GetKodeShiftPegawai`, `GetPegawaiTidakMasuk`, `mon_t_awal_kerja`,
+`mon_t_hutang_pegawai_detail`, `v_t_pegawai_ganti_shift_detail`, `v_t_kendaraan_tanggung_jawab`.
+Jadi 1 dan 2 sama-sama aktif; 0 yang mati. Sesudah dipasang: 10/10 dan 21/21 aktif.
+
+Aturan lama berlaku lagi, dan ini kejadian kedua berturut-turut: **satu server yang seragam tidak
+cukup untuk menyimpulkan arti sebuah kolom status.**
+
+### Sales di baris, bukan di kepala
+
+`kd_pegawai` adalah kolom `t_penjualan_detail`, jadi `sales_kode` tinggal di `penjualan_baris`.
+Satu nota boleh memuat barang yang dijual orang berbeda; memindahkannya ke kepala akan terlihat
+lebih rapi dan diam-diam membuang kemungkinan yang datanya izinkan.
+
+Yang **tidak** diwarisi: dari 23 kolom `m_pegawai` diambil tiga (kode, nama, aktif). Sisanya rekam
+kepegawaian — foto, KTP, agama, tempat/tanggal lahir, status kawin, status lembur — dan §6 sudah
+menyatakan seluruh cabang HR tidak diwarisi. `m_userx.passwd`/`passweb` tidak diproyeksikan sama
+sekali: kolom yang tak ada di view tak bisa bocor lewat view. `m_pegawai.kd_divisi` ditunda sampai
+ada laporan yang benar-benar membacanya.
+
+### Penjualan per User, dan label kas yang akhirnya punya arti
+
+Laporan pertama yang membaca entitas aktor. `arunika_src.penjualan` mendapat `pengguna_kode`;
+`_nota_net()` sudah memulangkan `kd_user` sejak awal, adapter cuma belum memproyeksikannya.
+Identik baris-per-baris di **kedua** server, tiga rentang, dan tak lebih mahal di satu pun:
+
+| | baris | legacy | Arunika |
+|---|---|---|---|
+| testGUdang setahun | 10.144 | 1,09 dtk | 0,84 dtk |
+| testGUdang dua tahun | 19.158 | 1,90 dtk | 1,71 dtk |
+| grosirPusat setahun | 117.495 | 3,76 dtk | 3,36 dtk |
+| grosirPusat dua tahun | 233.723 | 6,37 dtk | 6,38 dtk |
+
+Label kas (§7.10) ikut diputuskan di sesi yang sama, dan grosirPusat memperlihatkan kenapa itu
+bukan kosmetik belaka: server itu punya **dua** akun kas, `KAA000` dan `KAA001`, yang `keterangan`
+(`'-'`), `kd_index` (`1101`), dan `cabang` (`MATARAM`) -nya **identik**. Kotak filternya dulu
+menawarkan dua pilihan yang keduanya berbunyi `-`. Sekarang keduanya bisa dibedakan.
+
 ## 8. Yang harus diverifikasi sebelum rancangan ini dibekukan
 
 Belum dikerjakan, dan tak boleh dilewati:
