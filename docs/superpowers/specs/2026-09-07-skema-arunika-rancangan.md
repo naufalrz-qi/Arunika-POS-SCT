@@ -1018,9 +1018,21 @@ PAGESANGAN, satu-satunya server yang punya dua akun kas. `kd_index` dan `cabang`
 antar akun di sana, jadi **tak ada satu kolom pun di `m_kas` yang membedakan kedua akun itu
 selain kodenya sendiri**.
 
-Perilaku itu dipertahankan apa adanya, dan itu keputusan: perpindahan ini harus bisa dibuktikan
-identik dulu. Memperbaiki labelnya — memakai `kode`, yang satu-satunya membedakan — adalah
-perubahan tampilan yang berdiri sendiri, bukan efek samping sebuah migrasi.
+Perilaku itu dipertahankan apa adanya sepanjang perpindahan, dan itu keputusan: migrasinya harus
+bisa dibuktikan identik dulu.
+
+**Sesudah itu, labelnya diganti jadi `kode` — selesai, sebagai perubahan tersendiri.** Rantai
+`COALESCE` dibuang seluruhnya, bukan dipendekkan: kedua cabang di depannya sudah terbukti tidak
+membedakan apa pun, jadi mempertahankannya cuma menyisakan jalur mati yang mengundang orang
+menghidupkannya lagi. Keempat tempat yang membentuk label ini pindah bersama — dua jalur baris
+(`kas_harian`, `kas_harian_arunika`) dan dua kotak filter (`_opt_kas`, `opsi_kas_arunika`) —
+karena kotak pilihan yang isinya berbeda dari kolom Kas di tabel yang sama justru lebih
+membingungkan daripada keduanya jelek dengan cara yang sama. Urutannya ikut pindah ke `kode`:
+mengurutkan menurut kolom yang seluruh isinya `'-'` bukan urutan sama sekali.
+
+Terukur di testGUdang, setahun 2025: **10.144 baris, kedua jalur identik**, label unik `KAA000`
+di keduanya, dan kotak filter memulangkan `KAA000` di kedua jalur. Tak ada angka yang berubah —
+`kd_kas` tetap nilai yang dikirim filter, hanya teks yang dibaca manusia yang berubah.
 
 ### Yang tidak diperbaiki, dan sebaiknya diputuskan
 

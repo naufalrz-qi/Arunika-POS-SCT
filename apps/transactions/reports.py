@@ -1144,7 +1144,10 @@ def kas_harian(f):
     kas_where = " WHERE u.kd_kas = ?" if f.get("kd_kas") else ""
     inner = (
         "SELECT u.tanggal, "
-        "COALESCE(NULLIF(LTRIM(RTRIM(mk.keterangan)), ''), NULLIF(LTRIM(RTRIM(mk.kd_index)), ''), RTRIM(u.kd_kas)) AS kas, "
+        # Label = kode kas. Alasannya panjang dan ada di `_KAS_NAMA`; ringkasnya
+        # `keterangan` bernilai `'-'` di 11 database dan tak ada kolom `m_kas`
+        # lain yang membedakan dua akun di server yang punya dua.
+        "RTRIM(u.kd_kas) AS kas, "
         "u.keterangan, u.masuk, u.keluar, "
         # saldo = saldo_awal master + net pergerakan sebelum date_from + kumulatif
         # dalam rentang. Tiebreaker keterangan di ORDER BY window supaya urutan
@@ -2511,22 +2514,27 @@ def _kas_union_arunika(pred: str) -> str:
     )
 
 
-# Nama kas. Jalur lama memakai
-# `COALESCE(NULLIF(keterangan,''), NULLIF(kd_index,''), kd_kas)`; `kd_index`
-# (110/1101) adalah nomor akun bagan perkiraan dan sengaja tidak diwarisi.
-# Membuangnya tidak mengubah satu baris pun: `m_kas.keterangan` bernilai `'-'`
-# -- bukan kosong -- di SELURUH 11 database yang bisa dijangkau (GUDANG, 8
-# grosir, 2 salinan uji), jadi cabang pertama selalu menang dan `kd_index` tak
-# pernah terbaca.
+# Nama kas: KODENYA, dan itu keputusan sadar.
 #
-# Yang perlu diketahui pemilik data: karena `keterangan` selalu `'-'`, kolom Kas
-# di layar ini menampilkan `-` pada SETIAP baris, dan di PUSAT/PAGESANGAN yang
-# punya dua akun kas keduanya tampil sama persis. `kd_index` dan `cabang` pun
-# identik antar akun di sana, jadi tak ada satu kolom pun di `m_kas` yang
-# membedakan keduanya selain kodenya sendiri. Perilaku itu DIPERTAHANKAN di sini
-# supaya perpindahan ini bisa dibuktikan identik; memperbaikinya keputusan
-# tersendiri, bukan efek samping sebuah migrasi.
-_KAS_NAMA = "COALESCE(NULLIF(LTRIM(RTRIM(mk.keterangan)), ''), u.kas_kode)"
+# Jalur lama memakai `COALESCE(NULLIF(keterangan,''), NULLIF(kd_index,''),
+# kd_kas)`. Rantai itu tak pernah sampai ke ujungnya: `m_kas.keterangan`
+# bernilai `'-'` -- bukan kosong -- di SELURUH 11 database yang bisa dijangkau
+# (GUDANG, 8 grosir, 2 salinan uji), jadi cabang pertama selalu menang dan
+# kolom Kas menampilkan `-` pada SETIAP baris.
+#
+# Tak ada kolom lain yang bisa menggantikannya. Di PUSAT/PAGESANGAN yang punya
+# dua akun kas, `kd_index` (nomor akun bagan perkiraan) dan `cabang` pun
+# IDENTIK antar akun -- tak satu pun kolom `m_kas` membedakan keduanya selain
+# kodenya sendiri. Karena itu labelnya adalah kode, bukan rantai fallback ke
+# kolom yang sudah terbukti tidak membedakan apa-apa.
+#
+# Ini kosmetik murni: tak ada angka yang berubah, dan `kd_kas` tetap nilai yang
+# dikirim kotak filter. Keempat tempat yang membentuk label ini -- dua jalur
+# baris (`kas_harian`, `kas_harian_arunika`) dan dua kotak filter (`_opt_kas`,
+# `opsi_kas_arunika`) -- harus tetap sepakat; kotak pilihan yang isinya berbeda
+# dari kolom Kas di tabel yang sama lebih membingungkan daripada keduanya jelek
+# dengan cara yang sama.
+_KAS_NAMA = "u.kas_kode"
 
 
 def kas_harian_arunika(f):
@@ -2590,8 +2598,10 @@ def opsi_kas_arunika():
     """Pilihan filter kas, bentuk Arunika. NILAINYA tetap kode kas di kedua jalur.
 
     Jalur lama menyaring `status <> 0`; di sini `aktif = 1` -- lihat
-    `kas_summary_arunika`. Labelnya tetap `keterangan`, cacat `'-'` dan semuanya:
-    kotak pilihan yang isinya berbeda dari kolom Kas di tabel yang sama akan
-    lebih membingungkan daripada dua-duanya jelek dengan cara yang sama.
+    `kas_summary_arunika`. LABELNYA kode, sama seperti kolom Kas di tabel yang
+    dilayaninya -- lihat `_KAS_NAMA`. Urut kode juga, karena mengurutkan menurut
+    `keterangan` yang seluruhnya `'-'` bukan urutan sama sekali.
     """
-    return f"SELECT kode, keterangan FROM {SRC}.kas WHERE aktif = 1 ORDER BY keterangan"
+    # Alias `label` wajib: `_opt_master` mem-`zip` nama kolom jadi dict, jadi dua
+    # kolom bernama sama runtuh jadi satu kunci.
+    return f"SELECT kode, kode AS label FROM {SRC}.kas WHERE aktif = 1 ORDER BY kode"

@@ -1863,7 +1863,12 @@ def _opt_supplier(profile):
 def _opt_kas(profile, arunika=False):
     if arunika:
         return _opt_master(profile, rpt.opsi_kas_arunika(), buka=mssql.arunika_cursor)
-    return _opt_master(profile, "SELECT kd_kas, keterangan FROM m_kas WHERE status <> 0 ORDER BY keterangan")
+    # Label = kode, sama seperti kolom Kas yang dilayaninya (`rpt._KAS_NAMA`):
+    # `m_kas.keterangan` bernilai `'-'` di 11 database, jadi memakainya sebagai
+    # label memberi dua pilihan berbunyi `-` dan mengurutkannya bukan urutan.
+    # Alias `label` wajib: `_opt_master` mem-`zip` nama kolom jadi dict, jadi dua
+    # kolom bernama sama runtuh jadi satu kunci.
+    return _opt_master(profile, "SELECT kd_kas, kd_kas AS label FROM m_kas WHERE status <> 0 ORDER BY kd_kas")
 
 
 def _opt_kategori_biaya(profile):
