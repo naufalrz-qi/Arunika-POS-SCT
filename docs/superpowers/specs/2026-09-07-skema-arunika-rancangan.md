@@ -1220,19 +1220,109 @@ tiap kali tertipu.
 
 ## 8. Yang harus diverifikasi sebelum rancangan ini dibekukan
 
-Belum dikerjakan, dan tak boleh dilewati:
-
-1. **Ulangi hitungan baris §2 terhadap GUDANG produksi.** Yang dipakai sekarang server uji, dan
-   §2 sudah menunjukkan bagaimana itu bisa menyesatkan.
-2. **Pastikan 11 tabel referensi legacy memang cukup diringkas jadi lima.** Hitung barisnya;
-   jangan buang yang terpakai.
-3. **Ukur apakah `pos_stok_snapshot` masih perlu ada** sesudah buku besar jadi tabel nyata.
-   Jangan dibuang atas dasar dugaan.
+1. ~~Ulangi hitungan baris §2 terhadap GUDANG produksi.~~ **Selesai — §8.1.**
+2. ~~Pastikan 11 tabel referensi legacy cukup diringkas jadi lima.~~ **Selesai — §8.2.**
+3. ~~Ukur apakah `pos_stok_snapshot` masih perlu ada.~~ **Selesai — §8.3.**
 4. ~~Periksa `t_penjualan_total`.~~ **Selesai — lihat §7.1.**
-5. **Tetapkan kebijakan pembatalan.** Legacy tak punya DELETE sama sekali (`ON DELETE CASCADE`
-   dari `m_merk`/`m_kategori` menjangkau `m_barang`), jadi pembatalan berupa `status = 0`.
-   Rancangan ini perlu menyatakan sikapnya sendiri secara tersurat — dan buku besar append-only
-   berarti pembatalan adalah **baris pembalik**, bukan penghapusan.
+5. **Kebijakan pembatalan** — §8.4, dinyatakan; belum ada jalur tulis yang mewujudkannya.
+
+### 8.1 testGUdang memang mewakili GUDANG, dan grosirPusat memang bukan
+
+Dihitung dari `sys.dm_db_partition_stats` — metadata, bukan `COUNT(*)`: hampir gratis dan tak
+mengunci apa pun di server yang sedang dipakai orang.
+
+| tabel | testGUdang | grosirPusat | **GUDANG (produksi)** |
+|---|---|---|---|
+| `m_barang` | 53.710 | 53.457 | **55.223** |
+| `t_penjualan` | 52.801 | 474.595 | **56.711** |
+| `t_penjualan_detail` | 569.831 | 2.990.368 | **600.825** |
+| `t_pembelian_detail` | 74.210 | 150.920 | **79.906** |
+| `t_penjualan_order` | 40.975 | 7.209 | **44.568** |
+| `t_penjualan_retur` | 4.242 | 57 | **4.472** |
+| `t_pembelian_retur` | 759 | 2.935 | **777** |
+| `t_biaya_operasional` | 0 | 9.564 | **0** |
+| `t_mutasi_stok` | 650 | 0 | **650** |
+| `m_supplier` | 517 | 3 | **523** |
+| `m_userx`/`m_pegawai`/`m_divisi`/`m_kas` | 11/10/5/1 | 39/21/1/2 | **11/10/5/1** |
+
+**testGUdang adalah salinan GUDANG yang masih segar** — tiap tabel dalam ~7% dari produksi, dan
+tabel kecilnya identik baris per baris. Hitungan §2 karena itu sah.
+
+Yang lebih berguna justru kolom tengahnya: **grosirPusat bukan "GUDANG yang lebih besar",
+melainkan bentuk yang berbeda.** Ia punya 8,4× penjualan tapi 6× LEBIH SEDIKIT order; `m_supplier`
+3 baris lawan 523 (aturan "gudang yang membeli", terkonfirmasi); dan dua tabel yang **nol di satu
+sisi dan ribuan di sisi lain** — `t_biaya_operasional` nol di GUDANG, `t_mutasi_stok` nol di
+grosirPusat. Konsekuensi langsung: `jurnal_kas` hanya pernah teruji sungguhan di grosirPusat, dan
+mutasi stok hanya di gudang. Menguji di keduanya bukan kehati-hatian berlebih — masing-masing
+menutup lubang yang tak ditutup yang lain.
+
+### 8.2 Tiga belas tabel referensi, semuanya sudah punya entitas — dan dua yang tak pernah ada
+
+| tabel | baris (testGUdang / grosirPusat) | dipakai `m_barang` |
+|---|---|---|
+| `m_kategori` | 862 / 862 | **256 / 254** |
+| `m_merk` | 1.475 / 1.473 | 1.409 / 1.407 |
+| `m_model` | 1.290 / 1.290 | **118 / 117** |
+| `m_warna` | 531 / 531 | 502 / 502 |
+| `m_jenis_bahan` | 33 / 33 | 32 / 32 |
+| `m_satuan`, `m_kota`, `m_negara`, `m_bank`, `m_biaya`, `m_voucher`, `m_kas`, `m_jenis_bayar` | 18/29/6/3/38/2/1/5 — 18/29/6/6/32/8/2/6 | — |
+
+**"11 diringkas jadi 5" ternyata salah cara menyebutnya.** Tak ada yang diringkas: lima itu
+*atribut produk* — satu-satunya yang dirujuk `m_barang` — dan sisanya **dipindahkan** ke bagian
+yang sesuai artinya, persis seperti §5.A menuliskannya. Ketiga belasnya kini punya entitas.
+
+**`m_ket` dan `m_gudang` TIDAK ADA di kedua server.** §5.A menyebut keduanya "belum ditempatkan";
+ternyata tak ada yang perlu ditempatkan. Pertanyaan itu tertutup.
+
+**Sisanya temuan kebersihan data, bukan rancangan:** `m_kategori` punya 862 baris tapi hanya 256
+dipakai sebuah barang; `m_model` 1.290 lawan 118. Rancangan tak berubah karenanya — tapi layar
+Kelola Referensi menawarkan ribuan pilihan yang tak satu pun barang memakainya.
+
+### 8.3 `pos_stok_snapshot` masih perlu, dan bukan sedikit
+
+Agregasi stok yang sama dijalankan dengan dan tanpa snapshot, lalu keduanya dibandingkan:
+
+| | kunci | **net berbeda** | kotor berbeda | tanpa → dengan |
+|---|---|---|---|---|
+| testGUdang | 8.412 / 33.161 | **0** | 30.234 | 3,84 → 0,05 dtk (**71×**) |
+| grosirPusat | 12.391 / 13.427 | **0** | 6.388 | 2,19 → 0,10 dtk (**23×**) |
+
+**Saldo bersih identik di setiap kunci di kedua server**, dengan ongkos 23–71× lebih murah. Jadi:
+dipertahankan.
+
+Angka kedua yang perlu diketahui, dan sebelumnya tak tertulis di mana pun: **arus KOTOR sengaja
+tidak direproduksi.** Snapshot meringkas riwayat sebelum tanggalnya jadi satu saldo awal, sehingga
+`masuk`/`keluar` yang seluruhnya jatuh sebelum itu lenyap — dan baris yang netnya nol hilang sama
+sekali dari hasil (30.234 kunci di testGUdang). Untuk saldo itu benar; untuk laporan yang
+menanyakan *berapa yang masuk dan keluar*, tidak. **Pembaca semacam itu wajib
+`use_snapshot=False`.**
+
+Pertanyaan aslinya — apakah snapshot mubazir sesudah buku besar jadi tabel nyata — **belum bisa
+dijawab**, dan bukan karena kelalaian: di mode legacy `pergerakan_stok` masih iTVF di atas UNION
+sembilan sumber yang sama. Ia baru bisa diukur ulang ketika Arunika memegang baris sungguhan.
+
+### 8.4 Kebijakan pembatalan
+
+Dinyatakan sekarang, supaya tidak diputuskan diam-diam oleh jalur tulis pertama yang
+membutuhkannya:
+
+1. **Tabel referensi & master dibatalkan dengan `aktif = False`,** tidak pernah `DELETE`.
+   Alasannya bukan meniru legacy melainkan sama dengan alasan legacy: baris transaksi menunjuk ke
+   sana. Bedanya, di sini `aktif` ada di **setiap** tabel referensi — termasuk `pemasok`, yang di
+   legacy tak punya kolom status sama sekali sehingga pemasok salah ketik tak bisa dibatalkan
+   dengan cara apa pun.
+2. **Dokumen transaksi dibatalkan dengan `status`,** dan `status` hanya berarti itu. Ia TERPISAH
+   dari `jenis_bayar` — penggabungan keduanya di `t_penjualan.status` adalah cacat legacy yang
+   §7.7 bongkar, dan yang membuat setiap penjualan kredit terbaca sebagai nota batal.
+3. **`pergerakan_stok` append-only: pembatalan adalah BARIS PEMBALIK, bukan penghapusan.** Buku
+   besar yang barisnya bisa hilang bukan buku besar. Membatalkan dokumen berarti menulis
+   pergerakan berlawanan yang menunjuk dokumen asalnya.
+4. **`DELETE` tidak dipakai di mana pun.** Bukan karena `ON DELETE CASCADE` seperti di legacy — FK
+   di sini `PROTECT`, jadi cascade itu tak bisa terjadi — melainkan karena riwayat yang bisa
+   dihapus tak bisa diaudit.
+
+Butir 3 dan 4 **belum ada jalur tulis yang mewujudkannya**; keduanya kontrak untuk kode yang akan
+menulis ke tabel Arunika sendiri, dan di sana belum ada satu baris pun.
 
 ---
 
