@@ -2457,6 +2457,7 @@ _ORDER_PENJUALAN = {
     "component": "Admin/Reports/OrderPenjualan",
     "url": "/admin-panel/laporan/order-penjualan",
     "inner": rpt.order_penjualan,
+    "inner_arunika": rpt.order_penjualan_arunika,
     "sorts": rpt.SORTS_ORDER_PENJUALAN,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_ORDER,

@@ -109,6 +109,13 @@ def _badan_pembelian(db_legacy: str) -> str:
     return adapter.badan_pembelian(db_legacy)
 
 
+def _badan_penjualan_order(db_legacy: str) -> str:
+    """Badan view `penjualan_order`, dibangkitkan dari `reports._penjualan_order_net()`."""
+    from apps.bisnis import adapter
+
+    return adapter.badan_penjualan_order(db_legacy)
+
+
 def _case_jenis_biaya(kolom: str) -> str:
     """Token jenis biaya, dari satu sumber (`reports.JENIS_BIAYA`).
 
@@ -454,6 +461,40 @@ _MASTER: dict[str, dict] = {
                    "INNER JOIN dbo.satuan s ON s.id = pb.satuan_id",
     },
     # --- Kas ---------------------------------------------------------------
+    # --- Order penjualan --------------------------------------------------
+    #
+    # `status` di sini berarti apa adanya, dan itu perbaikan yang disengaja:
+    # legacy menandai order terbuka dengan `no_transaksi = no_order` karena
+    # kolom `status`-nya tak bisa dipercaya (16 baris `status=0` berbanding 38
+    # order terbuka di server yang sama). `nomor_nota` tetap ada supaya talinya
+    # ke nota tidak putus.
+    "penjualan_order": {
+        "kolom": ["nomor", "tanggal", "tanggal_terima", "divisi_kode", "pelanggan_kode",
+                  "status", "nomor_nota", "jml_item", "total_qty", "total"],
+        "legacy": _badan_penjualan_order,
+        "arunika": "SELECT o.nomor, o.tanggal, o.tanggal_terima, d.kode, pl.kode, "
+                   "o.status, o.nomor_nota, "
+                   "(SELECT COUNT(*) FROM dbo.penjualan_order_baris ob WHERE ob.order_id = o.id), "
+                   "(SELECT COALESCE(SUM(ob.qty), 0) FROM dbo.penjualan_order_baris ob "
+                   "WHERE ob.order_id = o.id), o.total "
+                   "FROM dbo.penjualan_order o "
+                   "INNER JOIN dbo.divisi d ON d.id = o.divisi_id "
+                   "LEFT JOIN dbo.pelanggan pl ON pl.id = o.pelanggan_id",
+    },
+    "penjualan_order_baris": {
+        "kolom": ["order_nomor", "tanggal", "divisi_kode", "barang_kode",
+                  "satuan_kode", "qty", "harga"],
+        "legacy": "SELECT d.no_order, h.tanggal, RTRIM(h.kd_divisi), d.kd_barang, "
+                  "RTRIM(d.kd_satuan), d.qty, d.harga_jual "
+                  "FROM {db}.dbo.t_penjualan_order_detail d "
+                  "INNER JOIN {db}.dbo.t_penjualan_order h ON h.no_order = d.no_order",
+        "arunika": "SELECT o.nomor, o.tanggal, dv.kode, b.kode, s.kode, ob.qty, ob.harga "
+                   "FROM dbo.penjualan_order_baris ob "
+                   "INNER JOIN dbo.penjualan_order o ON o.id = ob.order_id "
+                   "INNER JOIN dbo.divisi dv ON dv.id = o.divisi_id "
+                   "INNER JOIN dbo.barang b ON b.id = ob.barang_id "
+                   "INNER JOIN dbo.satuan s ON s.id = ob.satuan_id",
+    },
     # --- Koreksi stok -----------------------------------------------------
     #
     # `t_opname_stok` DATAR: satu baris = satu dokumen berisi satu barang.
@@ -580,6 +621,12 @@ TANPA_RTRIM = {
     # Diperiksa di kedua server: `no_transaksi` varchar(20) dan `kd_barang`
     # varchar(30), sedangkan `kd_divisi`/`kd_satuan`/`kd_user` char(6) -- dan
     # ketiga yang char itu memang di-RTRIM.
+    # Order: hanya `kd_divisi` dan `kd_satuan` yang char; sisanya varchar.
+    ("penjualan_order", "nomor"): ("t_penjualan_order", "no_order"),
+    ("penjualan_order", "pelanggan_kode"): ("t_penjualan_order", "kd_customer"),
+    ("penjualan_order", "nomor_nota"): ("t_penjualan_order", "no_transaksi"),
+    ("penjualan_order_baris", "order_nomor"): ("t_penjualan_order_detail", "no_order"),
+    ("penjualan_order_baris", "barang_kode"): ("t_penjualan_order_detail", "kd_barang"),
     ("koreksi_stok", "nomor"): ("t_opname_stok", "no_transaksi"),
     ("koreksi_stok_baris", "koreksi_nomor"): ("t_opname_stok", "no_transaksi"),
     ("koreksi_stok_baris", "barang_kode"): ("t_opname_stok", "kd_barang"),
@@ -622,6 +669,8 @@ SUMBER_UTAMA = {
     "penjualan_baris": "t_penjualan_detail",
     "pembelian": "t_pembelian",
     "pembelian_baris": "t_pembelian_detail",
+    "penjualan_order": "t_penjualan_order",
+    "penjualan_order_baris": "t_penjualan_order_detail",
     # Keduanya membaca tabel DATAR yang sama; proyeksinya 1:1, jadi jumlah baris
     # kepala dan baris memang sama besar.
     "koreksi_stok": "t_opname_stok",

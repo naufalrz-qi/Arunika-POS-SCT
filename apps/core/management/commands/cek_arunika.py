@@ -51,6 +51,11 @@ _ACUAN_BERKEPALA = {
 _DARI_SUBQUERY_NOTA = {
     "penjualan": (reports._nota_net, "_nota_net()"),
     "pembelian": (reports._pembelian_nota, "_pembelian_nota()"),
+    # Order ikut kelas yang sama, dan datanya membuktikannya: testGUdang punya
+    # 4 order TANPA baris detail (grosirPusat nol), sehingga membandingkan
+    # dengan `t_penjualan_order` mentah melaporkan 40.971 vs 40.975 -- selisih
+    # yang justru menandakan view-nya benar.
+    "penjualan_order": (reports._penjualan_order_net, "_penjualan_order_net()"),
 }
 
 

@@ -284,6 +284,33 @@ def badan_pembelian(db_legacy: str) -> str:
     )
 
 
+def badan_penjualan_order(db_legacy: str) -> str:
+    """Badan view `penjualan_order`, dibangkitkan dari `reports._penjualan_order_net()`.
+
+    Teknik dan alasannya sama dengan `badan_penjualan`/`badan_pembelian`: satu
+    sumber kebenaran untuk formula uang, nol transkripsi. Rumusnya sendiri
+    diangkat keluar dari `_order_inner` supaya bisa dipanggil dari sini.
+
+    Satu hal khas order, dan ia sengaja TIDAK diwarisi bentuknya: legacy menandai
+    order terbuka dengan `no_transaksi = no_order`, bukan dengan kolom `status` --
+    karena kolom `status`-nya tak bisa dipercaya (16 baris `status=0` berbanding
+    38 order terbuka di server yang sama). `_ORDER_TERBUKA` sudah memulihkan
+    maksudnya jadi 'Terbuka'/'Jadi Nota', dan di sini ia jadi TOKEN
+    (`terbuka`/`jadi_nota`), sehingga bentuk baru punya kolom status yang berarti
+    apa adanya -- §5.E. `nomor_nota` tetap dipulangkan supaya talinya tak putus.
+    """
+    from apps.transactions import reports  # lokal: hindari lingkaran impor
+
+    inti = _dari_nota(reports._penjualan_order_net, db_legacy, "_penjualan_order_net()")
+    return (
+        "SELECT n.no_order, n.tanggal, n.tanggal_terima, RTRIM(n.kd_divisi), n.kd_mitra, "
+        "CASE n.status WHEN 'Terbuka' THEN 'terbuka' ELSE 'jadi_nota' END, "
+        "NULLIF(LTRIM(RTRIM(n.no_transaksi)), ''), "
+        "n.jml_item, n.total_qty, n.total_bersih "
+        f"FROM ({inti}) n"
+    )
+
+
 def badan_penjualan(db_legacy: str) -> str:
     """Badan view `penjualan`, dibangkitkan dari `reports._nota_net()`.
 

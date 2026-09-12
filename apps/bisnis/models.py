@@ -809,3 +809,60 @@ class KoreksiStokBaris(models.Model):
     class Meta:
         db_table = "koreksi_stok_baris"
         indexes = [models.Index(fields=["barang"], name="ix_koreksi_baris_barang")]
+
+
+class StatusOrder(models.TextChoices):
+    """Order terbuka vs sudah jadi nota.
+
+    Kolom yang berarti apa adanya, dan itu perbaikan yang disengaja atas legacy:
+    di sana order terbuka ditandai `no_transaksi = no_order`, sebab kolom
+    `status` miliknya tidak bisa dipercaya — 16 baris `status=0` berbanding 38
+    order terbuka di server yang sama. Order yang salah tanda tidak menimbulkan
+    galat apa pun; ia cuma lenyap dari daftar.
+    """
+
+    TERBUKA = "terbuka", "Terbuka"
+    JADI_NOTA = "jadi_nota", "Jadi Nota"
+
+
+class PenjualanOrder(models.Model):
+    """Order penjualan — pesanan yang belum tentu jadi nota.
+
+    `nomor_nota` adalah talinya ke `Penjualan` bila order sudah direalisasi.
+    Sengaja `CharField`, bukan FK: di legacy ia diisi nomor nota apa adanya, dan
+    memaksakan FK berarti order yang notanya sudah dihapus/diarsipkan tak bisa
+    dibaca sama sekali.
+    """
+
+    nomor = models.CharField(max_length=30, unique=True)
+    tanggal = models.DateTimeField()
+    tanggal_terima = models.DateTimeField(null=True, blank=True)
+    divisi = models.ForeignKey("Divisi", on_delete=models.PROTECT)
+    pelanggan = models.ForeignKey("Pelanggan", null=True, blank=True, on_delete=models.PROTECT)
+
+    status = models.CharField(max_length=10, choices=StatusOrder.choices,
+                              default=StatusOrder.TERBUKA)
+    nomor_nota = models.CharField(max_length=30, blank=True, null=True)
+    total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    dibuat_oleh = models.IntegerField(null=True, blank=True)  # id user aplikasi
+    dibuat_pada = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "penjualan_order"
+        indexes = [models.Index(fields=["tanggal"], name="ix_order_jual_tgl")]
+
+    def __str__(self):
+        return f"{self.nomor} ({self.get_status_display()})"
+
+
+class PenjualanOrderBaris(models.Model):
+    order = models.ForeignKey(PenjualanOrder, on_delete=models.CASCADE, related_name="baris")
+    barang = models.ForeignKey("Barang", on_delete=models.PROTECT)
+    satuan = models.ForeignKey("Satuan", on_delete=models.PROTECT)
+    qty = models.DecimalField(max_digits=18, decimal_places=3)
+    harga = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = "penjualan_order_baris"
+        indexes = [models.Index(fields=["barang"], name="ix_order_jual_baris_brg")]

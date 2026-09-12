@@ -743,19 +743,88 @@ _ORDER_TERBUKA = (
 )
 
 
-def _order_inner(f, *, tabel, detail, harga, mitra, mitra_tabel, ekor, extra_hdr,
-                 extra_group):
-    """Inner SQL satu laporan order, grain per no_order.
+def _order_net(where_sql, *, tabel, detail, harga, mitra, mitra_tabel, ekor,
+               extra_hdr, extra_group):
+    """Subquery order ber-nilai-uang, grain per no_order — satu formula, dua pemakai.
 
-    Dua level seperti _nota_net()/_pembelian_nota() dan dengan alasan yang sama:
-    inner mengagregasi baris detail, outer menerapkan diskon header + pajak
-    sekali per order. Semantik diskon/pajak diwarisi utuh dari _ghb() — jangan
-    diganti SUM(qty*harga) polos, klaim "diskon selalu rupiah flat" sudah pernah
-    salah untuk 87 baris t_penjualan_detail (lihat docstring _unit_net).
+    Diangkat keluar dari `_order_inner` supaya `adapter.badan_penjualan_order`
+    bisa memanggilnya alih-alih menyalin rumusnya, persis alasan `_nota_net()`
+    dan `_pembelian_nota()` dipakai begitu: **salinan kedua logika uang tidak
+    memunculkan galat apa pun, hanya angka yang berbeda.**
+
+    Dua level seperti `_nota_net()`/`_pembelian_nota()` dan dengan alasan yang
+    sama: inner mengagregasi baris detail, outer menerapkan diskon header +
+    pajak sekali per order. Semantik diskon/pajak diwarisi utuh dari `_ghb()` —
+    jangan diganti SUM(qty*harga) polos, klaim "diskon selalu rupiah flat" sudah
+    pernah salah untuk 87 baris `t_penjualan_detail` (lihat docstring
+    `_unit_net`).
+
+    `kd_mitra` dan `kd_divisi` ikut dipulangkan meski laporan hanya memakai
+    namanya: view adapter memulangkan KODE, dan pembacanya yang men-join nama —
+    bentuk yang sama seperti `arunika_src.penjualan`.
+
+    ## Kolom kepala adalah KUNCI GROUP BY, bukan MIN()
+
+    Sama persis dengan `_nota_net()`, dan dengan sebab yang sama. Keduanya
+    memulangkan angka identik — `no_order` unik di `t_penjualan_order`
+    (diperiksa: 40.975/40.975 testGUdang, 7.209/7.209 grosirPusat), jadi tiap
+    grup hanya pernah melihat satu baris kepala. Yang berbeda adalah apa yang
+    boleh dilakukan OPTIMIZER: `MIN(h.tanggal)` adalah agregat, sehingga predikat
+    tanggal di LUAR subquery ini tak bisa turun ke bawah `GROUP BY` — ia memaksa
+    seluruh riwayat diagregasi lebih dulu, lalu dibuang.
+
+    Jalur laporan lama tak terpengaruh: di sana `where_sql` memang sudah di
+    dalam. Yang berubah nasibnya `arunika_src.penjualan_order`, yang dibangkitkan
+    dengan `"1=1"` sehingga SELURUH penyaringan terjadi di luar. Terukur sebelum
+    perbaikan ini, testGUdang sebulan: **0,18 dtk jalur lama vs 2,72 dtk lewat
+    view** — ongkos rata berapa pun sempit rentangnya, persis gejala yang sama.
 
     `ekor` = ekspresi setelah pajak (diskon_uang utk penjualan, ppnbm utk
     pembelian); `extra_hdr` = kolom header tambahan yang dipakai `ekor`.
     """
+    net_pre_tax = _ghb("net_lines", ["hd1", "hd2", "hd3", "hd4"])
+    return (
+        "SELECT no_order, tanggal, tanggal_terima, mitra, divisi, status, no_transaksi, "
+        "kd_mitra, kd_divisi, jml_item, total_qty, "
+        f"({net_pre_tax}) {ekor} AS total_bersih "
+        "FROM ("
+        "SELECT h.no_order, h.tanggal, h.tanggal_terima, "
+        "COALESCE(m.nama, '') AS mitra, COALESCE(dv.nama, '') AS divisi, "
+        f"{_ORDER_TERBUKA} AS status, COALESCE(h.no_transaksi, '') AS no_transaksi, "
+        f"h.kd_{mitra} AS kd_mitra, h.kd_divisi AS kd_divisi, "
+        "COUNT(*) AS jml_item, SUM(d.qty) AS total_qty, "
+        "COALESCE(h.pajak, 0) AS pajak_rate, "
+        f"{extra_hdr} "
+        "COALESCE(h.diskon1, 0) AS hd1, COALESCE(h.diskon2, 0) AS hd2, "
+        "COALESCE(h.diskon3, 0) AS hd3, COALESCE(h.diskon4, 0) AS hd4, "
+        f"SUM({_unit_net(harga)} * d.qty) AS net_lines "
+        f"FROM {tabel} h "
+        f"INNER JOIN {detail} d ON h.no_order = d.no_order "
+        f"LEFT JOIN {mitra_tabel} m ON h.kd_{mitra} = m.kd_{mitra} "
+        "LEFT JOIN m_divisi dv ON h.kd_divisi = dv.kd_divisi "
+        f"WHERE {where_sql} "
+        "GROUP BY h.no_order, h.tanggal, h.tanggal_terima, m.nama, dv.nama, "
+        f"h.no_transaksi, h.kd_{mitra}, h.kd_divisi, "
+        "h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.pajak, "
+        f"{extra_group}"
+        ") nz"
+    )
+
+
+def _penjualan_order_net(where_sql):
+    """`_order_net` sisi jual, siap dipanggil `adapter._dari_nota`."""
+    return _order_net(
+        where_sql, tabel="t_penjualan_order", detail="t_penjualan_order_detail",
+        harga="harga_jual", mitra="customer", mitra_tabel="m_customer",
+        ekor="* (1 + pajak_rate) - diskon_uang",
+        extra_hdr="COALESCE(h.diskon_uang, 0) AS diskon_uang,",
+        extra_group="h.diskon_uang",
+    )
+
+
+def _order_inner(f, *, tabel, detail, harga, mitra, mitra_tabel, ekor, extra_hdr,
+                 extra_group):
+    """Inner SQL satu laporan order. Penyaringnya di sini, rumusnya di `_order_net`."""
     where, params = _base_where(f)
     if f.get(f"kd_{mitra}"):
         where.append(f"h.kd_{mitra} = ?")
@@ -764,30 +833,9 @@ def _order_inner(f, *, tabel, detail, harga, mitra, mitra_tabel, ekor, extra_hdr
         where.append(f"{_ORDER_TERBUKA} = ?")
         params.append(f["status_order"])
     _search(where, params, f, ["h.no_order", "m.nama"])
-
-    net_pre_tax = _ghb("net_lines", ["hd1", "hd2", "hd3", "hd4"])
-    inner = (
-        "SELECT no_order, tanggal, tanggal_terima, mitra, divisi, status, no_transaksi, "
-        "jml_item, total_qty, "
-        f"({net_pre_tax}) {ekor} AS total_bersih "
-        "FROM ("
-        "SELECT h.no_order, MIN(h.tanggal) AS tanggal, MIN(h.tanggal_terima) AS tanggal_terima, "
-        "COALESCE(MIN(m.nama), '') AS mitra, COALESCE(MIN(dv.nama), '') AS divisi, "
-        f"MIN({_ORDER_TERBUKA}) AS status, MIN(COALESCE(h.no_transaksi, '')) AS no_transaksi, "
-        "COUNT(*) AS jml_item, SUM(d.qty) AS total_qty, "
-        "COALESCE(MIN(h.pajak), 0) AS pajak_rate, "
-        f"{extra_hdr} "
-        "COALESCE(MIN(h.diskon1), 0) AS hd1, COALESCE(MIN(h.diskon2), 0) AS hd2, "
-        "COALESCE(MIN(h.diskon3), 0) AS hd3, COALESCE(MIN(h.diskon4), 0) AS hd4, "
-        f"SUM({_unit_net(harga)} * d.qty) AS net_lines "
-        f"FROM {tabel} h "
-        f"INNER JOIN {detail} d ON h.no_order = d.no_order "
-        f"LEFT JOIN {mitra_tabel} m ON h.kd_{mitra} = m.kd_{mitra} "
-        "LEFT JOIN m_divisi dv ON h.kd_divisi = dv.kd_divisi "
-        f"WHERE {' AND '.join(where)} "
-        "GROUP BY h.no_order, h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.pajak, "
-        f"{extra_group}"
-        ") nz"
+    inner = _order_net(
+        " AND ".join(where), tabel=tabel, detail=detail, harga=harga, mitra=mitra,
+        mitra_tabel=mitra_tabel, ekor=ekor, extra_hdr=extra_hdr, extra_group=extra_group,
     )
     return inner, params
 
@@ -821,7 +869,7 @@ def order_penjualan(f):
         # diskon_uang dikurangi PALING AKHIR, sesudah pajak — sama seperti
         # _nota_net(); ia memang rupiah flat.
         ekor="* (1 + pajak_rate) - diskon_uang",
-        extra_hdr="COALESCE(MIN(h.diskon_uang), 0) AS diskon_uang,",
+        extra_hdr="COALESCE(h.diskon_uang, 0) AS diskon_uang,",
         extra_group="h.diskon_uang",
     )
 
@@ -833,7 +881,7 @@ def order_pembelian(f):
         # pajak & ppnbm dikalikan berurutan, bukan dijumlah — sama seperti
         # _pembelian_nota(), mengikuti UDF GetTotalPembelian.
         ekor="* (1 + pajak_rate) * (1 + ppnbm_rate)",
-        extra_hdr="COALESCE(MIN(h.ppnbm), 0) AS ppnbm_rate,",
+        extra_hdr="COALESCE(h.ppnbm, 0) AS ppnbm_rate,",
         extra_group="h.ppnbm",
     )
 
@@ -2009,6 +2057,46 @@ _JENIS_BAYAR_LABEL = (
     "CASE p.jenis_bayar WHEN 'kredit' THEN 'Kredit' WHEN 'tunai' THEN 'Tunai' "
     "WHEN 'lunas' THEN 'Lunas' ELSE '' END"
 )
+
+
+_STATUS_ORDER_LABEL = "CASE o.status WHEN 'terbuka' THEN 'Terbuka' ELSE 'Jadi Nota' END"
+
+
+def order_penjualan_arunika(f):
+    """`order_penjualan` di atas bentuk Arunika.
+
+    Agregat per order sudah selesai di dalam view: `jml_item`, `total_qty`, dan
+    `total` dibangkitkan `adapter.badan_penjualan_order` dari
+    `_penjualan_order_net()` — rumus yang sama persis yang dipakai jalur lama,
+    bukan salinannya. Yang tersisa di sini tinggal join nama dan penyaring.
+
+    Status berhenti jadi tebakan bentuk. Jalur lama menurunkannya tiap kali dari
+    `no_transaksi = no_order` (`_ORDER_TERBUKA`), karena kolom `status` legacy
+    tak bisa dipercaya. Bentuk baru menyimpannya sebagai token, dan label layar
+    dibentuk di sini — termasuk untuk penyaringnya, supaya nilai filter yang
+    dikirim layar ('Terbuka'/'Jadi Nota') tetap berlaku tanpa perubahan di sisi
+    Vue mana pun.
+    """
+    where, params = _base_where_arunika(f, date_col="o.tanggal", div_col="o.divisi_kode")
+    if f.get("kd_customer"):
+        where.append("o.pelanggan_kode = ?")
+        params.append(f["kd_customer"])
+    if f.get("status_order"):
+        where.append(f"{_STATUS_ORDER_LABEL} = ?")
+        params.append(f["status_order"])
+    _search(where, params, f, ["o.nomor", "pl.nama"])
+    inner = (
+        "SELECT o.nomor AS no_order, o.tanggal, o.tanggal_terima, "
+        "COALESCE(pl.nama, '') AS mitra, COALESCE(dv.nama, '') AS divisi, "
+        f"{_STATUS_ORDER_LABEL} AS status, "
+        "COALESCE(o.nomor_nota, '') AS no_transaksi, "
+        "o.jml_item, o.total_qty, o.total AS total_bersih "
+        f"FROM {SRC}.penjualan_order o "
+        f"LEFT JOIN {SRC}.pelanggan pl ON pl.kode = o.pelanggan_kode "
+        f"LEFT JOIN {SRC}.divisi dv ON dv.kode = o.divisi_kode "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
 
 
 def opname_arunika(f):
