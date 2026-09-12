@@ -438,11 +438,11 @@ _MASTER: dict[str, dict] = {
         # berdiskon. Jadi `subtotal` adalah nilai kotor sebelum diskon apa pun.
         "legacy": _badan_penjualan,
         # Slot 2-4 KONSTAN nol di mode Arunika: model native menyimpan satu
-        # `diskon_persen`, dan pengukuran di kedua server menunjukkan sisi jual
+        # `diskon_ghb`, dan pengukuran di kedua server menunjukkan sisi jual
         # memang tak pernah memakai lebih dari satu slot.
         "arunika": "SELECT p.nomor, p.tanggal, d.kode, pl.kode, v.kode, ks.kode, pg.kode, "
                    "p.subtotal, p.diskon, p.pajak, p.total, "
-                   "p.diskon_persen, 0, 0, 0, p.pajak_persen, "
+                   "p.diskon_ghb, 0, 0, 0, p.pajak_persen, "
                    "p.jatuh_tempo, p.keterangan, p.jenis_bayar, p.status "
                    "FROM dbo.penjualan p "
                    "INNER JOIN dbo.divisi d ON d.id = p.divisi_id "
@@ -490,7 +490,7 @@ _MASTER: dict[str, dict] = {
                   "FROM {db}.dbo.t_penjualan_detail d "
                   "INNER JOIN {db}.dbo.t_penjualan h ON h.no_transaksi = d.no_transaksi",
         "arunika": "SELECT p.nomor, p.tanggal, dv.kode, b.kode, s.kode, pg.kode, "
-                   "pb.qty, pb.harga, pb.diskon_persen, 0, 0, 0, pb.total "
+                   "pb.qty, pb.harga, pb.diskon_ghb, 0, 0, 0, pb.total "
                    "FROM dbo.penjualan_baris pb "
                    "INNER JOIN dbo.penjualan p ON p.id = pb.penjualan_id "
                    "INNER JOIN dbo.divisi dv ON dv.id = p.divisi_id "
@@ -512,7 +512,7 @@ _MASTER: dict[str, dict] = {
         "legacy": _badan_pembelian,
         "arunika": "SELECT p.nomor, p.tanggal, d.kode, pm.kode, "
                    "p.subtotal, p.diskon, p.pajak, p.total, "
-                   "p.diskon_persen, 0, 0, 0, p.pajak_persen, p.ppnbm_persen, "
+                   "p.diskon_ghb, 0, 0, 0, p.pajak_persen, p.ppnbm_persen, "
                    "p.nomor_order, p.keterangan, p.jenis_bayar, p.status "
                    "FROM dbo.pembelian p "
                    "INNER JOIN dbo.divisi d ON d.id = p.divisi_id "
@@ -537,7 +537,7 @@ _MASTER: dict[str, dict] = {
                   "FROM {db}.dbo.t_pembelian_detail d "
                   "INNER JOIN {db}.dbo.t_pembelian h ON h.no_transaksi = d.no_transaksi",
         "arunika": "SELECT p.nomor, p.tanggal, dv.kode, b.kode, s.kode, pb.qty, pb.harga, "
-                   "pb.diskon_persen, 0, 0, 0, pb.total "
+                   "pb.diskon_ghb, 0, 0, 0, pb.total "
                    "FROM dbo.pembelian_baris pb "
                    "INNER JOIN dbo.pembelian p ON p.id = pb.pembelian_id "
                    "INNER JOIN dbo.divisi dv ON dv.id = p.divisi_id "

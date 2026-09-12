@@ -278,7 +278,7 @@ def badan_pembelian(db_legacy: str) -> str:
         "n.total_kotor, n.total_kotor - (n.total_bersih - n.pajak), n.pajak, n.total_bersih, "
         # Empat slot diskon persen tingkat nota, kedua TARIF (fraksi, bukan
         # rupiah), plus `no_order` dan `keterangan`. Mode Arunika mengisi slot
-        # pertama dari `diskon_persen` dan sisanya nol.
+        # pertama dari `diskon_ghb` dan sisanya nol.
         "n.hd1, n.hd2, n.hd3, n.hd4, n.pajak_rate, n.ppnbm_rate, "
         "NULLIF(LTRIM(RTRIM(n.no_order)), ''), n.keterangan, "
         "CASE n.status_raw WHEN 0 THEN 'kredit' WHEN 1 THEN 'tunai' "
@@ -430,7 +430,7 @@ def badan_penjualan(db_legacy: str) -> str:
         # Empat slot diskon PERSEN tingkat nota (DT1-DT4 di layar Penjualan
         # Detail), berbeda dari kolom `diskon` di kiri yang rupiah. Dipaparkan
         # apa adanya di mode legacy; mode Arunika mengisi slot pertama dari
-        # `diskon_persen` dan sisanya nol -- lihat `PenjualanBaris.diskon_persen`.
+        # `diskon_ghb` dan sisanya nol -- lihat `PenjualanBaris.diskon_ghb`.
         "n.hd1, n.hd2, n.hd3, n.hd4, n.pajak_rate, "
         "n.tanggal_jatuh_tempo, n.keterangan, "
         # `t_penjualan.status` adalah JENIS PEMBAYARAN, bukan penanda batal --

@@ -14,8 +14,10 @@ the same trusted LAN as the app server.
 """
 from __future__ import annotations
 
+import datetime as dt
 import os
 import re
+import struct
 import threading
 import time
 from contextlib import contextmanager
@@ -148,10 +150,34 @@ def build_conn_str(host, port, db_name, username, password) -> str:
     )
 
 
+# SQL_SS_TIMESTAMPOFFSET. pyodbc tak mengenalnya sendiri dan melempar
+# "ODBC SQL type -155 is not yet supported" -- bukan nilai kosong, melainkan
+# galat yang menjatuhkan seluruh kueri.
+_TIPE_DATETIMEOFFSET = -155
+
+
+def _baca_datetimeoffset(nilai: bytes) -> dt.datetime:
+    """Ubah 20 byte `datetimeoffset` jadi datetime ber-zona.
+
+    Dibutuhkan sejak database Arunika berisi tabel NYATA: `mssql-django`
+    memetakan `DateTimeField` ke `datetimeoffset` saat `USE_TZ` aktif, sementara
+    seluruh jalur baca laporan memakai pyodbc mentah lewat `arunika_cursor`.
+    Tanpa konverter ini setiap laporan di profil mode-Arunika gagal -- dan itu
+    baru ketahuan sesudah tabelnya benar-benar diisi, sebab di mode legacy
+    kolomnya `datetime` biasa milik vendor.
+    """
+    th, bl, hr, jam, mnt, dtk, nano, oj, om = struct.unpack("<6hI2h", nilai)
+    return dt.datetime(
+        th, bl, hr, jam, mnt, dtk, nano // 1000,
+        dt.timezone(dt.timedelta(hours=oj, minutes=om)),
+    )
+
+
 def _connect(host, port, db_name, username, password, autocommit=True, query_timeout=None):
     conn_str = build_conn_str(host, port, db_name, username, password)
     conn = pyodbc.connect(conn_str, timeout=CONNECT_TIMEOUT, autocommit=autocommit)
     conn.timeout = query_timeout or QUERY_TIMEOUT
+    conn.add_output_converter(_TIPE_DATETIMEOFFSET, _baca_datetimeoffset)
     return conn
 
 

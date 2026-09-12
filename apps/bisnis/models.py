@@ -260,7 +260,13 @@ class PergerakanStok(models.Model):
     barang = models.ForeignKey(Barang, on_delete=models.PROTECT)
     satuan = models.ForeignKey(Satuan, on_delete=models.PROTECT)
 
-    tanggal = models.DateField()
+    # `DateTimeField`, bukan `DateField`. Legacy menyimpan JAM pada tiap
+    # dokumen (`2025-01-01 17:43:53`), dan laporan memakainya -- Kas Harian
+    # mengurutkan `tanggal, keterangan`, panel kasir menampilkan waktunya.
+    # Versi pertama memakai `DateField`, dan itu baru terlihat saat tabelnya
+    # benar-benar diisi: kolomnya jadi `date` di SQL Server dan jam di seluruh
+    # dokumen hilang tanpa satu galat pun.
+    tanggal = models.DateTimeField()
     masuk = models.DecimalField(max_digits=18, decimal_places=3, default=0)
     keluar = models.DecimalField(max_digits=18, decimal_places=3, default=0)
     harga = models.DecimalField(max_digits=18, decimal_places=2, default=0)
@@ -338,7 +344,13 @@ class Penjualan(models.Model):
     """
 
     nomor = models.CharField(max_length=30, unique=True)
-    tanggal = models.DateField()
+    # `DateTimeField`, bukan `DateField`. Legacy menyimpan JAM pada tiap
+    # dokumen (`2025-01-01 17:43:53`), dan laporan memakainya -- Kas Harian
+    # mengurutkan `tanggal, keterangan`, panel kasir menampilkan waktunya.
+    # Versi pertama memakai `DateField`, dan itu baru terlihat saat tabelnya
+    # benar-benar diisi: kolomnya jadi `date` di SQL Server dan jam di seluruh
+    # dokumen hilang tanpa satu galat pun.
+    tanggal = models.DateTimeField()
     divisi = models.ForeignKey(Divisi, on_delete=models.PROTECT)
     pelanggan_id = models.BigIntegerField(null=True, blank=True)  # FK menyusul di irisan berikutnya
 
@@ -381,7 +393,7 @@ class Penjualan(models.Model):
     diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     # Diskon tingkat nota sebagai PERSEN, terpisah dari `diskon` yang rupiah.
     # Satu slot, bukan empat -- lihat catatan di `PenjualanBaris.diskon_persen`.
-    diskon_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
+    diskon_ghb = models.DecimalField(max_digits=18, decimal_places=6, default=0)
     pajak = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     # TARIF pajak (fraksi, 0,1 = 10%), terpisah dari `pajak` yang rupiah. Laba
     # HPP memerlukan tarifnya untuk menyusun harga net per unit; menyatukan
@@ -436,7 +448,7 @@ class PenjualanBaris(models.Model):
     harga = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
 
-    # ## SATU slot diskon persen, bukan empat -- dan itu diukur, bukan disederhanakan
+    # ## SATU slot diskon, bukan empat -- dan itu diukur, bukan disederhanakan
     #
     # Legacy merantai `diskon1..4` sebagai persen berurutan (`_ghb`). Diukur di
     # KEDUA server, sisi jual tak pernah memakai lebih dari satu: slot 2, 3, dan
@@ -446,10 +458,21 @@ class PenjualanBaris(models.Model):
     #
     # Baris-baris berantai itu tidak hilang: di mode legacy adapter membaca
     # `diskon1..4` yang asli, jadi laporan tetap memulangkannya utuh. Yang
-    # dibatasi hanya data yang KELAK ditulis Arunika sendiri -- dan di sana satu
-    # kolom persen adalah bentuk yang jujur, bukan rantai empat slot yang
-    # pengukurannya menunjukkan nyaris tak pernah dipakai.
-    diskon_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
+    # dibatasi hanya data yang KELAK ditulis Arunika sendiri.
+    #
+    # ## Namanya `_ghb`, bukan `_persen`, dan itu koreksi yang dibayar data
+    #
+    # Kolom ini **dwimode**, persis seperti UDF `GetHargaBersih` yang ditiru
+    # `reports._ghb`: nilai di (-1, 1) berarti PERSEN (`v * (1 - d)`), nilai
+    # >= 1 berarti RUPIAH FLAT (`v - d`). Bukan teori -- di baris jual
+    # grosirPusat 2025 ada **49.099 baris bermode rupiah berbanding 82 bermode
+    # persen**, dengan nilai terbesar 9.650.000.
+    #
+    # Versi pertama menamainya `diskon_persen` dan memberinya `Decimal(9, 6)`
+    # (maksimum 999,999999). Muatan pertama gagal dengan "Arithmetic overflow
+    # converting numeric to numeric" -- galat yang menunjuk tipe, bukan
+    # kesalahpahamannya. Nama yang berbohong menghasilkan ukuran yang salah.
+    diskon_ghb = models.DecimalField(max_digits=18, decimal_places=6, default=0)
     total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
 
     class Meta:
@@ -486,7 +509,13 @@ class Pembelian(models.Model):
     """
 
     nomor = models.CharField(max_length=30, unique=True)
-    tanggal = models.DateField()
+    # `DateTimeField`, bukan `DateField`. Legacy menyimpan JAM pada tiap
+    # dokumen (`2025-01-01 17:43:53`), dan laporan memakainya -- Kas Harian
+    # mengurutkan `tanggal, keterangan`, panel kasir menampilkan waktunya.
+    # Versi pertama memakai `DateField`, dan itu baru terlihat saat tabelnya
+    # benar-benar diisi: kolomnya jadi `date` di SQL Server dan jam di seluruh
+    # dokumen hilang tanpa satu galat pun.
+    tanggal = models.DateTimeField()
     divisi = models.ForeignKey(Divisi, on_delete=models.PROTECT)
     pemasok_id = models.BigIntegerField(null=True, blank=True)  # FK menyusul, spt pelanggan_id
 
@@ -499,7 +528,7 @@ class Pembelian(models.Model):
     # Kedua TARIF disimpan sebagai fraksi (0,1 = 10%), bukan rupiah: `pajak` di
     # atas hasil hitungnya, `pajak_persen` di sini tarifnya. Laporan Pembelian
     # menampilkan yang tarif.
-    diskon_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
+    diskon_ghb = models.DecimalField(max_digits=18, decimal_places=6, default=0)
     pajak_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
     ppnbm_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
     nomor_order = models.CharField(max_length=30, blank=True, null=True)
@@ -535,7 +564,7 @@ class PembelianBaris(models.Model):
     diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
 
-    diskon_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
+    diskon_ghb = models.DecimalField(max_digits=18, decimal_places=6, default=0)
     class Meta:
         db_table = "pembelian_baris"
         indexes = [models.Index(fields=["barang"], name="ix_beli_baris_barang")]
@@ -731,7 +760,13 @@ class JurnalKas(models.Model):
     """
 
     nomor = models.CharField(max_length=30, unique=True)
-    tanggal = models.DateField()
+    # `DateTimeField`, bukan `DateField`. Legacy menyimpan JAM pada tiap
+    # dokumen (`2025-01-01 17:43:53`), dan laporan memakainya -- Kas Harian
+    # mengurutkan `tanggal, keterangan`, panel kasir menampilkan waktunya.
+    # Versi pertama memakai `DateField`, dan itu baru terlihat saat tabelnya
+    # benar-benar diisi: kolomnya jadi `date` di SQL Server dan jam di seluruh
+    # dokumen hilang tanpa satu galat pun.
+    tanggal = models.DateTimeField()
     divisi = models.ForeignKey(Divisi, null=True, blank=True, on_delete=models.PROTECT)
 
     kas = models.ForeignKey("Kas", on_delete=models.PROTECT, related_name="jurnal")
