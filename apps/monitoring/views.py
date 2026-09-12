@@ -2117,6 +2117,7 @@ _MASTER_PRODUK = {
     "component": "Admin/MasterData/Products",
     "url": "/admin-panel/master/products",
     "inner": rpt.master_produk,
+    "inner_arunika": rpt.master_produk_arunika,
     "sorts": rpt.SORTS_MASTER_PRODUK,
     "default_sort": "nama",
     # Katalog dibaca A→Z. `desc` bawaan laporan cocok untuk tanggal, tidak untuk

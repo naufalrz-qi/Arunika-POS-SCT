@@ -2073,6 +2073,68 @@ _JENIS_BAYAR_LABEL = (
 )
 
 
+_MASTER_PRODUK_FILTER_ARUNIKA = {
+    "kd_kategori": "b.kategori_kode", "kd_merk": "b.merek_kode",
+    "kd_model": "b.model_kode", "kd_warna": "b.warna_kode",
+    "kd_jenis_bahan": "b.bahan_kode",
+}
+
+
+def master_produk_arunika(f):
+    """`master_produk` di atas bentuk Arunika.
+
+    Pindah dengan cara yang sama seperti laporan diskon: **tiga kolom yang
+    artinya belum diketahui dipapar apa adanya**, sehingga layarnya tidak
+    kehilangan apa pun dan perpindahannya bisa dibuktikan identik. Yang belum
+    terjawab — arti kode `ukuran` dan `pabrik` — tetap pertanyaan terbuka, dan
+    tempatnya di model `Barang`, bukan di sini.
+
+    `status_pinjam` memulangkan 0 di mode Arunika: konstan 0 pada 53.865 dan
+    53.612 baris di kedua server, dan tak dirujuk objek legacy mana pun.
+
+    OUTER APPLY untuk satuan termurah dipertahankan bentuknya — `ORDER BY isi,
+    satuan_kode` sama dengan `ORDER BY jumlah, kd_satuan` di jalur lama, sebab
+    `isi` memang `jumlah` yang berganti nama.
+    """
+    where, params = ["1=1"], []
+    _search(where, params, f, ["b.kode", "b.nama", "b.pabrik"])
+    for key, kolom in _MASTER_PRODUK_FILTER_ARUNIKA.items():
+        nilai = (f.get(key) or "").strip()
+        if nilai:
+            where.append(f"{kolom} = ?")
+            params.append(nilai)
+    if (f.get("kd_satuan") or "").strip():
+        where.append("bs.satuan_kode = ?")
+        params.append(f["kd_satuan"].strip())
+    status = (f.get("status") or "").strip()
+    if status in ("0", "1"):
+        where.append("b.aktif = ?" if status == "1" else "b.aktif <> ?")
+        params.append(1)
+    inner = (
+        "SELECT b.kode AS kd_barang, b.nama, "
+        "b.kategori_kode AS kd_kategori, COALESCE(k.nama, '') AS kategori, "
+        "COALESCE(jb.nama, '') AS jenis_bahan, COALESCE(mo.nama, '') AS departemen, "
+        "COALESCE(mk.nama, '') AS divisi_barang, COALESCE(wr.nama, '') AS sub_kategori, "
+        "COALESCE(b.ukuran, '') AS ukuran, COALESCE(b.pabrik, '') AS pabrik, "
+        "COALESCE(st.nama, '') AS satuan, COALESCE(bs.harga_jual, 0) AS harga_jual, "
+        "CASE WHEN b.aktif = 1 THEN 'Aktif' ELSE 'Nonaktif' END AS status, "
+        "COALESCE(b.status_pinjam, '') AS status_pinjam, "
+        "COALESCE(b.keterangan, '') AS keterangan "
+        f"FROM {SRC}.barang b "
+        f"LEFT JOIN {SRC}.kategori k ON k.kode = b.kategori_kode "
+        f"LEFT JOIN {SRC}.bahan jb ON jb.kode = b.bahan_kode "
+        f"LEFT JOIN {SRC}.model_barang mo ON mo.kode = b.model_kode "
+        f"LEFT JOIN {SRC}.merek mk ON mk.kode = b.merek_kode "
+        f"LEFT JOIN {SRC}.warna wr ON wr.kode = b.warna_kode "
+        f"OUTER APPLY (SELECT TOP 1 x.satuan_kode, x.harga_jual FROM {SRC}.barang_satuan x "
+        "             WHERE x.barang_kode = b.kode "
+        "             ORDER BY x.isi, x.satuan_kode) bs "
+        f"LEFT JOIN {SRC}.satuan st ON st.kode = bs.satuan_kode "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
+
+
 def penjualan_hpp_arunika(f):
     """`penjualan_hpp` di atas bentuk Arunika. Laporan paling berlapis di sini.
 

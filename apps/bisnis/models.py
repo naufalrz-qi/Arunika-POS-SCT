@@ -162,6 +162,25 @@ class Barang(models.Model):
     # ini, sudah dikonversi -- lihat catatan di sana.
     satuan_dasar = models.ForeignKey(Satuan, on_delete=models.PROTECT, related_name="barang_dasar")
 
+    # ## Dua kolom warisan yang ARTINYA belum diketahui
+    #
+    # Dibawa supaya layar Master Produk bisa pindah tanpa kehilangan kolom, dan
+    # ditandai di sini supaya utangnya kelihatan alih-alih menyatu jadi bagian
+    # rancangan:
+    #
+    # * `ukuran` — 14 nilai (0..23) di kedua server. Dimensi NYATA: dirujuk
+    #   keluarga `GetStokPerUkuran`/`mon_m_barang_stok_per_ukuran`, jadi ia
+    #   bukan kolom terlantar. Tapi kodifikasinya tak ada di skema mana pun.
+    # * `pabrik` — bendera 0/1/2, sebaran nyaris identik di kedua server
+    #   (49.556/4.308/1 dan 49.323/4.288/1). Tak ada objek yang memberinya arti.
+    #
+    # **Layar Arunika sendiri tidak boleh menawarkan keduanya sebagai isian
+    # sampai artinya dipetakan** — mewarisi kode tanpa arti ke dalam entri baru
+    # akan mengabadikannya. `status_pinjam` sengaja TIDAK ikut: konstan 0 di
+    # kedua server dan tak dirujuk siapa pun, jadi view memulangkannya 0.
+    ukuran = models.FloatField(null=True, blank=True)
+    pabrik = models.SmallIntegerField(null=True, blank=True)
+
     aktif = models.BooleanField(default=True)
     dibuat_pada = models.DateTimeField(auto_now_add=True)
     diubah_pada = models.DateTimeField(auto_now=True)

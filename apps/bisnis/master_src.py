@@ -342,7 +342,8 @@ _MASTER: dict[str, dict] = {
     },
     "barang": {
         "kolom": ["kode", "nama", "keterangan", "merek_kode", "kategori_kode",
-                  "model_kode", "warna_kode", "bahan_kode", "satuan_dasar_kode", "aktif"],
+                  "model_kode", "warna_kode", "bahan_kode", "satuan_dasar_kode",
+                  "ukuran", "pabrik", "status_pinjam", "aktif"],
         # `m_barang` TIDAK punya kolom satuan dasar; ia diturunkan dari baris
         # `m_barang_satuan` yang berfaktor 1. `MIN(kd_satuan)` bukan pilihan
         # sembarangan: sebagian barang punya LEBIH DARI SATU satuan berfaktor 1
@@ -355,9 +356,32 @@ _MASTER: dict[str, dict] = {
                   "RTRIM(b.kd_jenis_bahan), "
                   "(SELECT MIN(RTRIM(bs.kd_satuan)) FROM {db}.dbo.m_barang_satuan bs "
                   "WHERE bs.kd_barang = b.kd_barang AND bs.jumlah = 1), "
+                  # ## Tiga kolom yang dipapar apa adanya, artinya BELUM diketahui
+                  #
+                  # Layar Master Produk menampilkan ketiganya sebagai teks, jadi
+                  # bentuk baca memulangkannya verbatim -- itu yang membuat
+                  # perpindahan bisa dibuktikan identik. Yang belum terjawab
+                  # arti kodenya, dan itu pertanyaan terpisah (lihat model
+                  # `Barang`):
+                  #
+                  #   status_pinjam  KONSTAN 0 di kedua server (53.865 & 53.612
+                  #                  baris), tak dirujuk objek legacy mana pun
+                  #   pabrik         bendera 0/1/2, sebaran nyaris identik di
+                  #                  kedua server -- termasuk TEPAT SATU baris
+                  #                  bernilai 1 di masing-masing
+                  #   ukuran         14 nilai (0..23), dimensi nyata (dipakai
+                  #                  keluarga `GetStokPerUkuran`) tapi
+                  #                  kodifikasinya tak ada di skema
+                  "b.ukuran, b.pabrik, b.status_pinjam, "
                   "CASE WHEN b.status = 1 THEN 1 ELSE 0 END FROM {db}.dbo.m_barang b",
+        # `status_pinjam` KONSTAN 0 di sini, bukan kolom model: ia konstan di
+        # kedua server dan tak dirujuk objek mana pun, jadi mewarisinya berarti
+        # menyalin kolom mati. Pola yang sama seperti `aktif` konstan 1 di
+        # `pemasok` dan `cara_bayar`.
         "arunika": "SELECT b.kode, b.nama, b.keterangan, mk.kode, kt.kode, mo.kode, "
-                   "wa.kode, bh.kode, sd.kode, CAST(b.aktif AS int) "
+                   "wa.kode, bh.kode, sd.kode, "
+                   "COALESCE(b.ukuran, 0), COALESCE(b.pabrik, 0), 0, "
+                   "CAST(b.aktif AS int) "
                    "FROM dbo.barang b "
                    "LEFT JOIN dbo.merek mk ON mk.id = b.merek_id "
                    "LEFT JOIN dbo.kategori kt ON kt.id = b.kategori_id "
