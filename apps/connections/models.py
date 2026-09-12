@@ -14,6 +14,24 @@ class DbType(models.TextChoices):
     RETAIL = "retail", "Retail"
 
 
+class Lingkungan(models.TextChoices):
+    """Produksi atau sekadar salinan untuk uji coba.
+
+    Sampai sekarang bedanya hanya diketahui dari NAMANYA — `Testing` kebetulan
+    berisi salinan grosirPusat dan `testgudang` salinan GUDANG, sementara
+    `PUSAT`/`GUDANG` menunjuk server yang benar-benar dipakai orang berjualan.
+    Nama bukan penanda: sebuah profil bisa diganti namanya, dan yang salah baca
+    di sini menjalankan uji coba di atas data sungguhan.
+
+    Sengaja TIDAK menggerakkan izin apa pun. Ia label — supaya tak ada satu pun
+    jalur tulis yang bisa rusak karena penambahan ini — dan tugasnya membuat
+    operator selalu tahu sedang di mana.
+    """
+
+    PRODUKSI = "produksi", "Produksi"
+    UJI = "uji", "Uji coba"
+
+
 class ConnStatus(models.TextChoices):
     UNKNOWN = "unknown", "Belum dites"
     ONLINE = "online", "Online"
@@ -62,6 +80,9 @@ class ServerProfile(models.Model):
     # baru dilewati. Itu yang membuat profil lama tidak berubah perilakunya
     # sama sekali sampai seseorang mengisinya. Diisi oleh `manage.py init_arunika`.
     db_arunika = models.CharField(max_length=128, blank=True, default="")
+    lingkungan = models.CharField(
+        max_length=10, choices=Lingkungan.choices, default=Lingkungan.PRODUKSI,
+    )
     is_default = models.BooleanField(default=False)
     last_status = models.CharField(max_length=10, choices=ConnStatus.choices, default=ConnStatus.UNKNOWN)
     last_checked = models.DateTimeField(null=True, blank=True)
@@ -119,6 +140,9 @@ class ServerProfile(models.Model):
             "cost_source": self.cost_source_id,
             "report_source": self.report_source_id,
             "is_default": self.is_default,
+            # Aman di prop UMUM: sebuah label, bukan alamat. Justru harus ada di
+            # sini — navbar yang menampilkannya, dan navbar ada di setiap halaman.
+            "lingkungan": self.lingkungan,
             "status": self.last_status,
             "last_checked": self.last_checked.isoformat() if self.last_checked else None,
         }

@@ -58,5 +58,12 @@ export const DB_TYPE_LABELS = {
   retail: "Toko Retail",
 };
 
+// Produksi vs salinan uji coba. Sampai ada kolom ini, bedanya hanya diketahui
+// dari nama profilnya — dan nama bisa diganti.
+export const LINGKUNGAN_LABELS = {
+  produksi: "Produksi",
+  uji: "Uji coba",
+};
+
 /** Label untuk sebuah slug, atau slug-nya sendiri kalau belum dipetakan. */
 export const labelOf = (map, key) => map[key] || key || "—";

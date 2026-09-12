@@ -10,7 +10,7 @@ from apps.core.models import log_activity
 from apps.transactions import indexes
 from core import mssql
 
-from .models import ConnStatus, DbType, ServerProfile
+from .models import ConnStatus, DbType, Lingkungan, ServerProfile
 
 
 def connections_index(request):
@@ -21,7 +21,13 @@ def connections_index(request):
     return render(
         request,
         "Admin/Connections/Index",
-        props={"connections": profiles, "db_types": [t.value for t in DbType]},
+        props={
+            "connections": profiles,
+            "db_types": [t.value for t in DbType],
+            "lingkungan_pilihan": [
+                {"value": v, "label": l} for v, l in Lingkungan.choices
+            ],
+        },
     )
 
 
@@ -32,6 +38,12 @@ def _apply_form(profile, data):
     profile.port = int(data.get("port") or 1433)
     profile.db_name = (data.get("db_name") or "").strip()
     profile.username = (data.get("username") or "").strip()
+    # Bawaannya PRODUKSI, dan itu disengaja: sebuah profil yang lupa ditandai
+    # lebih baik diperlakukan sebagai sungguhan daripada sebaliknya.
+    profile.lingkungan = (
+        data.get("lingkungan") if data.get("lingkungan") in Lingkungan.values
+        else Lingkungan.PRODUKSI
+    )
     # Acuan modal (server grosir/gudang). WAJIB untuk retail — margin dihitung
     # dari harga jual server sumber. OPSIONAL untuk grosir, dipakai Audit Harga
     # Beli membandingkan pembelian toko dgn pembelian gudang. Gudang sendiri tak

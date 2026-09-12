@@ -1,5 +1,5 @@
 <script setup>
-import { DB_TYPE_LABELS } from "@/utils/labels";
+import { DB_TYPE_LABELS, LINGKUNGAN_LABELS } from "@/utils/labels";
 import { storeToRefs } from "pinia";
 import { useConnectionStore } from "@/stores/connection";
 import { useDismissable } from "@/composables/useDismissable";
@@ -10,6 +10,12 @@ const { active, list, switching } = storeToRefs(store);
 const { open, root, close, toggle } = useDismissable();
 
 const typeName = DB_TYPE_LABELS;
+
+// Lencana hanya muncul untuk `uji`. Produksi TIDAK diberi lencana dengan
+// sengaja: kalau setiap koneksi berlencana, tak ada yang menonjol -- dan yang
+// perlu menonjol justru keadaan yang tidak biasa.
+const uji = (c) => c?.lingkungan === "uji";
+const ujiLabel = LINGKUNGAN_LABELS.uji;
 
 const dot = (status) => (status === "online" ? "bg-success-500" : status === "offline" ? "bg-danger-500" : "bg-neutral-300");
 
@@ -32,6 +38,10 @@ function choose(c) {
       <span v-else :class="['h-2 w-2 rounded-full', dot(active?.status)]" />
       <span class="hidden text-xs text-ink-muted sm:inline">Koneksi</span>
       <span class="text-xs font-medium">{{ active?.name || "Belum ada" }}</span>
+      <span
+        v-if="uji(active)"
+        class="shrink-0 rounded bg-warning-bg px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-warning-fg"
+      >{{ ujiLabel }}</span>
       <Icon name="chevron" size="h-4 w-4" class="text-ink-subtle" />
     </button>
 
@@ -61,6 +71,10 @@ function choose(c) {
               {{ c.name }}
               <span class="text-xs text-ink-muted">· {{ typeName[c.db_type] || c.db_type }}</span>
             </span>
+            <span
+              v-if="uji(c)"
+              class="shrink-0 rounded bg-warning-bg px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-warning-fg"
+            >{{ ujiLabel }}</span>
             <span v-if="c.id === active?.id" class="shrink-0 rounded bg-brand-bg px-1.5 py-0.5 text-xs font-medium text-brand-fg">
               Aktif
             </span>
