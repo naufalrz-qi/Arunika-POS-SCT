@@ -665,7 +665,8 @@ belum ada di `arunika_src`**, bukan terhalang penulisan SQL.
 Tiga sisanya terhalang **kolom**, bukan tabel — kelasnya lebih murah:
 
 * **Laporan Voucher** — ~~butuh `voucher_kode`~~ **selesai, lihat §7.6.**
-* **Master Produk** — butuh `ukuran`, `pabrik`, `status_pinjam` di `arunika_src.barang`, dan
+* **Master Produk** — SATU-SATUNYA sisa yang terhalang pengetahuan, bukan data. Butuh
+  `ukuran`, `pabrik`, `status_pinjam` di `arunika_src.barang`, dan
   ketiganya ternyata **bukan penambahan kolom biasa** — lihat §7.6.
 * **Klasifikasi Pelanggan** — ~~bukan `_report_view`~~ **selesai, lihat §7.7.**
 
@@ -890,7 +891,7 @@ BENAR.
 * **Hutang** — butuh `t_hutang_cicilan`, yang **nol baris di setiap server yang bisa dijangkau**.
   Memindahkannya berarti membuat entitas untuk tabel yang tak pernah diisi; nilainya nol sampai
   ada yang mencatat pembayaran hutang di sana.
-* **Pembelian (tingkat baris)** — layarnya menampilkan **delapan kolom diskon**
+* ~~**Pembelian (tingkat baris)**~~ — **selesai, §7.13.** Layarnya menampilkan **delapan kolom diskon**
   (`diskon_item1–4` + `diskon_total1–4`), sementara §5.E/§5.F merancang **satu** kolom `diskon`.
   Itu bukan kelalaian rancangan, tapi juga bukan keputusan yang boleh diambil diam-diam.
 
@@ -1161,6 +1162,61 @@ Empat laporan bertabel kosong sengaja **tidak** dibangun. Adapternya bisa dituli
 adalah membuktikannya — "identik" atas nol baris lawan nol baris tidak menyatakan apa pun, dan
 kode yang tak pernah dijalankan atas satu baris pun rusak diam-diam saat data pertama masuk.
 Mereka menunggu **data**, bukan menunggu kode.
+
+## 7.13 Keputusan diskon diambil, dan tiga laporan terakhir ikut pindah
+
+**Sisa 6 dari 24 spec**, dan keenamnya terhalang hal yang bukan kode.
+
+Keputusannya ternyata tak memaksa memilih antara setia dan bersih, karena bentuk
+baca dan model native adalah dua hal berbeda:
+
+* **Mode legacy memaparkan keempat slot apa adanya**, jadi Penjualan Detail dan
+  Pembelian tidak berubah satu piksel pun dan tetap bisa dibuktikan identik.
+* **Model native menyimpan satu `diskon_persen`.**
+
+Yang membuat itu aman bukan selera melainkan pengukuran di kedua server: sisi
+jual **tak pernah** memakai lebih dari satu slot — diskon2, 3, dan 4 nol pada
+seluruh 570.190 + 2.990.368 baris detail dan 52.801 + 474.595 kepala nota.
+Rantai dua diskon hanya ada di sisi beli (10 baris detail + 2 kepala, semuanya
+testGUdang), dan baris-baris itu **tetap terbaca utuh** karena mode legacy
+membaca kolom aslinya. Yang dibatasi hanya data yang kelak ditulis Arunika
+sendiri — dan di sana belum ada satu baris pun.
+
+### Tarif bukan rupiah, dan itu dua kali nyaris salah
+
+`pembelian.pajak` adalah pajak dalam RUPIAH (hasil `_pembelian_nota()`),
+sementara layar Pembelian menampilkan **tarifnya**. Hal yang sama muncul lagi di
+Laba HPP, yang menyusun harga net dari tarif pajak nota. Keduanya kini kolom
+terpisah di view — `pajak` dan `pajak_persen` — bukan satu nama yang artinya
+bergantung pembacanya.
+
+### Satu ULP yang tidak bisa dihilangkan tanpa menyentuh jalur lama
+
+Laba HPP identik pada **15 dari 16 kolom, bit per bit**. `margin` berbeda pada
+**65 dari 139.794 baris, maksimum 8,88e-16** — satu ULP double. Seluruh
+masukannya bit-identik; yang berbeda urutan evaluasi ekspresi tak-dibulatkan di
+dalam `ROUND`. Tipe kolom kedua jalur diperiksa, sama-sama `float`, jadi ini
+bukan salah pemetaan tipe. Tak sampai ke pengguna: kolomnya `format: "persen"`.
+Obatnya membulatkan lewat `decimal` di **kedua** jalur — perubahan pada jalur
+lama juga, jadi sengaja bukan bagian migrasi.
+
+### Alat ukurnya sendiri, dua kali
+
+Perbandingan baris-per-baris butuh urutan **total**, dan SQL `ORDER BY` tidak
+bisa memberikannya: collation SQL Server mengabaikan spasi ekor, sehingga
+`'SEPEDA X'` dan `'SEPEDA X '` seri dan tertukar bebas. Ditambah kolom yang
+tidak masuk `ORDER BY` (satuan), itu melaporkan 19 lalu 8 selisih yang seluruhnya
+tidak ada. Pembandingnya sekarang mengurutkan di **Python** atas tuple lengkap —
+menghapus seluruh kelas positif-palsu sekaligus, alih-alih menambah tiebreaker
+tiap kali tertipu.
+
+### Sisa enam, dan tak satu pun soal usaha
+
+| Laporan | Penghalang |
+|---|---|
+| Master Produk | kodifikasi `ukuran` (14 nilai) & arti `pabrik` tak ada di skema — §7.6 |
+| Order Pembelian, Promo, Hutang, Shift | tabelnya **nol baris di kedua server** |
+| Piutang | 5 baris, hanya grosirPusat |
 
 ## 8. Yang harus diverifikasi sebelum rancangan ini dibekukan
 
