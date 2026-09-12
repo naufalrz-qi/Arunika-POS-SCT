@@ -2903,6 +2903,7 @@ _OPNAME = {
     "component": "Admin/Inventory/Opname",
     "url": "/admin-panel/inventory/opname",
     "inner": rpt.opname,
+    "inner_arunika": rpt.opname_arunika,
     "sorts": rpt.SORTS_OPNAME,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_OPNAME,

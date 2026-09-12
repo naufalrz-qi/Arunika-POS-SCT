@@ -2011,6 +2011,38 @@ _JENIS_BAYAR_LABEL = (
 )
 
 
+def opname_arunika(f):
+    """`opname` di atas bentuk Arunika.
+
+    Arah koreksi tidak lagi dibaca dari angka. Jalur lama menulis `h.status=2`
+    tiga kali — angka telanjang yang artinya cuma ada di view legacy
+    `mon_t_opname_stok`. Di sini yang diuji `jenis = 'lain_plus'`, token yang
+    menyebutkan dirinya sendiri, dan aturannya tetap sama persis: **hanya
+    Lain-Lain(+) yang menambah stok**, tiga jenis lain mengurangi.
+
+    Nama kolom lama `qty_sistem`/`qty_fisik` sudah dibuang sebelum perpindahan
+    ini dan tidak dihidupkan lagi: `t_opname_stok` tak menyimpan saldo stok sama
+    sekali, hanya besar koreksi dan arahnya.
+    """
+    where, params = _base_where_arunika(f, date_col="kb.tanggal", div_col="kb.divisi_kode")
+    _search(where, params, f, ["kb.barang_kode", "b.nama", "kb.koreksi_nomor"])
+    plus = "k.jenis = 'lain_plus'"
+    inner = (
+        "SELECT kb.koreksi_nomor AS no_transaksi, kb.tanggal, "
+        "COALESCE(dv.nama, '') AS divisi, kb.barang_kode AS kd_barang, "
+        "b.nama AS barang, "
+        f"CASE WHEN {plus} THEN 0 ELSE kb.qty END AS koreksi_keluar, "
+        f"CASE WHEN {plus} THEN kb.qty ELSE 0 END AS koreksi_masuk, "
+        f"CASE WHEN {plus} THEN kb.qty ELSE -kb.qty END AS diferensi "
+        f"FROM {SRC}.koreksi_stok_baris kb "
+        f"INNER JOIN {SRC}.koreksi_stok k ON k.nomor = kb.koreksi_nomor "
+        f"INNER JOIN {SRC}.barang b ON b.kode = kb.barang_kode "
+        f"LEFT JOIN {SRC}.divisi dv ON dv.kode = kb.divisi_kode "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
+
+
 def penjualan_nota_arunika(f):
     """`penjualan_nota` di atas bentuk Arunika.
 

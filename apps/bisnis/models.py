@@ -749,3 +749,63 @@ class Pegawai(Referensi):
     class Meta(Referensi.Meta):
         abstract = False
         db_table = "pegawai"
+
+
+class JenisKoreksi(models.TextChoices):
+    """Empat jenis koreksi stok, dinamai view legacy `mon_t_opname_stok`.
+
+    Arahnya MELEKAT pada jenisnya dan tak pernah jadi pilihan terpisah: hanya
+    `LAIN_PLUS` menambah stok, tiga sisanya mengurangi. Menyediakan pilihan arah
+    sendiri berarti mengizinkan "Rusak, stok bertambah" — dan di gudang legacy
+    sudah ada 30 baris Lain-Lain(−) yang keterangannya diketik "RUSAK", operator
+    memilih jenis yang salah lalu menuliskan maksudnya sebagai teks bebas.
+    """
+
+    HILANG = "hilang", "Hilang"
+    RUSAK = "rusak", "Rusak"
+    LAIN_PLUS = "lain_plus", "Lain-Lain (+)"
+    LAIN_MINUS = "lain_minus", "Lain-Lain (−)"
+
+
+class KoreksiStok(models.Model):
+    """Kepala koreksi stok — `t_opname_stok` di legacy.
+
+    Dipisah jadi kepala + baris meski legacy DATAR (satu baris = satu dokumen
+    berisi satu barang; diperiksa: `no_transaksi` unik 6.699/6.699 di testGUdang
+    dan 2.038/2.038 di grosirPusat). Bentuk datar itu bukan kebutuhan bisnis,
+    melainkan bekas cacat: `trig_update_stok_opname_stok` menetapkan skalar dari
+    `inserted`, sehingga satu INSERT multi-baris cuma menggeser stok SATU baris
+    dan sisanya gagal diam-diam. Jalur tulis kita karena itu menyisipkan satu
+    baris per `execute`.
+
+    Adapter memproyeksikan 1:1 (satu baris legacy -> satu kepala + satu baris),
+    jadi bentuk ini tidak mengarang data. Yang ia lakukan adalah berhenti
+    mewariskan batasan trigger sebagai batasan model.
+    """
+
+    nomor = models.CharField(max_length=30, unique=True)
+    tanggal = models.DateTimeField()
+    divisi = models.ForeignKey("Divisi", on_delete=models.PROTECT)
+    jenis = models.CharField(max_length=12, choices=JenisKoreksi.choices)
+    keterangan = models.CharField(max_length=100, blank=True)
+    pengguna = models.ForeignKey("Pengguna", null=True, blank=True, on_delete=models.PROTECT)
+    dibuat_oleh = models.IntegerField(null=True, blank=True)  # id user aplikasi
+    dibuat_pada = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "koreksi_stok"
+        indexes = [models.Index(fields=["tanggal"], name="ix_koreksi_tgl")]
+
+    def __str__(self):
+        return f"{self.nomor} {self.get_jenis_display()}"
+
+
+class KoreksiStokBaris(models.Model):
+    koreksi = models.ForeignKey(KoreksiStok, on_delete=models.CASCADE, related_name="baris")
+    barang = models.ForeignKey("Barang", on_delete=models.PROTECT)
+    satuan = models.ForeignKey("Satuan", on_delete=models.PROTECT)
+    qty = models.DecimalField(max_digits=18, decimal_places=3)
+
+    class Meta:
+        db_table = "koreksi_stok_baris"
+        indexes = [models.Index(fields=["barang"], name="ix_koreksi_baris_barang")]

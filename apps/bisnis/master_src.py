@@ -454,6 +454,46 @@ _MASTER: dict[str, dict] = {
                    "INNER JOIN dbo.satuan s ON s.id = pb.satuan_id",
     },
     # --- Kas ---------------------------------------------------------------
+    # --- Koreksi stok -----------------------------------------------------
+    #
+    # `t_opname_stok` DATAR: satu baris = satu dokumen berisi satu barang.
+    # Diperiksa, bukan diasumsikan -- `no_transaksi` unik 6.699/6.699 di
+    # testGUdang dan 2.038/2.038 di grosirPusat. Adapter memproyeksikannya 1:1
+    # ke kepala + baris, jadi ia tidak mengarang data; yang berhenti diwariskan
+    # cuma batasan trigger (`trig_update_stok_opname_stok` menetapkan skalar
+    # dari `inserted`) sebagai batasan model.
+    #
+    # `status` di sini JENIS koreksi, dan namanya datang dari view legacy
+    # `mon_t_opname_stok`: 0 Hilang, 1 Rusak, 2 Lain-Lain(+), 3 Lain-Lain(-).
+    # Keempatnya hadir di kedua server. Arah melekat pada jenis -- hanya
+    # `lain_plus` menambah stok -- dan view memulangkan TOKEN, bukan teks layar.
+    "koreksi_stok": {
+        "kolom": ["nomor", "tanggal", "divisi_kode", "jenis", "keterangan", "pengguna_kode"],
+        "legacy": "SELECT no_transaksi, tanggal, RTRIM(kd_divisi), "
+                  "CASE status WHEN 0 THEN 'hilang' WHEN 1 THEN 'rusak' "
+                  "WHEN 2 THEN 'lain_plus' WHEN 3 THEN 'lain_minus' ELSE '' END, "
+                  "keterangan, NULLIF(RTRIM(kd_user), '') "
+                  "FROM {db}.dbo.t_opname_stok",
+        "arunika": "SELECT k.nomor, k.tanggal, d.kode, k.jenis, k.keterangan, pg.kode "
+                   "FROM dbo.koreksi_stok k "
+                   "INNER JOIN dbo.divisi d ON d.id = k.divisi_id "
+                   "LEFT JOIN dbo.pengguna pg ON pg.id = k.pengguna_id",
+    },
+    "koreksi_stok_baris": {
+        # Membawa `tanggal` + `divisi_kode` kepalanya, sebab yang sama seperti
+        # `penjualan_baris`: laporan tingkat-baris tak perlu menyentuh kepala
+        # sama sekali untuk menyaring rentang tanggal.
+        "kolom": ["koreksi_nomor", "tanggal", "divisi_kode", "barang_kode",
+                  "satuan_kode", "qty"],
+        "legacy": "SELECT no_transaksi, tanggal, RTRIM(kd_divisi), kd_barang, "
+                  "RTRIM(kd_satuan), qty FROM {db}.dbo.t_opname_stok",
+        "arunika": "SELECT k.nomor, k.tanggal, d.kode, b.kode, s.kode, kb.qty "
+                   "FROM dbo.koreksi_stok_baris kb "
+                   "INNER JOIN dbo.koreksi_stok k ON k.id = kb.koreksi_id "
+                   "INNER JOIN dbo.divisi d ON d.id = k.divisi_id "
+                   "INNER JOIN dbo.barang b ON b.id = kb.barang_id "
+                   "INNER JOIN dbo.satuan s ON s.id = kb.satuan_id",
+    },
     "jurnal_kas": {
         "kolom": ["nomor", "tanggal", "divisi_kode", "kas_kode", "kas_tujuan_kode",
                   "jenis", "kategori_kode", "jumlah", "keterangan"],
@@ -537,6 +577,12 @@ TANPA_RTRIM = {
     ("pembelian_baris", "pembelian_nomor"): ("t_pembelian_detail", "no_transaksi"),
     ("pembelian_baris", "barang_kode"): ("t_pembelian_detail", "kd_barang"),
     ("jurnal_kas", "nomor"): ("t_biaya_operasional", "no_transaksi"),
+    # Diperiksa di kedua server: `no_transaksi` varchar(20) dan `kd_barang`
+    # varchar(30), sedangkan `kd_divisi`/`kd_satuan`/`kd_user` char(6) -- dan
+    # ketiga yang char itu memang di-RTRIM.
+    ("koreksi_stok", "nomor"): ("t_opname_stok", "no_transaksi"),
+    ("koreksi_stok_baris", "koreksi_nomor"): ("t_opname_stok", "no_transaksi"),
+    ("koreksi_stok_baris", "barang_kode"): ("t_opname_stok", "kd_barang"),
 }
 
 MODE = ("legacy", "arunika")
@@ -576,6 +622,10 @@ SUMBER_UTAMA = {
     "penjualan_baris": "t_penjualan_detail",
     "pembelian": "t_pembelian",
     "pembelian_baris": "t_pembelian_detail",
+    # Keduanya membaca tabel DATAR yang sama; proyeksinya 1:1, jadi jumlah baris
+    # kepala dan baris memang sama besar.
+    "koreksi_stok": "t_opname_stok",
+    "koreksi_stok_baris": "t_opname_stok",
     # Jumlah barisnya gabungan empat tabel -- lihat `_JUMLAH_GABUNGAN` di
     # `cek_arunika`, yang menjumlahkan keempatnya sebagai acuan.
     "jurnal_kas": "t_biaya_operasional",
