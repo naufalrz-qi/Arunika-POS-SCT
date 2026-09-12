@@ -2234,6 +2234,7 @@ _PENJUALAN_NOTA = {
     "component": "Admin/Reports/PenjualanNota",
     "url": "/admin-panel/laporan/penjualan-nota",
     "inner": rpt.penjualan_nota,
+    "inner_arunika": rpt.penjualan_nota_arunika,
     "sorts": rpt.SORTS_PENJUALAN_NOTA,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_PENJUALAN_NOTA,

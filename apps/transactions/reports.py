@@ -2011,6 +2011,52 @@ _JENIS_BAYAR_LABEL = (
 )
 
 
+def penjualan_nota_arunika(f):
+    """`penjualan_nota` di atas bentuk Arunika.
+
+    ## `potongan` jadi kolom, bukan aljabar
+
+    Jalur lama menurunkannya: `total_kotor - (total_bersih - pajak)`, karena tak
+    ada kolom diskon per nota di mana pun. Bentuk baru punya `p.diskon`, dari
+    `GetTotalDiskonPenjualan`, dan identitas keduanya sudah dibuktikan di §7 saat
+    Penjualan per Periode pindah. Perbandingan baris-per-baris di bawah menguji
+    ulang klaim itu di laporan ini juga -- kalau meleset, ia meleset terlihat.
+
+    ## `pajak2` tetap sama dengan `pajak`, dan itu diwarisi apa adanya
+
+    Bukan penyederhanaan yang diambil di sini: jalur lama SUDAH memulangkan
+    `n.pajak AS pajak2`, dengan catatan tersurat bahwa formula per-baris view
+    legacy tidak rekonsiliasi dengan model kode ini. Bentuk baru menyalin
+    keputusan itu, tidak memperbaikinya -- memperbaiki angka pajak di tengah
+    perpindahan akan membuat "identik" tak bisa dibuktikan, dan itu perbaikan
+    tersendiri kalau memang mau diambil.
+    """
+    where, params = _base_where_arunika(f)
+    if f.get("kd_customer"):
+        where.append("p.pelanggan_kode = ?")
+        params.append(f["kd_customer"])
+    if f["search"]:
+        where.append("p.nomor LIKE ?")
+        params.append(f"%{f['search']}%")
+    inner = (
+        "SELECT p.nomor AS no_transaksi, p.tanggal, COALESCE(dv.nama, '') AS divisi, "
+        "COALESCE(pl.nama, '') AS customer, COALESCE(kt.nama, '') AS kota, "
+        "p.subtotal AS total_kotor, p.diskon AS potongan, "
+        "COALESCE(v.nominal, 0) AS voucher, "
+        "p.total - COALESCE(v.nominal, 0) AS total_setelah_voucher, "
+        "p.pajak AS pajak2, p.pajak, p.total AS total_bersih, "
+        "COALESCE(pg.nama, '') AS petugas "
+        f"FROM {SRC}.penjualan p "
+        f"LEFT JOIN {SRC}.pelanggan pl ON pl.kode = p.pelanggan_kode "
+        f"LEFT JOIN {SRC}.divisi dv ON dv.kode = p.divisi_kode "
+        f"LEFT JOIN {SRC}.kota kt ON kt.kode = pl.kota_kode "
+        f"LEFT JOIN {SRC}.voucher v ON v.kode = p.voucher_kode "
+        f"LEFT JOIN {SRC}.pengguna pg ON pg.kode = p.pengguna_kode "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
+
+
 def penjualan_user_arunika(f):
     """`penjualan_user` di atas bentuk Arunika.
 
