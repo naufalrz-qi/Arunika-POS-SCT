@@ -244,20 +244,30 @@ diduga lambat, pengukuran membantahnya, jadi tak ada perubahan di sana.
 
 ## Cakupan pengujian
 
-51 test, 7 berkas, semuanya lolos. Tanpa CI, tanpa test runner JavaScript.
+**798 test, 55 berkas, semuanya lolos.** Tanpa CI, tanpa test runner JavaScript.
 
-**Belum diuji sama sekali:**
+> Angka sebelumnya di sini "51 test, 7 berkas" — sudah lama tidak benar, dan daftar "belum
+> diuji"-nya ikut usang. Diperiksa ulang per berkas, bukan diperbarui angkanya saja.
 
-- 19 view laporan spec-driven
-- `apps/transactions/reports.py` (>1000 baris — permukaan SQL terbesar di repo)
-- `apps/core/reporting.py` (paginasi, filter, sort)
-- Seluruh lapisan CDC (`apps/transactions/cdc_sync.py`) — tak bisa diuji tanpa server nyata
-- `sync_harga_jual`, `sync_entity` — justru jalur tulis paling berisiko
-- App `connections`, `apps/core/scheduler.py`
-- Semua komponen Vue
+**Sudah punya test yang sebelumnya disebut tidak ada:** `apps/transactions/reports.py` (kontrak
+kembaran Arunika, klasifikasi pelanggan, laba rugi), `apps/core/reporting.py` (4 berkas),
+`sync_harga_jual`, `services_sync`, app `connections`, `apps/core/scheduler.py`.
 
-**Celah terbesar yang diakui proyek sendiri** (`context.md` Fase 7): verifikasi menyeluruh
-dan uji beban belum pernah dilakukan.
+**Masih belum diuji:**
+
+- Seluruh lapisan CDC (`apps/transactions/cdc_sync.py`) — tak bisa diuji tanpa server nyata,
+  dan replikanya memang belum diaktifkan.
+- Semua komponen Vue — tak ada test runner JavaScript sama sekali.
+
+**Sifat cakupannya, dan ini yang lebih penting dari jumlahnya.** Hampir seluruh 798 test
+memeriksa **bentuk SQL dan kontrak**, bukan menjalankannya terhadap data. Kebenaran angka
+laporan tidak dibuktikan oleh suite ini melainkan oleh perbandingan baris-per-baris legacy vs
+Arunika di dua server, yang dijalankan tangan tiap kali sebuah laporan pindah dan hasilnya
+dicatat di pesan commit-nya. Suite menahan regresi bentuk; ia tidak akan menangkap angka yang
+salah.
+
+**Celah terbesar yang diakui proyek sendiri** (`context.md` Fase 7): verifikasi menyeluruh dan
+uji beban belum pernah dilakukan.
 
 ---
 
