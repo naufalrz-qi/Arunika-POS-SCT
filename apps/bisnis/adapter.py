@@ -342,6 +342,11 @@ def badan_penjualan(db_legacy: str) -> str:
         # satu angka pun -- berbeda dari penanda voucher di atas, yang justru
         # DIHITUNG apa adanya oleh laporan Voucher.
         "NULLIF(RTRIM(n.kd_kas), ''), "
+        # Yang MENGETIK nota -- `m_userx`, bukan yang menjualnya. Sales duduk di
+        # `penjualan_baris.sales_kode` karena di legacy pun `kd_pegawai` adalah
+        # kolom detail. `char(6)`, jadi RTRIM; kosong -> NULL dengan alasan yang
+        # sama seperti `kd_kas` di atas.
+        "NULLIF(RTRIM(n.kd_user), ''), "
         "n.total_kotor, n.total_kotor - (n.total_bersih - n.pajak), n.pajak, n.total_bersih, "
         # `t_penjualan.status` adalah JENIS PEMBAYARAN, bukan penanda batal --
         # ia keluar di kolomnya sendiri. Nilainya token huruf kecil, sebentuk

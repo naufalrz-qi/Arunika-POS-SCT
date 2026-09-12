@@ -348,6 +348,13 @@ class Penjualan(models.Model):
     kas = models.ForeignKey("Kas", null=True, blank=True, on_delete=models.PROTECT,
                             related_name="penjualan")
 
+    # Siapa yang MENGETIK nota ini di server legacy (`kd_user`). Berbeda dari
+    # `dibuat_oleh` di bawah, yang id user aplikasi Arunika — keduanya hidup
+    # berdampingan justru karena tidak sama, dan `TautanUser` ada supaya yang
+    # satu bisa ditelusuri ke yang lain. Sales-nya di `penjualan_baris`.
+    pengguna = models.ForeignKey("Pengguna", null=True, blank=True,
+                                 on_delete=models.PROTECT, related_name="penjualan")
+
     subtotal = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     pajak = models.DecimalField(max_digits=18, decimal_places=2, default=0)

@@ -2002,6 +2002,50 @@ def penjualan_customer_arunika(f):
     return inner, params + params_luar
 
 
+# Label cara bayar. View memulangkan TOKEN (`kredit`/`tunai`/`lunas`); teks
+# layar dibentuk di sini supaya bentuk baru tak pernah menyimpan teks
+# antarmuka. Dipakai lebih dari satu pembaca, jadi ditulis sekali.
+_JENIS_BAYAR_LABEL = (
+    "CASE p.jenis_bayar WHEN 'kredit' THEN 'Kredit' WHEN 'tunai' THEN 'Tunai' "
+    "WHEN 'lunas' THEN 'Lunas' ELSE '' END"
+)
+
+
+def penjualan_user_arunika(f):
+    """`penjualan_user` di atas bentuk Arunika.
+
+    Laporan pertama yang membaca entitas aktor. Dua hal yang perlu diketahui:
+
+    **`pengguna` adalah yang MENGETIK, bukan yang menjual.** Kolomnya di legacy
+    `t_penjualan.kd_user` -> `m_userx`; sales duduk di baris nota
+    (`penjualan_baris.sales_kode`) karena di sana pun `kd_pegawai` adalah kolom
+    detail. Laporan ini memang menanyakan yang pertama.
+
+    **Kolom `status` di layar ini CARA BAYAR, bukan batal-tidaknya nota.** Sama
+    seperti `nota_pelanggan_arunika`: di legacy keduanya berbagi satu kolom
+    `t_penjualan.status`, di bentuk baru mereka terpisah dan yang dibaca di sini
+    `jenis_bayar`.
+
+    Fallback `COALESCE(pg.nama, p.pengguna_kode)` dipertahankan apa adanya dari
+    jalur lama: nota yang kd_user-nya tak punya baris `m_userx` tetap harus
+    tampil, dengan kodenya sebagai nama.
+    """
+    where, params = _base_where_arunika(f)
+    inner = (
+        "SELECT p.nomor AS no_transaksi, p.tanggal, "
+        "COALESCE(dv.nama, '') AS divisi, "
+        f"{_JENIS_BAYAR_LABEL} AS status, "
+        "COALESCE(pl.nama, '') AS customer, p.total AS nominal, "
+        "COALESCE(pg.nama, p.pengguna_kode) AS [user], p.pengguna_kode AS kd_user "
+        f"FROM {SRC}.penjualan p "
+        f"LEFT JOIN {SRC}.pelanggan pl ON pl.kode = p.pelanggan_kode "
+        f"LEFT JOIN {SRC}.divisi dv ON dv.kode = p.divisi_kode "
+        f"LEFT JOIN {SRC}.pengguna pg ON pg.kode = p.pengguna_kode "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
+
+
 def fmi_penjualan_arunika(f):
     """`fmi_penjualan` di atas bentuk Arunika.
 
@@ -2319,8 +2363,7 @@ def nota_pelanggan_arunika(f, kd_customer: str, top_n: int = 20):
     params.append(kd_customer)
     sql = (
         f"SELECT TOP {int(top_n)} p.nomor AS no_transaksi, p.tanggal, "
-        "CASE p.jenis_bayar WHEN 'kredit' THEN 'Kredit' WHEN 'tunai' THEN 'Tunai' "
-        "WHEN 'lunas' THEN 'Lunas' ELSE '' END AS status, "
+        f"{_JENIS_BAYAR_LABEL} AS status, "
         "COALESCE(dv.nama, '') AS divisi, p.total AS nilai "
         f"FROM {SRC}.penjualan p "
         f"LEFT JOIN {SRC}.divisi dv ON dv.kode = p.divisi_kode "

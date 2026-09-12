@@ -2292,6 +2292,7 @@ _PENJUALAN_USER = {
     "component": "Admin/Reports/PenjualanUser",
     "url": "/admin-panel/laporan/penjualan-user",
     "inner": rpt.penjualan_user,
+    "inner_arunika": rpt.penjualan_user_arunika,
     "sorts": rpt.SORTS_PENJUALAN_USER,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_PENJUALAN_USER,
