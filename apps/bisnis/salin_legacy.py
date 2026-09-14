@@ -50,8 +50,31 @@ _PANJANG = {"char", "varchar", "nchar", "nvarchar", "binary", "varbinary"}
 _LOB = {"text", "ntext", "image", "xml"}
 
 
+# Tabel yang TIDAK dibaca adapter tapi dibutuhkan layar legacy aplikasi, supaya
+# profil salinan bisa dipilih di navbar dan dipakai -- bukan cuma jadi sumber
+# `isi_arunika`. Ditulis tangan karena sumbernya kode layar, bukan badan adapter.
+#
+# Daftarnya dicari dengan mencocokkan nama di `apps/inventory/services.py`
+# terhadap tabel yang BENAR-BENAR ada di PUSAT, bukan dari galat satu per satu:
+#
+# * `g_tutup_buku` -- `_closing_date` mengambil tanggal tutup buku terakhir dari
+#   sini. Tanpanya seluruh layar stok gagal "Invalid object name".
+# * `m_barang_supplier` -- `_barang_meta` membaca supplier per barang.
+#
+# Sengaja TIDAK ikut, walau namanya muncul di berkas yang sama:
+#
+# * `pos_stok_snapshot` / `pos_stok_snapshot_base` -- cache buatan aplikasi ini
+#   sendiri, dan mesin stok sudah menangani ketiadaannya ("snapshot belum ada ->
+#   jalur lambat"). Isinya saldo SERVER SUMBER per hari ini, termasuk pergerakan
+#   di luar jendela salinan; menyalinnya menerapkan saldo itu ke data yang tak
+#   memuat pergerakan tersebut, dan stoknya salah tanpa satu galat pun.
+# * `m_barang_stok_akhir` -- cuma disebut di docstring; cache legacy yang rusak.
+TAMBAHAN_LAYAR = ("g_tutup_buku", "m_barang_supplier")
+
+
 def tabel_dirujuk() -> list[str]:
-    """Seluruh tabel legacy yang dibaca adapter mana pun, termasuk `pergerakan_stok`."""
+    """Tabel legacy yang dibaca adapter mana pun (termasuk `pergerakan_stok`),
+    ditambah `TAMBAHAN_LAYAR`."""
     from apps.bisnis import adapter, master_src
 
     bagian = [master_src.badan_legacy(n, "X") for n in master_src.daftar()]
@@ -59,7 +82,7 @@ def tabel_dirujuk() -> list[str]:
     # Dipisah spasi: badan yang digabung tanpa pemisah pernah menghasilkan nama
     # palsu `m_barang_satuanCREATE`.
     teks = "\n".join(bagian)
-    return sorted(set(re.findall(r"dbo\.((?:m_|t_|pos_)\w+)\b", teks)))
+    return sorted(set(re.findall(r"dbo\.((?:m_|t_|pos_)\w+)\b", teks)) | set(TAMBAHAN_LAYAR))
 
 
 def tipe_kolom(c: dict) -> str:

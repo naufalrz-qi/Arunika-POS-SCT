@@ -105,6 +105,18 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f"Selesai: {total:,} baris, {len(tabel)} tabel, {time.time() - t0:.1f} dtk"))
 
+        # Indeks laporan/stok yang sama dengan server aslinya. Menyalin ulang
+        # menghapus tabel beserta indeksnya, jadi dipasang di sini, bukan
+        # diserahkan ke ingatan. Tanpanya stok 30 Juni 2025 di salinan PUSAT
+        # butuh 15,5 dtk; dengannya 1,8 dtk -- dan angkanya identik.
+        # Indeks untuk tabel yang tak ikut salinan (mis. t_pegawai_ganti_shift)
+        # memang gagal; itu dilaporkan, bukan dianggap galat.
+        from apps.transactions.indexes import ensure_indexes
+
+        gagal, _ = ensure_indexes(tujuan, out=lambda *_a, **_k: None)
+        self.stdout.write(f"  indeks laporan/stok dipasang; {len(gagal)} dilewati "
+                          "(tabelnya tak ikut salinan)")
+
     # ------------------------------------------------------------------
     def _siapkan_database(self, tujuan):
         """Buat database kalau belum ada; kalau ada, WAJIB salinan buatan kita.

@@ -13,6 +13,25 @@ class TabelDirujuk(SimpleTestCase):
         self.assertIn("m_barang_satuan", t)
         self.assertFalse([x for x in t if not x.islower() or "create" in x])
 
+    def test_tabel_layar_stok_ikut(self):
+        """Tanpa `g_tutup_buku` profil salinan bisa dipilih dari navbar tapi
+        seluruh layar stok gagal -- adapter tak membacanya, mesin stok membaca."""
+        self.assertIn("g_tutup_buku", sl.tabel_dirujuk())
+        self.assertIn("m_barang_supplier", sl.tabel_dirujuk())
+
+    def test_cache_snapshot_tidak_disalin(self):
+        """Snapshot stok server sumber memuat pergerakan di luar jendela salinan;
+        menyalinnya membuat stok salah tanpa galat."""
+        t = sl.tabel_dirujuk()
+        self.assertNotIn("pos_stok_snapshot", t)
+        self.assertNotIn("pos_stok_snapshot_base", t)
+
+    def test_tutup_buku_disalin_utuh(self):
+        """Ia bertanggal, tapi bukan `t_*`: memotongnya ke jendela akan membuang
+        tanggal tutup buku yang justru jadi jangkar hitungan stok."""
+        kelas = sl.kelas_tabel("g_tutup_buku", {"g_tutup_buku": ["periode", "tanggal"]})
+        self.assertEqual(kelas[0], "utuh")
+
 
 class KelasTabel(SimpleTestCase):
     KOLOM = {
