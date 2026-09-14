@@ -591,3 +591,78 @@ class InfoPerusahaan(models.Model):
 
     def __str__(self) -> str:
         return f"{self.profile_id}: {self.perusahaan or '(belum diisi)'}"
+
+
+class TransferArunika(models.Model):
+    """Satu kali jalan layar Transfer ke Arunika: legacy -> salinan lokal -> DB Arunika.
+
+    Tinggal di database pangkal, BUKAN `apps/bisnis/models.py`: model di sana
+    adalah skema Arunika sendiri dan ikut termigrasi ke setiap database Arunika
+    yang dibuat -- catatan jalan tak boleh ikut tersalin ke sana.
+
+    Pekerjaannya berjalan di thread latar (`apps/bisnis/transfer.py`), dan baris
+    ini satu-satunya tempat layar membaca progresnya. `langkah` diperbarui tiap
+    tabel/entitas selesai; halaman memuat ulang prop-nya selama status
+    `berjalan`.
+    """
+
+    BERJALAN, SELESAI, GAGAL, TERPUTUS = "berjalan", "selesai", "gagal", "terputus"
+    STATUS = [
+        (BERJALAN, "Berjalan"),
+        (SELESAI, "Selesai"),
+        (GAGAL, "Gagal"),
+        # Server berhenti (restart, deploy) saat thread masih bekerja. Hasilnya
+        # setengah jadi; profil & database-nya tetap ada dan boleh dihapus.
+        (TERPUTUS, "Terputus"),
+    ]
+
+    nama = models.CharField(max_length=100)
+    sumber = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="transfer_arunika_sumber",
+    )
+    sumber_nama = models.CharField(max_length=100, blank=True)
+    profil_legacy = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="transfer_arunika_legacy",
+    )
+    profil_arunika = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="transfer_arunika_tujuan",
+    )
+    dari = models.DateField()
+    sampai = models.DateField()
+    # Tutup buku terakhir server sumber saat transfer dimulai. Mesin stok
+    # berjangkar di tanggal ini dan menghitung maju/mundur darinya, jadi stok di
+    # profil legacy hasil transfer hanya benar kalau rentang `dari..sampai`
+    # mencakupnya. Terukur pada salinan PUSAT Januari 2025: stok 31 Des 2025
+    # nol beda, stok 31 Jan 2025 beda di 9.741 barang. NULL = sumber tak punya
+    # catatan tutup buku.
+    tutup_buku = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS, default=BERJALAN)
+    tahap = models.CharField(max_length=100, blank=True)
+    # [{tahap, nama, baris, detik, dilewati, alasan}], urut selesai.
+    langkah = models.JSONField(default=list, blank=True)
+    pesan_galat = models.TextField(blank=True)
+    total_baris = models.PositiveIntegerField(default=0)
+    total_dilewati = models.PositiveIntegerField(default=0)
+    dibuat_oleh = models.CharField(max_length=150, blank=True)
+    mulai_pada = models.DateTimeField(auto_now_add=True)
+    selesai_pada = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-mulai_pada"]
+
+    @property
+    def stok_benar(self):
+        """True/False: apakah stok di profil legacy-nya bisa dipercaya. None = tak diketahui."""
+        if self.tutup_buku is None:
+            return None
+        from django.utils import timezone
+
+        tgl = self.tutup_buku
+        tgl = timezone.localtime(tgl).date() if timezone.is_aware(tgl) else tgl.date()
+        return self.dari <= tgl <= self.sampai
+
+    def __str__(self) -> str:
+        return f"{self.nama} ({self.status})"

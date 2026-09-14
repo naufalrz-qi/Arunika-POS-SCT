@@ -37,6 +37,7 @@ export const ACTION_LABELS = {
   profil: "Ubah profil",
   konfigurasi: "Konfigurasi server",
   kode_nota: "Ubah kode nota",
+  transfer_arunika: "Transfer ke Arunika",
   tautan_user: "Tautan user legacy",
   koreksi_stok: "Koreksi stok",
   penjualan: "Nota penjualan",

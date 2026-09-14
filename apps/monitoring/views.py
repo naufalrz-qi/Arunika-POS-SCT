@@ -1634,6 +1634,86 @@ def kode_nota_save(request):
     return redirect("/admin-panel/master/kode-nota")
 
 
+_TRANSFER_URL = "/admin-panel/master/transfer-arunika"
+
+
+def _transfer_dict(run, dengan_langkah=False) -> dict:
+    selesai = run.selesai_pada or timezone.now()
+    d = {
+        "id": run.pk, "nama": run.nama, "sumber": run.sumber_nama,
+        "dari": run.dari.isoformat(), "sampai": run.sampai.isoformat(),
+        "status": run.status, "status_label": run.get_status_display(),
+        "tahap": run.tahap, "pesan_galat": run.pesan_galat,
+        "total_baris": run.total_baris, "total_dilewati": run.total_dilewati,
+        "dibuat_oleh": run.dibuat_oleh, "mulai_pada": run.mulai_pada.isoformat(),
+        "selesai_pada": run.selesai_pada.isoformat() if run.selesai_pada else None,
+        "durasi_detik": int((selesai - run.mulai_pada).total_seconds()),
+        "profil_legacy": run.profil_legacy.name if run.profil_legacy else "",
+        "profil_arunika": run.profil_arunika.name if run.profil_arunika else "",
+        "tutup_buku": (timezone.localtime(run.tutup_buku).date().isoformat()
+                       if run.tutup_buku else None),
+        "stok_benar": run.stok_benar,
+    }
+    if dengan_langkah:
+        d["langkah"] = run.langkah
+    return d
+
+
+def transfer_arunika_index(request):
+    """Transfer ke Arunika: legacy -> salinan lokal -> database Arunika baru.
+
+    Pekerjaannya di thread latar (`apps/bisnis/transfer.py`); layar ini hanya
+    membaca baris `TransferArunika`, jadi murah dimuat ulang tiap beberapa detik
+    selama ada yang berjalan.
+    """
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+    from apps.bisnis import transfer
+    from apps.core.models import TransferArunika
+
+    def muat_transfer():
+        transfer.rapikan_yatim()
+        riwayat = list(TransferArunika.objects.select_related(
+            "profil_legacy", "profil_arunika")[:20])
+        return {
+            "berjalan": any(r.status == TransferArunika.BERJALAN for r in riwayat),
+            "aktif": _transfer_dict(riwayat[0], dengan_langkah=True) if riwayat else None,
+            "riwayat": [_transfer_dict(r) for r in riwayat],
+        }
+
+    return render(request, "Admin/MasterData/TransferArunika", props={
+        "transfer": muat_transfer,
+        "sumber": [{"value": p.pk, "label": f"{p.name} — {p.host}/{p.db_name}",
+                    "lingkungan": p.lingkungan} for p in transfer.pilihan_sumber()],
+        "instans": [{"value": p.pk, "label": f"{p.host} (kredensial profil {p.name})"}
+                    for p in transfer.pilihan_instans()],
+    })
+
+
+@require_POST
+def transfer_arunika_mulai(request):
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+    from apps.bisnis import transfer
+    from apps.bisnis.siapkan import Ditolak
+
+    data = get_data(request)
+    try:
+        v = transfer.validasi(data.get("nama"), data.get("sumber"), data.get("dari"),
+                              data.get("sampai"), data.get("instans"))
+        transfer.mulai(v, request.user.username)
+    except Ditolak as exc:
+        request.session["flash_error"] = str(exc)
+        return redirect(_TRANSFER_URL)
+    log_activity(request, "transfer_arunika",
+                 f"Mulai transfer '{v['nama']}' dari {v['sumber'].name} "
+                 f"{v['dari']}..{v['sampai']}")
+    request.session["flash_success"] = (
+        f"Transfer '{v['nama']}' dimulai. Halaman ini boleh ditutup; progresnya tetap tercatat."
+    )
+    return redirect(_TRANSFER_URL)
+
+
 def informasi_perusahaan(request):
     """Layar & handler simpan kelola informasi perusahaan."""
     profile = _active()

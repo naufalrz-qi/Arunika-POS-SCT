@@ -315,3 +315,58 @@ def kosongkan(alias: str) -> None:
     with connections[alias].cursor() as cur:
         for nama in reversed(URUTAN):
             cur.execute(f"DELETE FROM dbo.{nama}")
+
+
+def muat_semua(sumber, tujuan, dari=None, sampai=None, kosongkan_dulu=False,
+               hanya=None, lapor=None) -> dict:
+    """Muat seluruh entitas (atau satu, `hanya`) dari `sumber` ke `tujuan`.
+
+    `sumber`: profil yang database Arunika-nya berisi view `arunika_src.*` mode
+    legacy. `tujuan`: profil yang database Arunika-nya menampung tabel nyata,
+    wajib lingkungan `uji`. `dari`/`sampai` tanggal (inklusif) untuk dokumen;
+    master selalu penuh. Dipakai perintah `isi_arunika` dan layar Transfer ke
+    Arunika.
+    """
+    import time
+
+    from apps.bisnis.siapkan import Ditolak, diam
+    from apps.connections.models import Lingkungan
+    from apps.core import db_alias
+    from core import mssql
+
+    lapor = lapor or diam
+    if not sumber.db_arunika:
+        raise Ditolak(f"Profil sumber '{sumber.name}' belum punya database Arunika.")
+    if not tujuan.db_arunika:
+        raise Ditolak(f"Profil tujuan '{tujuan.name}' belum punya database Arunika.")
+    if (sumber.host.lower(), sumber.db_arunika.lower()) == (tujuan.host.lower(), tujuan.db_arunika.lower()):
+        raise Ditolak("Sumber dan tujuan menunjuk database yang sama.")
+    # Menulis sejuta baris ke database yang ditandai produksi hampir pasti bukan
+    # yang dimaksud. Ditolak, bukan sekadar diperingatkan.
+    if tujuan.lingkungan != Lingkungan.UJI:
+        raise Ditolak(f"Profil tujuan '{tujuan.name}' bertanda '{tujuan.lingkungan}'. "
+                      "Pemuatan hanya menulis ke profil ber-lingkungan 'uji'.")
+    if hanya and hanya not in URUTAN:
+        raise Ditolak(f"Entitas tak dikenal: {hanya}")
+    if dari and sampai and dari > sampai:
+        raise Ditolak("Tanggal awal lewat dari tanggal akhir.")
+    mulai = dt.datetime.combine(dari, dt.time.min) if dari else None
+    akhir = dt.datetime.combine(sampai, dt.time(23, 59, 59)) if sampai else None
+
+    alias = db_alias.daftarkan(tujuan)
+    if kosongkan_dulu:
+        kosongkan(alias)
+        lapor({"jenis": "info", "pesan": "tabel tujuan dikosongkan"})
+
+    total_tulis, total_lewat, t0, peta = 0, 0, time.time(), {}
+    with mssql.arunika_cursor(sumber) as src:
+        for nama in ([hanya] if hanya else URUTAN):
+            t = time.time()
+            h = muat_entitas(nama, src, alias, mulai, akhir, peta)
+            perbarui_peta(peta, alias, nama)
+            total_tulis += h["ditulis"]
+            total_lewat += h["dilewati"]
+            lapor({"jenis": "langkah", "nama": nama, "baris": h["ditulis"],
+                   "detik": round(time.time() - t, 1), "dilewati": h["dilewati"],
+                   "alasan": h["alasan"]})
+    return {"baris": total_tulis, "dilewati": total_lewat, "detik": round(time.time() - t0, 1)}

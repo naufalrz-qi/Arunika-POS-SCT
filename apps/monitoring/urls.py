@@ -33,6 +33,8 @@ urlpatterns = [
          name="kelola_referensi_save"),
     path("master/kode-nota", views.kode_nota_index, name="kode_nota"),
     path("master/kode-nota/save", views.kode_nota_save, name="kode_nota_save"),
+    path("master/transfer-arunika", views.transfer_arunika_index, name="transfer_arunika"),
+    path("master/transfer-arunika/mulai", views.transfer_arunika_mulai, name="transfer_arunika_mulai"),
     path("master-data/informasi-perusahaan", views.informasi_perusahaan, name="informasi_perusahaan"),
 
     # Alamat lama, dipertahankan SEMENTARA untuk masa peralihan. Halaman yang
