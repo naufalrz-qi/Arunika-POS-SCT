@@ -47,6 +47,8 @@ python manage.py ensure_indexes  # create report/stock indexes on MS SQL (idempo
 python manage.py check_stock_agg # self-check: SQL aggregation vs Python aggregation
 python manage.py init_arunika --profile testgudang [--dry-run]  # create the companion Arunika DB + migrate + install arunika_src.* adapters
 python manage.py cek_arunika --profile testgudang               # self-check: adapter shape vs legacy source (read-only)
+python manage.py salin_legacy --sumber PUSAT --tujuan "salinan pusat 2025" --dari 2025-01-01 --sampai 2025-12-31  # copy legacy tables (date window) from ANY server into a LOCAL test mirror; source is only read
+python manage.py isi_arunika --sumber "salinan pusat 2025" --tujuan "testing arunika" --kosongkan  # fill Arunika's real tables from a legacy-mode adapter DB; target must be lingkungan=uji
 python manage.py sync_cdc        # sync report_source replica via CDC (--backfill for initial full copy)
 python manage.py sync_feed --source GUDANG --dry-run   # fan-out master data gudang → toko
 python manage.py init_hub --hub AMPHOREUS --ref GUDANG # create/refresh the AMPHOREUS hub schema (idempotent)

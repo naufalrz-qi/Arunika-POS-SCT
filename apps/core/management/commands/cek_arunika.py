@@ -178,17 +178,29 @@ class Command(BaseCommand):
                 # legacy) memotong nominal voucher, `_nota_net()` tidak. Selisih
                 # di sini adalah perbedaan akuntansi yang sudah diketahui dan
                 # belum diputuskan -- bukan adapter yang rusak.
-                vc.execute(
-                    f"SELECT COUNT(*) FROM {master_src.SKEMA}.penjualan v "
-                    f"INNER JOIN [{profil.db_name}].dbo.t_penjualan_total t "
-                    f"  ON RTRIM(t.no_transaksi) = v.nomor "
-                    f"WHERE ABS(v.total - t.total) >= 0.005"
-                )
-                nbeda = vc.fetchone()[0]
-                self.stdout.write(
-                    f"  [4] beda dgn t_penjualan_total: {nbeda} nota "
-                    "(voucher; keputusan akuntansi yang belum diambil, bukan galat)"
-                )
+                #
+                # Salinan uji (`salin_legacy`) hanya membawa tabel yang DIBACA
+                # adapter, dan `t_penjualan_total` bukan salah satunya -- jadi di
+                # sana langkah ini dilewati dan dikatakan, bukan meledak sesudah
+                # langkah [2] dan [3] yang sesungguhnya sudah lolos.
+                vc.execute(f"SELECT OBJECT_ID('[{profil.db_name}].dbo.t_penjualan_total')")
+                if vc.fetchone()[0] is None:
+                    self.stdout.write(
+                        "  [4] dilewati: t_penjualan_total tak ada di database ini "
+                        "(salinan uji hanya membawa tabel yang dibaca adapter)"
+                    )
+                else:
+                    vc.execute(
+                        f"SELECT COUNT(*) FROM {master_src.SKEMA}.penjualan v "
+                        f"INNER JOIN [{profil.db_name}].dbo.t_penjualan_total t "
+                        f"  ON RTRIM(t.no_transaksi) = v.nomor "
+                        f"WHERE ABS(v.total - t.total) >= 0.005"
+                    )
+                    nbeda = vc.fetchone()[0]
+                    self.stdout.write(
+                        f"  [4] beda dgn t_penjualan_total: {nbeda} nota "
+                        "(voucher; keputusan akuntansi yang belum diambil, bukan galat)"
+                    )
 
             # [5] Kebijakan RTRIM. Kolom di `TANPA_RTRIM` sengaja dipulangkan
             # mentah karena sumbernya `varchar` -- yang tak pernah dipadatkan
