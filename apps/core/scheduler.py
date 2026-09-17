@@ -32,6 +32,85 @@ log = logging.getLogger(__name__)
 _started = False
 _lock = threading.Lock()
 
+# Nama pelaku di kolom `SyncLog.username`. Job terjadwal tidak punya request dan
+# tidak punya user, tapi baris riwayatnya tetap harus bisa dibedakan dari yang
+# dipicu manusia lewat layar atau dijalankan tangan lewat CLI.
+PELAKU_TERJADWAL = "(terjadwal)"
+
+# Detak tiap job: kapan terakhir jalan, berapa lama, berhasil atau tidak.
+#
+# Di memori proses, BUKAN tabel, dan itu keputusan bukan kemalasan. Pertanyaan
+# yang dijawabnya adalah "apakah penjadwal hidup SEKARANG", dan waitress satu
+# proses berarti request web membaca memori yang sama dengan thread penjadwal.
+# Restart yang mengosongkannya justru jawaban yang benar: di proses ini memang
+# belum ada yang jalan.
+#
+# Riwayat kejadian ada di tempat lain (`SyncLog`). Dua pertanyaan berbeda, dua
+# tempat: tabel riwayat sengaja SUNYI untuk run yang tak mengubah apa pun, jadi
+# ia tak akan pernah bisa menjawab pertanyaan kehidupan.
+#
+# ponytail: hilang saat restart, dan tak terlihat kalau nanti jalan multi-proses.
+# Pindahkan ke tabel kalau butuh riwayat uptime lintas-restart.
+_DETAK: dict[str, dict] = {}
+_thread_utama = None
+_thread_harga = None
+
+# Flag yang ditampilkan layar Kesehatan Sync, beserta defaultnya. Dibaca dari
+# proses yang SEDANG BERJALAN, bukan dari `.env` — sebuah flag yang sudah
+# diedit tapi belum direstart adalah persis kebingungan yang mau dihapus.
+FLAG_JOB = (
+    ("SYNC_HEALTH_ENABLED", "1"), ("MASTER_WARM_ENABLED", "1"),
+    ("HARGA_SNAPSHOT_ENABLED", "1"), ("STOK_SNAPSHOT_ENABLED", "1"),
+    ("FEED_SYNC_ENABLED", "0"), ("HUB_SYNC_ENABLED", "0"),
+    ("HUB_PULL_ENABLED", "0"), ("HUB_MATCH_ENABLED", "0"),
+    ("HUB_MASTER_ENABLED", "0"), ("MASTER_TOKO_ENABLED", "0"),
+    ("HARGA_SYNC_ENABLED", "0"),
+)
+
+
+def _catat_detak(nama: str, t0: float, error: str = "") -> None:
+    """Catat satu detak job. `t0` dari `time.monotonic()` saat job mulai."""
+    from django.utils import timezone
+
+    _DETAK[nama] = {
+        "terakhir": timezone.now(),
+        "durasi_ms": int((time.monotonic() - t0) * 1000),
+        "status": "failed" if error else "ok",
+        "error": error[:255],
+    }
+
+
+def _jalankan_detak(nama: str, fn, *args) -> None:
+    """Jalankan satu job, catat detaknya, telan galatnya.
+
+    Menelan galat adalah perilaku yang SUDAH ada sebelumnya (tiap job dibungkus
+    try/except supaya satu server mati tak menjatuhkan tick). Yang ditambahkan
+    di sini cuma jejaknya — sebelumnya kegagalan hanya jadi baris stdout yang
+    tak ada pembacanya.
+    """
+    t0 = time.monotonic()
+    try:
+        fn(*args)
+    except Exception as exc:  # pragma: no cover — tick harus tetap hidup
+        log.exception("job terjadwal %s gagal", nama)
+        _catat_detak(nama, t0, f"{type(exc).__name__}: {exc}")
+    else:
+        _catat_detak(nama, t0)
+
+
+def status() -> dict:
+    """Keadaan penjadwal untuk layar Kesehatan Sync. Tanpa menyentuh database."""
+    return {
+        "utama_hidup": bool(_thread_utama and _thread_utama.is_alive()),
+        "harga_hidup": bool(_thread_harga and _thread_harga.is_alive()),
+        "interval": _interval(),
+        "interval_harga": _harga_sync_interval(),
+        "flag": {n: _flag(n, d) for n, d in FLAG_JOB},
+        # Job yang flag-nya mati tak pernah muncul di sini. Itu informasi, bukan
+        # lubang: daftar flag di atas yang menjelaskan kenapa.
+        "job": [{"nama": n, **v} for n, v in sorted(_DETAK.items())],
+    }
+
 
 def _flag(name: str, default: str = "1") -> bool:
     return os.environ.get(name, default).lower() not in ("0", "false", "no", "off")
@@ -215,7 +294,7 @@ def _run_due_feed_sync() -> None:
     except ValueError:
         limit = 2000
 
-    for hasil in feed_sync.sync_all(source, targets, limit=limit):
+    for hasil in feed_sync.sync_all(source, targets, limit=limit, username=PELAKU_TERJADWAL):
         if hasil["status"] == "failed":
             log.warning("feed_sync %s -> %s GAGAL: %s", hasil["source"], hasil["target"], hasil["error"])
         elif hasil["diterapkan"] or hasil["dilewati"]:
@@ -315,7 +394,7 @@ def _run_due_hub_pull(now) -> None:
 
     for s in sumber:
         try:
-            hasil = hub_pull.pull_source(s, hub, mode="segar", hari=hari)
+            hasil = hub_pull.pull_source(s, hub, mode="segar", hari=hari, username=PELAKU_TERJADWAL)
             if hasil["status"] == "failed":
                 log.warning("hub_pull segar %s GAGAL: %s", hasil["source"], hasil["error"])
             elif hasil["header"] or hasil["dihapus"]:
@@ -337,7 +416,7 @@ def _run_due_hub_pull(now) -> None:
                 continue
 
             if _flag("HUB_MATCH_ENABLED", "0"):
-                cocok = hub_pull.pull_source(s, hub, mode="cocok")
+                cocok = hub_pull.pull_source(s, hub, mode="cocok", username=PELAKU_TERJADWAL)
                 if cocok["hari_beda"]:
                     # Hari yang tidak cocok adalah TEMUAN, bukan derau: catat
                     # jumlahnya supaya tren "selalu ada 3 hari beda" terlihat.
@@ -398,40 +477,64 @@ def _run_due_jobs() -> None:
     # yang memilih koneksi lain menanggung sekali cache dingin; itu diterima.
     default_pk = ServerProfile.objects.filter(is_default=True).values_list("pk", flat=True).first()
     for profile in ServerProfile.objects.all():
-        try:
-            if health_on:
-                _run_due_sync_health(profile)
-            if warm_on:
-                _warm_master(profile, include_stok=profile.pk == default_pk)
-            if stok_on:
-                _run_due_stok(now, profile)
-            if harga_on:
-                _run_due_harga(now, profile)
-        except Exception:  # pragma: no cover — profil gagal tak hentikan lainnya
-            log.exception("scheduler snapshot gagal untuk profil %s", getattr(profile, "name", "?"))
+        # Detak ditulis per JOB, bukan per profil: 13 profil menimpa entri yang
+        # sama dan yang tersisa adalah yang terakhir. Pertanyaannya "job ini
+        # masih jalan?", bukan "profil ke berapa yang terakhir".
+        if health_on:
+            _jalankan_detak("sync_health", _run_due_sync_health, profile)
+        if warm_on:
+            _jalankan_detak("pemanas_cache", _warm_master, profile, profile.pk == default_pk)
+        if stok_on:
+            _jalankan_detak("snapshot_stok", _run_due_stok, now, profile)
+        if harga_on:
+            _jalankan_detak("snapshot_harga", _run_due_harga, now, profile)
 
     # Di luar loop per-profil: fan-out punya sumbernya sendiri, bukan sesuatu
     # yang dikerjakan sekali untuk tiap profil yang lewat.
     if _flag("FEED_SYNC_ENABLED", "0"):
-        try:
-            _run_due_feed_sync()
-        except Exception:  # pragma: no cover — tick harus tetap hidup
-            log.exception("feed_sync gagal")
+        _jalankan_detak("feed_sync", _run_due_feed_sync)
     # `hub_sync` (feed `tbl_log_transaksi`) DIGANTI `hub_pull` (tarik langsung
     # dari tabel asli). Pemanggilannya sengaja ditinggal di sini di belakang flag
     # yang defaultnya 0: kodenya belum dihapus supaya angka jalur lama masih bisa
     # dibandingkan kalau `hub_pull` ternyata meleset. Jangan menyalakan keduanya
     # sekaligus — keduanya menulis tabel yang sama, dan yang belakangan menang.
     if _flag("HUB_SYNC_ENABLED", "0"):
-        try:
-            _run_due_hub_sync()
-        except Exception:  # pragma: no cover — tick harus tetap hidup
-            log.exception("hub_sync gagal")
+        _jalankan_detak("hub_sync", _run_due_hub_sync)
     if _flag("HUB_PULL_ENABLED", "0"):
-        try:
-            _run_due_hub_pull(now)
-        except Exception:  # pragma: no cover — tick harus tetap hidup
-            log.exception("hub_pull gagal")
+        _jalankan_detak("hub_pull", _run_due_hub_pull, now)
+    _jalankan_detak("pangkas_log", _run_due_pangkas, now)
+
+
+_pangkas_terakhir = None
+
+
+def _run_due_pangkas(now) -> None:
+    """Pangkas tabel telemetri sekali sehari.
+
+    Penanda tanggalnya di memori, bukan tabel — beda dengan `HargaSnapshotRun`,
+    dan sengaja. Pemangkasan itu idempoten: menjalankannya dua kali sehari
+    sesudah restart tidak berakibat apa pun, jadi sebuah model + migrasi hanya
+    untuk mencegah pengulangan yang tak berbahaya adalah ongkos tanpa manfaat.
+
+    Env: PANGKAS_LOG_ENABLED (1), PANGKAS_LOG_KEEP_DAYS (90).
+    """
+    global _pangkas_terakhir
+
+    if not _flag("PANGKAS_LOG_ENABLED"):
+        return
+    if _pangkas_terakhir == now.date():
+        return
+    try:
+        hari = max(7, int(os.environ.get("PANGKAS_LOG_KEEP_DAYS", "90")))
+    except ValueError:
+        hari = 90
+    from apps.core.management.commands.pangkas_log import pangkas
+
+    hasil = pangkas(hari)
+    _pangkas_terakhir = now.date()
+    if any(hasil.values()):
+        log.info("pangkas_log (>%s hari): %s", hari,
+                 ", ".join(f"{k}={v}" for k, v in hasil.items() if v))
 
 
 def _loop() -> None:
@@ -479,11 +582,12 @@ def _loop_harga() -> None:
     # dalamnya. Yang perlu terlihat adalah PERUBAHAN keadaan.
     gagal_terakhir: set = set()
     while True:
+        t0 = time.monotonic()
         try:
             source, targets = harga_sync.profil_fanout()
             if source and targets:
                 penuh = detik_sejak_penuh >= tiap_penuh * 60
-                hasil = harga_sync.sapu(source, targets, penuh=penuh)
+                hasil = harga_sync.sapu(source, targets, penuh=penuh, username=PELAKU_TERJADWAL)
                 if penuh:
                     detik_sejak_penuh = 0
                 if hasil["sku"]:
@@ -503,15 +607,17 @@ def _loop_harga() -> None:
                     if gagal_terakhir - gagal:
                         log.info("harga_sync pulih ke: %s", sorted(gagal_terakhir - gagal))
                     gagal_terakhir = gagal
-        except Exception:  # pragma: no cover — loop harus tetap hidup
+            _catat_detak("harga_sync", t0)
+        except Exception as exc:  # pragma: no cover — loop harus tetap hidup
             log.exception("harga_sync error")
+            _catat_detak("harga_sync", t0, f"{type(exc).__name__}: {exc}")
         time.sleep(interval)
         detik_sejak_penuh += interval
 
 
 def start_scheduler() -> None:
     """Idempotent: mulai daemon thread. Dipanggil dari config/wsgi.py."""
-    global _started
+    global _started, _thread_utama, _thread_harga
     harga_sync_on = _flag("HARGA_SYNC_ENABLED", "0")
     if not (
         _harga_enabled() or _stok_enabled() or _warm_enabled()
@@ -524,9 +630,14 @@ def start_scheduler() -> None:
         if _started:
             return
         _started = True
-    threading.Thread(target=_loop, name="snapshot-scheduler", daemon=True).start()
+    # Thread disimpan, bukan dibuang: `status()` menjawab "penjadwal hidup?"
+    # dengan is_alive(), dan tanpa rujukannya pertanyaan itu tak bisa dijawab
+    # sama sekali dari dalam proses yang sama.
+    _thread_utama = threading.Thread(target=_loop, name="snapshot-scheduler", daemon=True)
+    _thread_utama.start()
     if harga_sync_on:
-        threading.Thread(target=_loop_harga, name="harga-sync", daemon=True).start()
+        _thread_harga = threading.Thread(target=_loop_harga, name="harga-sync", daemon=True)
+        _thread_harga.start()
         log.info("Sebar harga GUDANG -> toko aktif (tiap %ss).", _harga_sync_interval())
     log.info(
         "Scheduler snapshot aktif (interval %ss, semua profil; harga=%s jam≥%s, stok=%s jam≥%s, "

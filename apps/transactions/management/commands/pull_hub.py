@@ -50,6 +50,7 @@ class Command(BaseCommand):
         for hasil in hub_pull.pull_all(
             hub, sumber, mode=o["mode"], hari=o["hari"], dry_run=o["dry_run"],
             lapor=lapor if o["mode"] in ("arsip", "cocok") else None,
+            username="(cli)",
         ):
             gaya = self.style.ERROR if hasil["status"] == "failed" else self.style.SUCCESS
             self.stdout.write(gaya(

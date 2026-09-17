@@ -70,16 +70,33 @@ def log_activity(request, action, detail=""):
 
 
 class SyncLog(models.Model):
-    """Riwayat sinkronisasi antar-server (harga, m_barang, m_customer, m_supplier).
+    """Riwayat SATU proses latar: sinkronisasi, tarik AMPHOREUS, cadangan, transfer.
 
     Menggantikan ActivityLog (terlalu generik: tidak ada field src/dst/mode/
-    jumlah) sebagai sumber data untuk halaman Riwayat Sinkronisasi.
+    jumlah) sebagai sumber data untuk halaman Riwayat Operasi.
+
+    Dipakai lintas-fitur, bukan hanya sync harga/master seperti dulu. `feature`
+    adalah nama bebas ("harga", "hub_pull", "feed_sync", "backup", "transfer"),
+    dan `compared_count`/`applied_count` dibaca sebagai "diperiksa"/"diterapkan"
+    — sengaja generik supaya enam fitur muat di satu tabel dan satu garis waktu,
+    bukan enam tabel 80% identik yang harus di-UNION di Python.
+
+    Yang TIDAK ditanyakan ke tabel ini: "apakah job-nya masih hidup?". Baris di
+    sini adalah KEJADIAN, dan job yang sehat di hari sunyi tidak menulis apa pun
+    (lihat aturan anti-banjir di tiap pemanggil). Liveness dijawab
+    `scheduler.status()`, yang membaca memori proses. Satu kolom dua arti adalah
+    persis yang bikin `m_barang_stok_akhir` legacy tak bisa dipercaya.
     """
 
     class Status(models.TextChoices):
         OK = "ok", "Berhasil"
         PARTIAL = "partial", "Sebagian"
         FAILED = "failed", "Gagal"
+        # Dipakai tugas latar yang dipicu dari web: baris progres dan baris
+        # riwayat adalah baris yang SAMA. Selesai = status pindah dari sini ke
+        # ok/failed dan duration_ms terisi — tak ada tabel progres kedua yang
+        # harus dijaga tetap sinkron dengan yang ini.
+        BERJALAN = "berjalan", "Berjalan"
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -106,6 +123,11 @@ class SyncLog(models.Model):
     detail = models.TextField(blank=True)  # JSON-serialized list of changed-item dicts
     error_message = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Satu-satunya angka di baris ini yang tak bisa dihitung ulang: tidak ada
+    # `selesai_at`, jadi tanpa kolom ini "hub_pull lambat" tak bisa dibedakan
+    # dari "hub_pull sedang jalan". Diisi di akhir run, tetap 0 untuk baris yang
+    # masih BERJALAN.
+    duration_ms = models.PositiveIntegerField(default=0)
 
     class Meta:
         ordering = ["-created_at"]
@@ -222,23 +244,46 @@ class CdcSyncCursor(models.Model):
         return f"{self.profile_id}:{self.table_name} @ {self.last_lsn or '(belum sync)'}"
 
 
-def log_sync(request, feature, mode, src, dst, compared, applied, status="ok", items=None, error=""):
-    """Catat satu proses sinkronisasi (harga atau master data) untuk halaman Riwayat Sinkronisasi."""
+def _fk_profil(p):
+    """`p` kalau ia benar-benar `ServerProfile` yang sudah tersimpan, selain itu None."""
+    from apps.connections.models import ServerProfile
+
+    return p if isinstance(p, ServerProfile) and p.pk else None
+
+
+def log_sync(request, feature, mode, src, dst, compared, applied, status="ok", items=None,
+             error="", duration_ms=0, username=""):
+    """Catat satu proses latar untuk halaman Riwayat Operasi.
+
+    `request` boleh None: job terjadwal dan management command tidak punya satu,
+    dan `getattr(None, "user", None)` sudah mengembalikan None sejak dulu. Yang
+    kurang cuma cara memberi nama pelakunya — itulah `username`, yang diisi
+    "(terjadwal)" oleh scheduler dan "(cli)" oleh management command. Karena itu
+    TIDAK ada writer kedua untuk jalur tanpa request.
+
+    `src`/`dst` boleh objek apa pun yang punya `.name`, bukan harus
+    `ServerProfile` tersimpan. Nama tetap masuk (kolomnya memang sudah
+    didenormalisasi supaya baris bertahan sesudah profilnya dihapus); hanya
+    FK-nya yang dilepas. Alasannya bukan kenyamanan test: fungsi ini dipanggil
+    dari dalam job yang sedang berjalan, dan sebuah PENCATAT tidak boleh pernah
+    menjatuhkan pekerjaan yang dicatatnya.
+    """
     user = getattr(request, "user", None)
     SyncLog.objects.create(
         user=user if (user and user.is_authenticated) else None,
-        username=(user.username if (user and user.is_authenticated) else ""),
+        username=username or (user.username if (user and user.is_authenticated) else ""),
         feature=feature,
         mode=mode,
-        src_profile=src,
-        src_name=src.name if src else "",
-        dst_profile=dst,
-        dst_name=dst.name if dst else "",
+        src_profile=_fk_profil(src),
+        src_name=getattr(src, "name", "") if src else "",
+        dst_profile=_fk_profil(dst),
+        dst_name=getattr(dst, "name", "") if dst else "",
         compared_count=compared,
         applied_count=applied,
         status=status,
         detail=json.dumps(items or []),
         error_message=error,
+        duration_ms=duration_ms,
     )
 
 

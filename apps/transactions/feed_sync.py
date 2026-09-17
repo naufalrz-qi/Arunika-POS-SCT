@@ -104,11 +104,12 @@ itu. Karena itu kolom payload SELALU diiris dengan katalog nyata server tujuan
 from __future__ import annotations
 
 import re
+import time
 
 import pyodbc
 from django.utils import timezone
 
-from apps.core.models import FeedSyncCursor, SyncDeadLetter
+from apps.core.models import FeedSyncCursor, SyncDeadLetter, log_sync
 from core import mssql
 
 # Daftar-izin. Apa pun di luar ini tidak pernah disentuh — itulah yang membuat
@@ -364,13 +365,45 @@ def _dead_letter(source, target, baris: dict, alasan: str) -> None:
     )
 
 
-def sync_pair(source, target, limit: int = 2000, dry_run: bool = False, from_id: int | None = None) -> dict:
+def _catat_riwayat(source, target, hasil: dict, mulai: float, username: str) -> None:
+    """Satu baris `SyncLog` per run yang berbuah — sunyi kalau tidak.
+
+    `FeedSyncCursor` menimpa satu baris per pasangan, jadi kegagalan semalam
+    hilang begitu run berikutnya berhasil. Yang dicatat di sini: run yang
+    menerapkan baris, yang gagal, atau yang membuang baris ke dead-letter.
+    Baris terbuang layak dicatat meski run-nya "ok" — itu justru kegagalan yang
+    paling mudah lolos, karena statusnya hijau.
+    """
+    terbuang = hasil["dilewati"]
+    gagal = hasil["status"] == "failed"
+    if not hasil["diterapkan"] and not gagal and not terbuang:
+        return
+    rincian = [{"teks": f"{k}: {v}"} for k, v in (
+        ("Diterapkan", hasil["diterapkan"]), ("Disaring", hasil["disaring"]),
+        ("Dead-letter", terbuang), ("Hilang di sumber", hasil["dilewati_hilang"]),
+        ("Sampai feed id", hasil["sampai_id"]),
+    ) if v]
+    rincian += [{"teks": f"{a}: {n}×"} for a, n in (hasil["alasan"] or {}).items()]
+    log_sync(
+        None, feature="feed_sync", mode="", src=source, dst=target,
+        compared=hasil["diterapkan"] + hasil["disaring"] + terbuang,
+        applied=hasil["diterapkan"],
+        # Baris terbuang bukan "berhasil": ia perubahan yang TIDAK sampai.
+        status="failed" if gagal else ("partial" if terbuang else "ok"),
+        items=rincian, error=hasil["error"][:255], username=username,
+        duration_ms=int((time.monotonic() - mulai) * 1000),
+    )
+
+
+def sync_pair(source, target, limit: int = 2000, dry_run: bool = False, from_id: int | None = None,
+              username: str = "") -> dict:
     """Terapkan satu batch feed `source` ke `target`.
 
     Cursor hanya maju SESUDAH commit. Satu baris bermasalah masuk dead-letter dan
     run diteruskan — pola `sync_all` di `cdc_sync`, dan kebalikan dari `goto hell`
     di job legacy yang membuat sisa antrean terlewat sesiklus.
     """
+    mulai = time.monotonic()
     row = _cursor_row(source, target)
     mulai = from_id if from_id is not None else row.last_id
     if not mulai and from_id is None:
@@ -507,10 +540,15 @@ def sync_pair(source, target, limit: int = 2000, dry_run: bool = False, from_id:
         row.save()
         hasil["status"] = "failed"
         hasil["error"] = pesan
+    # Jalur keluar lebih awal (posisi_awal / tak_ada_perubahan / dry_run) sengaja
+    # melewati ini: ketiganya menerapkan 0 baris dan tidak gagal, jadi aturan
+    # sunyi akan membuangnya juga — dan dry run tidak boleh menulis apa pun.
+    _catat_riwayat(source, target, hasil, mulai, username)
     return hasil
 
 
-def sync_all(source, targets, limit: int = 2000, dry_run: bool = False) -> list[dict]:
+def sync_all(source, targets, limit: int = 2000, dry_run: bool = False,
+             username: str = "") -> list[dict]:
     """Fan-out satu sumber ke banyak tujuan. Tiap tujuan punya cursor sendiri,
     jadi satu toko yang mati tidak menahan yang lain."""
-    return [sync_pair(source, t, limit=limit, dry_run=dry_run) for t in targets]
+    return [sync_pair(source, t, limit=limit, dry_run=dry_run, username=username) for t in targets]

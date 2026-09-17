@@ -6,7 +6,7 @@ tulisan itu menyalakan trigger legacy di sana.
 """
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
 from apps.transactions import harga_sync
 
@@ -27,7 +27,10 @@ def _peta(**kv):
     return {tuple(k.split("|")): v for k, v in kv.items()}
 
 
-class SapuTests(SimpleTestCase):
+class SapuTests(TestCase):
+    """TestCase, bukan SimpleTestCase: `sapu` menulis satu baris `SyncLog` untuk
+    sapuan yang berbuah, jadi ia memang menyentuh database pangkal sekarang."""
+
     def setUp(self):
         harga_sync._terakhir.clear()
 

@@ -226,7 +226,7 @@ def _profil_baru(nama, db_name, instans, sumber):
 
 def _jalankan(run_id: int, instans_id: int) -> None:
     from apps.connections.models import ServerProfile
-    from apps.core.models import ActivityLog, TransferArunika
+    from apps.core.models import ActivityLog, TransferArunika, log_sync
 
     run = TransferArunika.objects.get(pk=run_id)
     try:
@@ -268,6 +268,21 @@ def _jalankan(run_id: int, instans_id: int) -> None:
             username=run.dibuat_oleh, action="transfer_arunika",
             detail=(f"Transfer ke Arunika '{run.nama}' {run.get_status_display().lower()}: "
                     f"{run.total_baris:,} baris")[:255],
+        )
+        # Satu baris di garis waktu Riwayat Operasi, bersebelahan dengan
+        # hub_pull/feed_sync/cadangan. `TransferArunika` tetap jadi rumah detail
+        # per-langkahnya; yang di sini cuma supaya sebuah transfer tidak
+        # tak terlihat saat orang bertanya "semalam server ini mengerjakan apa".
+        # SELALU ditulis, tanpa aturan sunyi: satu run = satu tindakan manusia.
+        log_sync(
+            None, feature="transfer", mode="", src=run.sumber, dst=run.profil_arunika,
+            compared=run.total_dilewati, applied=run.total_baris,
+            status="ok" if run.status == TransferArunika.SELESAI else "failed",
+            items=[{"teks": f"{lk.get('tahap','')}: {lk.get('nama','')} "
+                            f"({lk.get('baris',0)} baris, {lk.get('detik',0)}s)"}
+                   for lk in (run.langkah or [])],
+            error=(run.pesan_galat or "")[:255], username=run.dibuat_oleh,
+            duration_ms=int((run.selesai_pada - run.mulai_pada).total_seconds() * 1000),
         )
         # Koneksi thread latar tak ditutup Django (tak ada akhir request). Di jalan
         # sinkron (test) justru jangan: itu koneksi milik test itu sendiri.

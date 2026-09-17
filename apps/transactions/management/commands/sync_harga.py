@@ -27,7 +27,7 @@ class Command(BaseCommand):
             raise CommandError("Tidak ada toko tujuan (FEED_SYNC_TARGETS).")
 
         self.stdout.write(f"{source.name} -> {', '.join(t.name for t in targets)}")
-        hasil = harga_sync.sapu(source, targets, penuh=True, dry_run=o["dry_run"])
+        hasil = harga_sync.sapu(source, targets, penuh=True, dry_run=o["dry_run"], username="(cli)")
         if hasil["error"]:
             raise CommandError(hasil["error"])
 

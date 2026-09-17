@@ -177,7 +177,13 @@ ALL_MENUS = [
     # Master Data — sub-grup 3: sinkronisasi antar-server
     {"key": "sync_harga", "label": "Sinkronisasi Harga", "icon": "refresh", "href": "/admin-panel/master/sync-harga", "section": "master_sync"},
     {"key": "sync_master", "label": "Sinkronisasi Master Data", "icon": "refresh", "href": "/admin-panel/master/sync-master", "section": "master_sync"},
-    {"key": "sync_history", "label": "Riwayat Sinkronisasi", "icon": "list", "href": "/admin-panel/master/sync-history", "section": "master_sync"},
+    # Label berubah jadi "Riwayat Operasi" karena isinya bukan lagi cuma sync
+    # harga/master: hub_pull, feed_sync, harga_sync, transfer, dan cadangan
+    # menulis ke tabel yang sama. `key` dan `href` sengaja TIDAK ikut berubah —
+    # "sync_history" tersimpan di `allowed_menu_keys` tiap akun yang haknya
+    # diatur satu per satu, dan menggantinya mencabut menu itu diam-diam dari
+    # mereka semua.
+    {"key": "sync_history", "label": "Riwayat Operasi", "icon": "list", "href": "/admin-panel/master/sync-history", "section": "master_sync"},
     # Superadmin-only: memperlihatkan kondisi seluruh armada server sekaligus
     # (antrean menumpuk, sync yang mati), bukan data satu koneksi yang sedang
     # dipakai. Itu urusan yang memegang seluruh jaringan toko, bukan per-admin.

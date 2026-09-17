@@ -522,10 +522,33 @@ def suppliers_index(request):
     )
 
 
+_RIWAYAT_HARI = 30
+_RIWAYAT_BATAS = 200
+
+
 def sync_history_index(request):
+    """Riwayat Operasi — satu garis waktu untuk SEMUA pekerjaan latar.
+
+    Dulu hanya memuat sync harga/master yang dipicu manusia. Sekarang
+    `hub_pull`, `feed_sync`, `harga_sync`, dan `transfer` ikut menulis ke tabel
+    yang sama, jadi daftarnya perlu disaring di server: 200 baris terakhir tanpa
+    filter akan habis dipakai satu cabang yang sibuk semalam.
+    """
+    fitur = (request.GET.get("feature") or "").strip()
+    status = (request.GET.get("status") or "").strip()
+    try:
+        hari = max(1, min(365, int(request.GET.get("hari") or _RIWAYAT_HARI)))
+    except ValueError:
+        hari = _RIWAYAT_HARI
+
     def load_sync():
         # SQLite-only (SyncLog), no MS SQL involved — conn_error stays None,
         # kept in the payload shape only because SyncHistory.vue expects the key.
+        qs = SyncLog.objects.filter(created_at__gte=timezone.now() - dt.timedelta(days=hari))
+        if fitur:
+            qs = qs.filter(feature=fitur)
+        if status:
+            qs = qs.filter(status=status)
         syncs = [
             {
                 "id": s.id,
@@ -535,18 +558,32 @@ def sync_history_index(request):
                 "mode": s.mode,
                 "src": s.src_name or "—",
                 "dst": s.dst_name or "—",
+                "compared": s.compared_count,
                 "total_items": s.applied_count,
+                "durasi_detik": round(s.duration_ms / 1000, 1) if s.duration_ms else 0,
                 "status": s.status,
+                "error": s.error_message,
                 "detail": {"items": s.items()},
             }
-            for s in SyncLog.objects.all()[:200]
+            for s in qs[:_RIWAYAT_BATAS]
         ]
-        return {"rows": syncs, "conn_error": None}
+        return {
+            "rows": syncs,
+            # Daftar isi apa adanya, bukan konstanta yang ikut basi tiap kali
+            # sebuah fitur baru mulai mencatat. Tak perlu didaftarkan di mana pun.
+            "fitur_tersedia": sorted(
+                f for f in SyncLog.objects.values_list("feature", flat=True).distinct() if f
+            ),
+            "conn_error": None,
+        }
 
     return render(
         request,
         "Admin/MasterData/SyncHistory",
-        props={"data": defer(load_sync)},
+        props={
+            "data": defer(load_sync),
+            "filters": {"feature": fitur, "status": status, "hari": hari},
+        },
     )
 
 

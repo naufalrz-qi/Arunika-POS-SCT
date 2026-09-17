@@ -55,9 +55,11 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 import pyodbc
 
+from apps.core.models import log_sync
 from apps.transactions.feed_sync import FEED_TABLE_SPECS, _kolom_tujuan, _terapkan_baris
 from apps.transactions.hub_sync import bind_varchar
 from core import mssql
@@ -162,7 +164,36 @@ def dorong(source, targets, kunci: set, harga_src: dict | None = None) -> dict:
     return hasil
 
 
-def sapu(source, targets, penuh: bool = False, dry_run: bool = False) -> dict:
+def _catat_riwayat(source, hasil: dict, mulai: float, username: str) -> None:
+    """Satu baris `SyncLog` per sapuan yang berbuah — dan HANYA yang berbuah.
+
+    Ini pemasangan writer yang paling rawan: `_loop_harga` berjalan tiap 60
+    detik, 1.440× sehari. Mencatat tiap sapuan berarti membanjiri tabel riwayat
+    dengan baris "0 SKU berubah" sampai kejadian yang sungguhan tak bisa
+    ditemukan lagi — dan tabel yang tak bisa dibaca sama nilainya dengan tabel
+    yang tak ada. Hari tanpa perubahan harga menghasilkan NOL baris.
+
+    Konsekuensinya disengaja: tabel ini tidak bisa menjawab "apakah sebar harga
+    masih hidup?". Itu pertanyaan tentang kehidupan, bukan kejadian, dan
+    dijawab `scheduler.status()`.
+    """
+    if not hasil["sku"] and not hasil["gagal"] and not hasil["error"]:
+        return
+    rincian = [{"teks": f"{t}: {n} baris"} for t, n in (hasil.get("per_toko") or {}).items()]
+    rincian += [{"teks": f"GAGAL {t}: {p}"} for t, p in (hasil["gagal"] or {}).items()]
+    if hasil.get("contoh"):
+        rincian.append({"teks": "Contoh SKU: " + ", ".join(str(c) for c in hasil["contoh"])})
+    log_sync(
+        None, feature="harga_sync", mode=hasil["mode"], src=source, dst=None,
+        compared=hasil["sku"], applied=sum((hasil.get("per_toko") or {}).values()),
+        status="failed" if hasil["error"] else ("partial" if hasil["gagal"] else "ok"),
+        items=rincian, error=hasil["error"][:255], username=username,
+        duration_ms=int((time.monotonic() - mulai) * 1000),
+    )
+
+
+def sapu(source, targets, penuh: bool = False, dry_run: bool = False,
+         username: str = "") -> dict:
     """Satu sapuan harga. `penuh=True` membandingkan dengan keadaan nyata toko.
 
     Mode cepat membandingkan GUDANG dengan salinan sapuan sebelumnya di memori;
@@ -170,12 +201,18 @@ def sapu(source, targets, penuh: bool = False, dry_run: bool = False) -> dict:
     penuh: salinan kosong akan terbaca sebagai "semua harga baru saja berubah"
     dan mendorong 55.365 baris ke delapan toko sekaligus.
     """
+    mulai = time.monotonic()
     hasil = {"mode": "penuh" if penuh else "cepat", "sku": 0, "per_toko": {},
              "gagal": {}, "error": ""}
     try:
         harga_src = baca_harga(source)
     except (pyodbc.Error, RuntimeError) as exc:
         hasil["error"] = str(exc.args[-1] if exc.args else exc)[:255]
+        # `dry_run` dikecualikan di sini juga, bukan hanya di jalur sukses:
+        # pratinjau yang gagal menyambung tetaplah pratinjau, dan barisnya akan
+        # terbaca sebagai sebar harga yang benar-benar gagal.
+        if not dry_run:
+            _catat_riwayat(source, hasil, mulai, username)
         return hasil
 
     sebelum = _terakhir.get(source.pk)
@@ -212,6 +249,7 @@ def sapu(source, targets, penuh: bool = False, dry_run: bool = False) -> dict:
     # yang sama ke tujuh toko sehat, dan tiap dorongan itu menyalakan trigger
     # legacy di sana.
     _terakhir[source.pk] = harga_src
+    _catat_riwayat(source, hasil, mulai, username)
     return hasil
 
 
