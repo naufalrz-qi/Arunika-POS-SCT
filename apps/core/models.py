@@ -3,6 +3,7 @@ import json
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class ActivityLog(models.Model):
@@ -711,3 +712,61 @@ class TransferArunika(models.Model):
 
     def __str__(self) -> str:
         return f"{self.nama} ({self.status})"
+
+
+class CadanganBerkas(models.Model):
+    """Inventaris berkas cadangan, beserta hasil verifikasinya.
+
+    Kenapa tabel dan bukan `os.listdir` pada folder cadangan — dua alasan, dan
+    keduanya sudah pasti terjadi di pemasangan ini:
+
+    1. **Berkas `.bak` AMPHOREUS ditulis DI MESIN SQL SERVER**, bukan di mesin
+       yang menjalankan aplikasi. Kalau SQL Server ada di mesin lain, folder itu
+       tidak terjangkau sama sekali dari sini, dan daftar berbasis `listdir`
+       akan berkata "tidak ada cadangan" untuk cadangan yang sebenarnya ada.
+    2. **Hasil verifikasi harus bertahan.** `RESTORE VERIFYONLY` pada berkas
+       ratusan MB lewat WAN butuh waktu; menjalankannya ulang tiap kali halaman
+       dibuka bukan pilihan.
+
+    `verifikasi_ok` sengaja nullable TIGA nilai. "Belum pernah diverifikasi"
+    bukan "gagal verifikasi", dan default `False` akan mengecat seluruh daftar
+    merah pada hari pertama — peringatan yang selalu menyala adalah peringatan
+    yang berhenti dibaca.
+    """
+
+    PANGKAL = "pangkal"
+    AMPHOREUS = "amphoreus"
+    JENIS = [(PANGKAL, "Basis data pangkal"), (AMPHOREUS, "Pusat AMPHOREUS")]
+
+    jenis = models.CharField(max_length=10, choices=JENIS)
+    profile = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="cadangan",
+    )
+    nama_berkas = models.CharField(max_length=255)
+    # Sebagaimana dilihat MESIN PENULISNYA. Untuk AMPHOREUS itu path di mesin
+    # SQL Server, yang bisa sama sekali tak berarti di mesin ini.
+    path = models.CharField(max_length=500)
+    # 0 = tak terjangkau dari mesin ini, BUKAN "berkas kosong".
+    ukuran_byte = models.BigIntegerField(default=0)
+    # `default=timezone.now`, BUKAN `auto_now_add`: cadangan harian menimpa
+    # berkas bertanggal sama, dan barisnya diperbarui — bukan dibuat ulang.
+    # `auto_now_add` tidak bisa disetel saat UPDATE, jadi tanggalnya akan beku
+    # di kapan berkas itu pertama kali pernah ada, bukan kapan isinya ditulis.
+    dibuat_at = models.DateTimeField(default=timezone.now)
+    dibuat_oleh = models.CharField(max_length=150, blank=True)
+    verifikasi_at = models.DateTimeField(null=True, blank=True)
+    verifikasi_ok = models.BooleanField(null=True)
+    verifikasi_pesan = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["-dibuat_at"]
+        constraints = [
+            # Satu baris per berkas. Cadangan harian menimpa berkas bertanggal
+            # sama (VACUUM INTO menghapus dulu, BACKUP pakai WITH INIT), jadi
+            # baris keduanya akan menunjuk berkas yang sudah tidak ada isinya.
+            models.UniqueConstraint(fields=["jenis", "path"], name="unique_cadangan_path"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.jenis}: {self.nama_berkas}"

@@ -44,6 +44,77 @@ from django.db import connection
 _VENDOR_MSSQL = ("microsoft", "mssql")
 
 
+# --- Fungsi modul: dipakai perintah ini DAN jalur web (apps/core/cadangan.py) --
+#
+# Diangkat dari method Command supaya SQL cadangan hanya ada di satu tempat.
+# `backup_mssql` menerima CURSOR, bukan `connection` — itulah satu perubahan
+# yang membuka jalur AMPHOREUS: pusat itu database MS SQL yang bukan basis data
+# pangkal, jadi ia dicapai lewat `mssql.cursor(profil)`, bukan lewat koneksi
+# Django. Pemeriksaan `]` ikut pindah ke dalam, jadi jalur web mewarisi
+# penjagaannya tanpa menyalinnya.
+
+def backup_sqlite(conn, tujuan: Path) -> Path:
+    tujuan.mkdir(parents=True, exist_ok=True)
+    berkas = tujuan / f"db-{dt.date.today():%Y%m%d}.sqlite3"
+    # VACUUM INTO menolak menimpa berkas yang sudah ada; dijalankan dua kali
+    # dalam sehari itu wajar (uji coba, restart), dan gagal karenanya bukan
+    # perilaku yang berguna untuk tugas terjadwal.
+    if berkas.exists():
+        berkas.unlink()
+
+    with conn.cursor() as cur:
+        # Parameter, bukan f-string: path Windows memuat backslash, dan nama
+        # folder yang memuat kutip tunggal akan mematahkan literal SQL.
+        cur.execute("VACUUM INTO %s", [str(berkas)])
+    return berkas
+
+
+def backup_mssql(cur, nama_db: str, tujuan: Path, ph: str = "%s") -> Path:
+    """`ph` adalah gaya placeholder cursor yang diberikan.
+
+    Cursor Django (mssql-django) memakai `%s` dan menerjemahkannya sendiri;
+    cursor pyodbc mentah — yang dipakai jalur AMPHOREUS lewat `mssql.cursor()` —
+    memakai `?`. Menebaknya dari bentuk objek cursor akan diam-diam salah pada
+    salah satu jalur, dan salahnya baru terlihat saat cadangan dijalankan
+    sungguhan, bukan saat test.
+    """
+    # JANGAN mkdir: path ini milik mesin SQL Server, bukan mesin ini. Membuat
+    # folder lokal bernama sama hanya akan menyamarkan salah setel jadi
+    # "berhasil tapi kok kosong".
+    if "]" in nama_db:
+        raise CommandError(f"Nama database memuat ']' dan tidak bisa dikutip aman: {nama_db!r}")
+    berkas = tujuan / f"db-{dt.date.today():%Y%m%d}.bak"
+    # Nama database TIDAK bisa jadi parameter (BACKUP DATABASE ? ditolak parser
+    # T-SQL), jadi ia dikurung [ ] setelah diperiksa di atas. Path-nya tetap
+    # parameter — path Windows penuh backslash.
+    #
+    # WITH INIT menimpa isi berkas yang sudah ada. Tanpa itu, BACKUP MENAMBAHKAN
+    # set cadangan baru ke berkas yang sama, dan berkas harian akan tumbuh
+    # selamanya tanpa ada yang menyadarinya.
+    #
+    # CHECKSUM bukan hiasan: tanpa checksum yang ditulis SAAT backup,
+    # `RESTORE VERIFYONLY` hanya memeriksa header dan struktur set cadangan — ia
+    # akan menjawab "ok" untuk berkas yang halamannya sudah rusak. Verifikasi
+    # yang selalu bilang ok lebih berbahaya daripada tidak ada verifikasi, karena
+    # ia memberi keyakinan palsu. Didukung semua edisi termasuk Express, tidak
+    # seperti COMPRESSION.
+    cur.execute(f"BACKUP DATABASE [{nama_db}] TO DISK = {ph} WITH INIT, CHECKSUM", [str(berkas)])
+    return berkas
+
+
+def pangkas_berkas(tujuan: Path, berkas: Path, sufiks: str, hari: int) -> int:
+    """Hapus cadangan lebih tua dari `hari`. Mengembalikan jumlah yang dibuang."""
+    if hari <= 0 or not tujuan.is_dir():
+        return 0
+    batas = dt.datetime.now().timestamp() - hari * 86400
+    dibuang = 0
+    for lama in tujuan.glob(f"db-*.{sufiks}"):
+        if lama != berkas and lama.stat().st_mtime < batas:
+            lama.unlink()
+            dibuang += 1
+    return dibuang
+
+
 class Command(BaseCommand):
     help = "Salin db.sqlite3 ke berkas cadangan bertanggal (VACUUM INTO) + pangkas yang lama."
 
@@ -61,16 +132,37 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         tujuan = Path(options["dir"])
         if connection.vendor == "sqlite":
-            berkas, sufiks = self._sqlite(tujuan), "sqlite3"
+            berkas, sufiks = backup_sqlite(connection, tujuan), "sqlite3"
+            ukuran = berkas.stat().st_size / 1_048_576
+            self.stdout.write(self.style.SUCCESS(f"Cadangan: {berkas} ({ukuran:.1f} MB)"))
         elif connection.vendor in _VENDOR_MSSQL:
-            berkas, sufiks = self._mssql(tujuan), "bak"
+            with connection.cursor() as cur:
+                berkas = backup_mssql(cur, connection.settings_dict["NAME"], tujuan)
+            sufiks = "bak"
+            self.stdout.write(self.style.SUCCESS(f"Cadangan: {berkas} (di mesin SQL Server)"))
+            if not berkas.exists():
+                self.stdout.write(
+                    "Catatan: berkasnya tidak terlihat dari mesin ini, jadi ukuran dan "
+                    "pemangkasan retensi dilewati. Itu wajar kalau SQL Server ada di "
+                    "mesin lain; verifikasi cadangannya di sana."
+                )
         else:
             raise CommandError(
                 f"Basis data aplikasi bukan SQLite maupun MS SQL ({connection.vendor}). "
                 "Cadangkan sendiri dengan alat bawaan mesinnya."
             )
 
-        self._pangkas(tujuan, berkas, sufiks, options["keep_days"])
+        # Dicatat ke `CadanganBerkas` supaya layar Cadangan & Pemulihan
+        # menampilkan berkas dari tugas TERJADWAL juga, bukan cuma yang dipicu
+        # dari web. Daftar yang hanya memuat separuh cadangan lebih menyesatkan
+        # daripada tidak ada daftar sama sekali.
+        from apps.core import cadangan
+
+        cadangan.catat(cadangan.PANGKAL, None, berkas, username="(cli)")
+
+        dibuang = pangkas_berkas(tujuan, berkas, sufiks, options["keep_days"])
+        if dibuang:
+            self.stdout.write(f"Dipangkas: {dibuang} cadangan lebih tua dari {options['keep_days']} hari.")
 
         # ASCII, bukan em-dash: keluaran ini dibaca di konsol Windows (cp1252),
         # yang mencetak U+2014 sebagai sampah. Aturan yang sama dengan
@@ -79,61 +171,3 @@ class Command(BaseCommand):
             "Ingat: POS_FERNET_KEY TIDAK ikut di berkas ini. Simpan salinannya "
             "terpisah. Tanpa kuncinya, password koneksi di cadangan ini tak bisa dibuka."
         ))
-
-    def _sqlite(self, tujuan: Path) -> Path:
-        tujuan.mkdir(parents=True, exist_ok=True)
-        berkas = tujuan / f"db-{dt.date.today():%Y%m%d}.sqlite3"
-        # VACUUM INTO menolak menimpa berkas yang sudah ada; dijalankan dua kali
-        # dalam sehari itu wajar (uji coba, restart), dan gagal karenanya bukan
-        # perilaku yang berguna untuk tugas terjadwal.
-        if berkas.exists():
-            berkas.unlink()
-
-        with connection.cursor() as cur:
-            # Parameter, bukan f-string: path Windows memuat backslash, dan nama
-            # folder yang memuat kutip tunggal akan mematahkan literal SQL.
-            cur.execute("VACUUM INTO %s", [str(berkas)])
-
-        ukuran = berkas.stat().st_size / 1_048_576
-        self.stdout.write(self.style.SUCCESS(f"Cadangan: {berkas} ({ukuran:.1f} MB)"))
-        return berkas
-
-    def _mssql(self, tujuan: Path) -> Path:
-        # JANGAN mkdir: path ini milik mesin SQL Server, bukan mesin ini. Membuat
-        # folder lokal bernama sama hanya akan menyamarkan salah setel jadi
-        # "berhasil tapi kok kosong".
-        nama_db = connection.settings_dict["NAME"]
-        if "]" in nama_db:
-            raise CommandError(f"Nama database memuat ']' dan tidak bisa dikutip aman: {nama_db!r}")
-        berkas = tujuan / f"db-{dt.date.today():%Y%m%d}.bak"
-
-        with connection.cursor() as cur:
-            # Nama database TIDAK bisa jadi parameter (BACKUP DATABASE ? ditolak
-            # parser T-SQL), jadi ia dikurung [ ] setelah diperiksa di atas.
-            # Path-nya tetap parameter — path Windows penuh backslash.
-            #
-            # WITH INIT menimpa isi berkas yang sudah ada. Tanpa itu, BACKUP
-            # MENAMBAHKAN set cadangan baru ke berkas yang sama, dan berkas
-            # harian akan tumbuh selamanya tanpa ada yang menyadarinya.
-            cur.execute(f"BACKUP DATABASE [{nama_db}] TO DISK = %s WITH INIT", [str(berkas)])
-
-        self.stdout.write(self.style.SUCCESS(f"Cadangan: {berkas} (di mesin SQL Server)"))
-        if not berkas.exists():
-            self.stdout.write(
-                "Catatan: berkasnya tidak terlihat dari mesin ini, jadi ukuran dan "
-                "pemangkasan retensi dilewati. Itu wajar kalau SQL Server ada di "
-                "mesin lain; verifikasi cadangannya di sana."
-            )
-        return berkas
-
-    def _pangkas(self, tujuan: Path, berkas: Path, sufiks: str, hari: int):
-        if hari <= 0 or not tujuan.is_dir():
-            return
-        batas = dt.datetime.now().timestamp() - hari * 86400
-        dibuang = 0
-        for lama in tujuan.glob(f"db-*.{sufiks}"):
-            if lama != berkas and lama.stat().st_mtime < batas:
-                lama.unlink()
-                dibuang += 1
-        if dibuang:
-            self.stdout.write(f"Dipangkas: {dibuang} cadangan lebih tua dari {hari} hari.")

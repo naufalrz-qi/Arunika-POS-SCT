@@ -47,6 +47,9 @@ from apps.transactions.penjualan import satuan_banyak as _satuan_banyak
 from apps.master_data import services as master
 from apps.transactions import services as tx
 from apps.core import reporting
+from apps.core import scheduler
+from apps.bisnis.siapkan import Ditolak
+from apps.monitoring import tugas
 from apps.transactions import reports as rpt
 from core import mssql
 
@@ -1370,6 +1373,10 @@ def sync_health_index(request):
             "hub_rows": hub_rows,
             "hub_nama": hub.name if hub else "",
             "hub_bermasalah": len([r for r in hub_rows if r["status"] != services_sync.STATUS_OK]),
+            "hub_cabang": [{"id": p.pk, "nama": p.name} for p in sumber],
+            "penjadwal": scheduler.status(),
+            "dead": services_sync.dead_letter_terakhir(),
+            "tren": services_sync.tren_antre(rows),
             "ambang": {
                 "antre_ok": services_sync.ANTRE_OK_MENIT,
                 "antre_lambat": services_sync.ANTRE_LAMBAT_MENIT,
@@ -1379,7 +1386,120 @@ def sync_health_index(request):
             "conn_error": "",
         }
 
-    return render(request, "Admin/Monitoring/SyncHealth", props={"health": defer(load_health)})
+    # `progres` dipisah dari `health` dan SENGAJA tidak deferred. Layar
+    # mem-polling-nya tiap 3 detik selama ada tugas berjalan, dan `health`
+    # menyapu sebelas server lewat WAN — menumpangkan progres di sana berarti
+    # menyapu sebelas server tiap tiga detik. Ini murni SQLite.
+    return render(request, "Admin/Monitoring/SyncHealth", props={
+        "health": defer(load_health),
+        "progres": lambda: {"aktif": tugas.aktif(), "daftar_tugas": [
+            {"nama": n, "label": v[0], "butuh_cabang": v[3]} for n, v in tugas.TUGAS.items()
+        ]},
+    })
+
+
+# --- Cadangan & Pemulihan --------------------------------------------------
+#
+# TIDAK ADA RUTE RESTORE di sini, dan tidak akan pernah ada. Alasannya ada di
+# docstring `apps/core/cadangan.py`; `test_cadangan.py` menjaganya dengan
+# memindai seluruh kode untuk `RESTORE DATABASE` dan menolak kecuali di RUNBOOK.
+
+def cadangan_index(request):
+    tolak = _deny_non_superadmin(request)
+    if tolak:
+        return tolak
+    from apps.core import cadangan as cad
+
+    return render(request, "Admin/Pengaturan/Cadangan", props={
+        "data": defer(lambda: {
+            "rows": cad.daftar(),
+            "runbook": cad.RUNBOOK,
+            "folder_pangkal": str(cad._folder()),
+            "folder_hub": str(cad._folder("BACKUP_DIR_HUB")),
+            "hub_nama": os.environ.get("HUB_NAME", "AMPHOREUS"),
+        }),
+    })
+
+
+@require_POST
+def cadangan_jalankan(request):
+    """Cadangkan pangkal atau AMPHOREUS.
+
+    Tidak ada pemilih server: `jenis` hanya boleh salah satu dari dua nilai
+    tetap, dan sasaran AMPHOREUS ditentukan `HUB_NAME`, bukan input. Form yang
+    dipalsukan pun tak bisa mengarahkannya ke salah satu dari 14 profil legacy.
+    """
+    tolak = _deny_non_superadmin(request)
+    if tolak:
+        return tolak
+    from apps.core import cadangan as cad
+
+    jenis = (request.POST.get("jenis") or "").strip()
+    try:
+        if jenis == cad.PANGKAL:
+            baris = cad.jalankan_pangkal(request.user.username)
+        elif jenis == cad.AMPHOREUS:
+            baris = cad.jalankan_hub(request.user.username)
+        else:
+            raise Ditolak("Jenis cadangan tidak dikenal.")
+    except (Ditolak, pyodbc.Error) as exc:
+        pesan = str(exc) if isinstance(exc, Ditolak) else mssql.friendly_error(exc, "Gagal mencadangkan")
+        request.session["flash_error"] = pesan
+        return redirect("/admin-panel/pengaturan/cadangan")
+    cad.catat_riwayat(baris, request.user.username)
+    log_activity(request, "cadangan", f"Cadangan {jenis}: {baris.nama_berkas}")
+    request.session["flash_success"] = (
+        f"Cadangan {jenis} selesai: {baris.nama_berkas}. Verifikasi untuk memastikan berkasnya terbaca."
+    )
+    return redirect("/admin-panel/pengaturan/cadangan")
+
+
+@require_POST
+def cadangan_verifikasi(request):
+    tolak = _deny_non_superadmin(request)
+    if tolak:
+        return tolak
+    from apps.core import cadangan as cad
+    from apps.core.models import CadanganBerkas
+
+    if not CadanganBerkas.objects.filter(pk=request.POST.get("id") or 0).exists():
+        request.session["flash_error"] = "Baris cadangan tidak ditemukan."
+        return redirect("/admin-panel/pengaturan/cadangan")
+    baris = cad.verifikasi(int(request.POST["id"]))
+    if baris.verifikasi_ok:
+        request.session["flash_success"] = f"{baris.nama_berkas}: terbaca utuh."
+    else:
+        request.session["flash_error"] = f"{baris.nama_berkas}: {baris.verifikasi_pesan}"
+    return redirect("/admin-panel/pengaturan/cadangan")
+
+
+@require_POST
+def sync_health_jalankan(request):
+    """Picu satu tugas latar dari layar Kesehatan Sync.
+
+    `_deny_non_superadmin` dipanggil eksplisit walau menu `sync_health` sudah
+    `superadmin_only` dan `admin_network_guard` mencocokkan prefix: sebuah rute
+    yang MENULIS tidak boleh bergantung pada penjagaan tak langsung yang bisa
+    ikut berubah saat orang lain menata ulang menu.
+    """
+    tolak = _deny_non_superadmin(request)
+    if tolak:
+        return tolak
+    from apps.connections.models import ServerProfile
+
+    nama = (request.POST.get("tugas") or "").strip()
+    profil = ServerProfile.objects.filter(pk=request.POST.get("profil") or 0).first()
+    try:
+        run = tugas.mulai(nama, profil, request.user.username)
+    except Ditolak as exc:
+        request.session["flash_error"] = str(exc)
+        return redirect("/admin-panel/master/sync-health")
+    label = tugas.TUGAS[nama][0]
+    log_activity(request, "sync_tugas", f"{label}{' — ' + profil.name if profil else ''} (run {run.pk})")
+    request.session["flash_success"] = (
+        f"{label} dijalankan di latar. Halaman ini boleh ditutup; progresnya tetap tercatat."
+    )
+    return redirect("/admin-panel/master/sync-health")
 
 
 # --- Stok Akhir (computed from movement card, dipaginasi di server) --------

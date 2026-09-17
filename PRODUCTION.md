@@ -242,6 +242,56 @@ tanpa suara persis sama buruknya dengan tidak ada cadangan.
 password koneksi di dalam cadangan tetap terenkripsi selamanya — cadangan yang lengkap tapi
 tak bisa dipakai memulihkan apa pun.
 
+### Layar Cadangan & Pemulihan
+
+`/admin-panel/pengaturan/cadangan` (superadmin) menampilkan seluruh berkas cadangan yang
+tercatat — termasuk yang dibuat Task Scheduler, bukan hanya yang dipicu dari web — beserta
+ukuran, umur, dan hasil verifikasinya. Dua tombol: **Cadangkan pangkal** dan **Cadangkan
+AMPHOREUS**.
+
+**AMPHOREUS sekarang ikut dicadangkan**, dan sampai sekarang ia tidak punya cadangan apa pun.
+Ia database milik kita sendiri; kalau hilang, pemulihannya berarti menjalankan ulang tarik
+arsip berjam-jam untuk sembilan cabang. Foldernya diatur `BACKUP_DIR_HUB` (kosong = ikut
+`BACKUP_DIR`) dan **diartikan oleh mesin SQL Server yang menampungnya**.
+
+Ke-14 server legacy **tidak** dicadangkan dari sini, dan tidak bisa dijadikan sasaran: fungsi
+cadangan AMPHOREUS tidak menerima parameter profil sama sekali — sasarannya ditentukan
+`HUB_NAME`, bukan input.
+
+**Verifikasi** memeriksa apakah berkasnya benar-benar terbaca kembali: `PRAGMA
+integrity_check` untuk SQLite, `RESTORE VERIFYONLY ... WITH CHECKSUM` untuk MS SQL.
+`VERIFYONLY` tidak memulihkan apa pun dan tidak menyentuh database mana pun, tapi ia
+**butuh izin setingkat `CREATE DATABASE`** pada instansnya; kalau akun profil AMPHOREUS tak
+punya, hasilnya tampil sebagai gagal dengan pesan pyodbc-nya, bukan diam. Checksum halaman
+baru bisa diperiksa karena backup kini ditulis `WITH INIT, CHECKSUM` — tanpa itu
+`VERIFYONLY` hanya memeriksa header dan akan bilang "ok" pada berkas yang halamannya rusak.
+
+Tiga keadaan verifikasi, bukan dua: **belum** bukan **gagal**.
+
+## Pemulihan (runbook)
+
+Aplikasi ini **tidak punya tombol restore**, dan itu keputusan sadar: proses yang menjalankan
+restore pangkal adalah proses yang sedang memegang koneksi ke database yang ditimpanya, dan
+gagal di tengah berarti tak seorang pun bisa login — termasuk untuk membetulkannya.
+`apps/core/test_cadangan.TidakAdaJalurRestore` menjaga invarian itu dengan memindai seluruh
+kode dan menolak `RESTORE DATABASE` di mana pun kecuali sebagai teks runbook.
+
+Teks lengkapnya ada di **satu tempat**, `apps/core/cadangan.RUNBOOK`, dan tampil di layar
+Cadangan & Pemulihan dengan tombol Salin. Ringkasnya:
+
+1. **Kunci dulu, baru database.** `POS_FERNET_KEY` tidak ada di cadangan mana pun.
+2. **Pangkal SQLite** — hentikan waitress, sisihkan `db.sqlite3` lama, **hapus sisa `-wal`
+   dan `-shm`** (berkas itu milik database lama; membiarkannya membuat sqlite menggabungkan
+   dua database berbeda), salin berkas cadangan, `manage.py migrate --check`.
+3. **Pangkal MS SQL** — `RESTORE ... WITH REPLACE, RECOVERY` di SSMS, waitress berhenti dulu.
+4. **AMPHOREUS** — restore, lalu `manage.py pull_hub --mode segar --hari 30`. Tarik arsip tak
+   perlu diulang selama `HubPullState` ikut pulih bersama pangkal — penanda `arsip_sampai` ada
+   di sana, bukan di AMPHOREUS.
+
+Sesudah pemulihan apa pun, buka **Kesehatan Sync**: blok Penjadwal harus menunjukkan tick
+utama hidup, dan blok Pusat AMPHOREUS harus memuat sembilan cabang. Blok pusat yang hilang
+berarti profil `AMPHOREUS` atau `kode_sumber` cabang belum ikut pulih.
+
 ## Performance (scaling to 200–500 req/s)
 
 - **GZipMiddleware**: Reports ~5MB → ~500KB (5–8 ms overhead).

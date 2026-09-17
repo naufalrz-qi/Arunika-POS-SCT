@@ -21,7 +21,7 @@ from unittest import mock
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
 
 class _CursorPalsu:
@@ -60,7 +60,11 @@ class MesinTakDikenal(SimpleTestCase):
         self.assertIn("postgresql", str(ctx.exception))
 
 
-class JalurMssql(SimpleTestCase):
+class JalurMssql(TestCase):
+    """TestCase, bukan SimpleTestCase: `backup_db` sekarang mencatat berkas
+    hasilnya ke `CadanganBerkas`, supaya layar Cadangan & Pemulihan menampilkan
+    cadangan dari Task Scheduler juga — bukan cuma yang dipicu dari web."""
+
     def test_with_init_wajib_ada(self):
         """Tanpa WITH INIT, berkas harian tumbuh selamanya tanpa satu pun tanda."""
         sql, params = _jalankan("microsoft")[0]

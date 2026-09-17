@@ -194,6 +194,10 @@ ALL_MENUS = [
     {"key": "kode_nota", "label": "Kelola Kode Nota", "icon": "key", "href": "/admin-panel/master/kode-nota", "section": "master_sync", "superadmin_only": True},
     # Membuat profil + database baru di instans lokal dan membaca server mana pun.
     {"key": "transfer_arunika", "label": "Transfer ke Arunika", "icon": "refresh", "href": "/admin-panel/master/transfer-arunika", "section": "master_sync", "superadmin_only": True},
+    # Superadmin-only: tombolnya menjalankan BACKUP DATABASE di instans SQL
+    # Server, dan layar ini memuat path cadangan seluruh armada. Tidak ada
+    # tombol restore di sini — lihat docstring apps/core/cadangan.py.
+    {"key": "cadangan", "label": "Cadangan & Pemulihan", "icon": "server", "href": "/admin-panel/pengaturan/cadangan", "section": "master_sync", "superadmin_only": True},
     # Administrasi
     {"key": "users", "label": "Manajemen User", "icon": "users", "href": "/admin-panel/users", "section": "admin"},
     {"key": "connections", "label": "Koneksi Server", "icon": "server", "href": "/admin-panel/connections", "section": "admin"},
