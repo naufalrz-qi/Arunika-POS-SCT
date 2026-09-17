@@ -39,6 +39,10 @@ urlpatterns = [
     path("master/kode-nota/save", views.kode_nota_save, name="kode_nota_save"),
     path("master/transfer-arunika", views.transfer_arunika_index, name="transfer_arunika"),
     path("master/transfer-arunika/mulai", views.transfer_arunika_mulai, name="transfer_arunika_mulai"),
+    # Sub-path mewarisi `superadmin_only` milik `transfer_arunika` lewat
+    # pencocokan prefix di admin_network_guard — tak perlu entri menu sendiri.
+    path("master/transfer-arunika/<int:pk>", views.transfer_arunika_detail,
+         name="transfer_arunika_detail"),
     path("master-data/informasi-perusahaan", views.informasi_perusahaan, name="informasi_perusahaan"),
 
     # Alamat lama, dipertahankan SEMENTARA untuk masa peralihan. Halaman yang

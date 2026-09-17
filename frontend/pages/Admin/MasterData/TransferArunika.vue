@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, watch } from "vue";
-import { router, useForm } from "@inertiajs/vue3";
+import { Link, router, useForm } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import Card from "@/components/ui/Card.vue";
 import Input from "@/components/ui/Input.vue";
@@ -171,6 +171,13 @@ const langkahTerbalik = computed(() => [...(aktif.value?.langkah || [])].reverse
     <Card title="Riwayat transfer">
       <DataTable :rows="barisRiwayat" :columns="kolomRiwayat" empty-message="Belum pernah ada transfer.">
         <template #cell-mulai_pada="{ value }">{{ waktu(value) }}</template>
+        <!-- Langkah per tabel sudah tersimpan untuk SETIAP run, bukan cuma yang
+             terbaru. Tautan ini satu-satunya jalan untuk melihatnya. -->
+        <template #cell-nama="{ row }">
+          <Link :href="`/admin-panel/master/transfer-arunika/${row.id}`" class="text-brand-fg underline">
+            {{ row.nama }}
+          </Link>
+        </template>
         <template #cell-status="{ row }">
           <Badge :variant="varianStatus[row.status] || 'neutral'">{{ row.status_label }}</Badge>
         </template>

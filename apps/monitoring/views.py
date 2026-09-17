@@ -1830,8 +1830,12 @@ def transfer_arunika_index(request):
 
     def muat_transfer():
         transfer.rapikan_yatim()
+        # 200, bukan 20. `_transfer_dict(dengan_langkah=False)` sekitar 20 field
+        # per baris, jadi 200 baris ~60 KB dan DataTable sudah memaginasinya di
+        # klien. Batas 20 membuat riwayat transfer menghilang diam-diam sesudah
+        # dua puluh percobaan — termasuk yang gagal, yang justru paling dicari.
         riwayat = list(TransferArunika.objects.select_related(
-            "profil_legacy", "profil_arunika")[:20])
+            "profil_legacy", "profil_arunika")[:200])
         return {
             "berjalan": any(r.status == TransferArunika.BERJALAN for r in riwayat),
             "aktif": _transfer_dict(riwayat[0], dengan_langkah=True) if riwayat else None,
@@ -1845,6 +1849,30 @@ def transfer_arunika_index(request):
         "instans": [{"value": p.pk, "label": f"{p.host} (kredensial profil {p.name})"}
                     for p in transfer.pilihan_instans()],
     })
+
+
+def transfer_arunika_detail(request, pk: int):
+    """Rincian satu run transfer: daftar langkah per tabel.
+
+    Rute sendiri, bukan kolom tambahan di daftar riwayat. `langkah` bisa berisi
+    ratusan entri per run, dan mengirimkannya untuk 200 baris riwayat berarti
+    payload besar untuk data yang biasanya tak dilihat siapa pun.
+
+    Datanya sudah tersimpan sejak lama — `TransferArunika.langkah` diisi tiap
+    tabel selesai — tapi sampai sekarang hanya run TERBARU yang pernah
+    diserialkan. Run yang gagal minggu lalu menyimpan persis di tabel mana ia
+    berhenti, dan tak ada satu pun layar yang mau menunjukkannya.
+
+    Tanpa `defer`: satu baris SQLite.
+    """
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+    from apps.core.models import TransferArunika
+
+    run = get_object_or_404(
+        TransferArunika.objects.select_related("profil_legacy", "profil_arunika"), pk=pk)
+    return render(request, "Admin/MasterData/TransferArunikaDetail",
+                  props={"transfer": _transfer_dict(run, dengan_langkah=True)})
 
 
 @require_POST
