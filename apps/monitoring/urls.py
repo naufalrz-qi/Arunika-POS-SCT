@@ -21,6 +21,7 @@ urlpatterns = [
     path("master/sync-history", views.sync_history_index, name="sync_history"),
     path("master/sync-health", views.sync_health_index, name="sync_health"),
     path("master/sync-health/jalankan", views.sync_health_jalankan, name="sync_health_jalankan"),
+    path("pengaturan", views.pengaturan, name="pengaturan"),
     path("pengaturan/cadangan", views.cadangan_index, name="cadangan"),
     path("pengaturan/cadangan/jalankan", views.cadangan_jalankan, name="cadangan_jalankan"),
     path("pengaturan/cadangan/verifikasi", views.cadangan_verifikasi, name="cadangan_verifikasi"),

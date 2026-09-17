@@ -7,7 +7,7 @@ import Icon from "./Icon.vue";
 // Satu pohon menu untuk sidebar desktop DAN drawer ponsel. Dulu keduanya
 // menulis pohonnya sendiri-sendiri (tab di header + daftar di sidebar, lalu
 // salinan lengkapnya di drawer), dan salinan seperti itu cepat menyimpang.
-const { tabs, activeTab, isActive } = useNav();
+const { tabs, activeTab, lipat, itemAktif } = useNav();
 
 // Grup yang memuat halaman aktif selalu terbuka; yang lain ingat pilihan
 // pengguna selama komponen hidup.
@@ -51,13 +51,13 @@ watch(
             {{ sub.label }}
           </p>
           <Link
-            v-for="item in sub.items"
+            v-for="item in lipat(sub.items)"
             :key="item.key"
             :href="item.href"
-            :aria-current="isActive(item.href) ? 'page' : undefined"
+            :aria-current="itemAktif(item) ? 'page' : undefined"
             :class="[
               'block truncate rounded-control px-2.5 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500',
-              isActive(item.href)
+              itemAktif(item)
                 ? 'bg-brand-bg font-medium text-brand-fg'
                 : 'text-ink-muted hover:bg-surface-3 hover:text-ink',
             ]"

@@ -9,7 +9,7 @@ import NavTree from "./NavTree.vue";
 
 const ui = useUiStore();
 const { sidebarCollapsed: ciutTersimpan } = storeToRefs(ui);
-const { tabs, activeTab, isActive } = useNav();
+const { tabs, activeTab, lipat, itemAktif } = useNav();
 const page = usePage();
 
 // Mode kasir: di layar /kasir/* sidebar selalu mulai ciut. Layar itu grid
@@ -72,15 +72,15 @@ const railItem =
         <template v-if="activeTab">
           <div class="my-2 w-6 border-t border-border-default" />
           <Link
-            v-for="item in activeTab.items"
+            v-for="item in activeTab.subsections.flatMap((s) => lipat(s.items))"
             :key="item.key"
             :href="item.href"
             :title="item.label"
             :aria-label="item.label"
-            :aria-current="isActive(item.href) ? 'page' : undefined"
+            :aria-current="itemAktif(item) ? 'page' : undefined"
             :class="[
               railItem,
-              isActive(item.href) ? 'bg-brand-bg text-brand-fg' : 'text-ink-muted hover:bg-surface-3 hover:text-ink',
+              itemAktif(item) ? 'bg-brand-bg text-brand-fg' : 'text-ink-muted hover:bg-surface-3 hover:text-ink',
             ]"
           >
             <Icon :name="item.icon" size="h-4 w-4" />

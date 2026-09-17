@@ -2923,6 +2923,15 @@ def bantuan(request):
     return render(request, "Admin/Bantuan", props={})
 
 
+def pengaturan(request):
+    # Halaman kartu untuk menu yang jarang dibuka (lipatan "pengaturan" di
+    # frontend/composables/useNav.js). Bukan menu tersendiri: path ini tak cocok
+    # dengan href menu mana pun, jadi penjaga memperlakukannya seperti
+    # /admin-panel/profile, dan daftarnya diambil dari prop bersama
+    # allowed_menus — isinya hanya menu yang memang boleh dibuka akun ini.
+    return render(request, "Admin/Pengaturan/Index", props={})
+
+
 def stok_divisi(request):
     """Cek stok cepat: SELALU saldo HARI INI (point-in-time), tanpa input tanggal.
 

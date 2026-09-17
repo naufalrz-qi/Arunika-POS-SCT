@@ -10,15 +10,19 @@ import NotifMenu from "./NotifMenu.vue";
 import ConnectionMenu from "./ConnectionMenu.vue";
 
 const page = usePage();
-const { activeTab, activeSection } = useNav();
+const { activeTab, activeSection, lipatanAktif, isActive } = useNav();
 
-// Jejak "Laporan › Penjualan". Grup yang isinya satu bagian bernama sama
-// (Ringkasan › Ringkasan) cukup ditulis sekali.
-const crumbs = computed(() =>
-  [activeTab.value?.label, activeSection.value?.label].filter(
-    (label, i, all) => label && all.indexOf(label) === i,
-  ),
-);
+// Jejak "Laporan / Penjualan". Grup yang isinya satu bagian bernama sama
+// (Ringkasan / Ringkasan) cukup ditulis sekali. Di bawah hub, "Pengaturan"
+// ikut sebagai tautan kembali ke halaman kartunya.
+const crumbs = computed(() => {
+  const out = [activeTab.value?.label, activeSection.value?.label]
+    .filter((label, i, all) => label && all.indexOf(label) === i)
+    .map((label) => ({ label }));
+  const l = lipatanAktif.value;
+  if (l?.hub) out.push({ label: l.label, href: l.href, sini: isActive(l.href) && !l.anggota.some((a) => a.aktif) });
+  return out;
+});
 
 const drawerOpen = ref(false);
 watch(
@@ -52,9 +56,10 @@ const iconButton =
     </Link>
 
     <nav v-if="crumbs.length" aria-label="Lokasi" class="hidden min-w-0 items-center gap-1.5 text-sm sm:flex">
-      <template v-for="(label, i) in crumbs" :key="label">
+      <template v-for="(c, i) in crumbs" :key="c.label">
         <span v-if="i" class="text-ink-subtle">/</span>
-        <span :class="['truncate', i === crumbs.length - 1 ? 'text-ink' : 'text-ink-muted']">{{ label }}</span>
+        <Link v-if="c.href && !c.sini" :href="c.href" class="truncate text-ink hover:text-brand-fg">{{ c.label }}</Link>
+        <span v-else :class="['truncate', i === crumbs.length - 1 ? 'text-ink' : 'text-ink-muted']">{{ c.label }}</span>
       </template>
     </nav>
 
