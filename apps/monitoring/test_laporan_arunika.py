@@ -14,7 +14,7 @@ kunci itu), dan bahwa gerbangnya tetap mati kecuali ketiga syaratnya terpenuhi.
 import re
 from pathlib import Path
 
-from django.test import RequestFactory, SimpleTestCase
+from django.test import RequestFactory, SimpleTestCase, TestCase
 
 from apps.core import reporting
 from apps.monitoring import views
@@ -194,7 +194,17 @@ class DibacaOlehLayarnya(SimpleTestCase):
     pindah. Itu kegagalan yang tak punya gejala sama sekali.
     """
 
-    def test_specnya_dipakai_report_view(self):
+    def test_specnya_dipakai_report_view_dan_report_export(self):
+        """DUA-duanya, bukan cuma layarnya.
+
+        Versi pertama test ini hanya memeriksa `_report_view`, dan justru itu
+        yang membuat bug-nya hidup: `_report_export` memakai `spec["inner"]`
+        tanpa syarat selama berbulan-bulan, sehingga dengan ARUNIKA_LAPORAN=1
+        layar membaca Arunika dan tombol Excel di layar yang sama membaca
+        legacy. Pemeriksaan struktural ini membuktikan spec-nya TERPASANG di
+        kedua jalur; `SumberLayarDanExportSama` di bawah membuktikan keduanya
+        benar-benar membuka cursor yang sama.
+        """
         sumber = Path(views.__file__).read_text(encoding="utf-8")
         for nama, _ in _spec_arunika():
             self.assertIn(
@@ -202,6 +212,20 @@ class DibacaOlehLayarnya(SimpleTestCase):
                 f"{nama}: punya inner_arunika tapi layarnya bukan _report_view, "
                 "jadi bentuk Arunika-nya tak akan pernah dibaca",
             )
+            self.assertIn(
+                f"_report_export({nama})", sumber,
+                f"{nama}: layarnya pindah ke Arunika tapi export-nya tidak, "
+                "jadi Excel dan layar akan menyajikan angka dari sumber berbeda",
+            )
+
+    def test_report_export_memilih_bentuknya_seperti_report_view(self):
+        """Jaring kedua yang murah, untuk saat monkeypatch di bawah rusak sendiri."""
+        import inspect
+
+        src = inspect.getsource(views._report_export)
+        self.assertIn("_pakai_bentuk_arunika", src)
+        self.assertIn("inner_arunika", src)
+        self.assertIn("arunika_cursor", src)
 
 
 class KlasifikasiBespoke(SimpleTestCase):
@@ -315,3 +339,97 @@ class KasHarianBespoke(SimpleTestCase):
                                         ("kas_summary", rpt.kas_summary(f))):
                 self.assertEqual(sql.count("?"), len(params),
                                  f"{nama} (kd_kas={kd_kas!r})")
+
+
+class SumberLayarDanExportSama(TestCase):
+    """Layar dan Excel WAJIB membaca sumber yang sama.
+
+    Ini test yang seharusnya ada sejak awal. Yang lama mengikis TEKS `views.py`
+    dan hijau selama berbulan-bulan sementara `_report_export` membaca legacy
+    dan layarnya membaca Arunika — dua angka berbeda untuk satu pertanyaan,
+    tanpa galat, tanpa tanda apa pun. Yang diperiksa di sini bukan teksnya,
+    melainkan CURSOR MANA yang benar-benar dibuka, lewat HTTP sungguhan.
+    """
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+
+        from apps.connections.models import ServerProfile
+
+        self.profil = ServerProfile.objects.create(
+            name="UJI", host="h", db_name="SOLID_SIM", username="u",
+            db_arunika="arunika_uji", is_default=True,
+        )
+        U = get_user_model()
+        self.sa = U.objects.create_user(username="sa", password="x", role="superadmin")
+        self.client.force_login(self.sa)
+
+    class _Kursor:
+        """Cukup untuk run_paged/one_row/xlsx_stream_response, tak lebih."""
+
+        description = []
+
+        def execute(self, sql, params=None):
+            return self
+
+        def fetchall(self):
+            return []
+
+        def fetchone(self):
+            return None
+
+        def fetchmany(self, size=None):
+            # Dipakai jalur streaming XLSX (`reporting.xlsx_stream_response`).
+            # Kosong = habis, jadi loopnya berhenti di iterasi pertama.
+            return []
+
+        def __iter__(self):
+            return iter(())
+
+    def _jalankan(self, nyalakan: bool):
+        """Kembalikan (dipakai_layar, dipakai_export) sebagai himpunan nama cursor."""
+        import contextlib
+        from unittest.mock import patch
+
+        dipakai = {"layar": set(), "export": set()}
+        fase = {"kini": "layar"}
+
+        def perekam(nama):
+            @contextlib.contextmanager
+            def buka(profile, *a, **kw):
+                dipakai[fase["kini"]].add(nama)
+                yield SumberLayarDanExportSama._Kursor()
+            return buka
+
+        asli = views.LAPORAN_ARUNIKA
+        views.LAPORAN_ARUNIKA = nyalakan
+        try:
+            with patch.object(views.mssql, "arunika_cursor", perekam("arunika")), \
+                 patch.object(views.mssql, "report_cursor", perekam("legacy")):
+                for nama, spec in _spec_arunika():
+                    fase["kini"] = "layar"
+                    self.client.get(
+                        spec["url"],
+                        HTTP_X_INERTIA="true",
+                        HTTP_X_INERTIA_PARTIAL_DATA="report",
+                        HTTP_X_INERTIA_PARTIAL_COMPONENT=spec["component"],
+                    )
+                    fase["kini"] = "export"
+                    self.client.get(spec["url"] + "/export")
+        finally:
+            views.LAPORAN_ARUNIKA = asli
+        return dipakai["layar"], dipakai["export"]
+
+    def test_gerbang_menyala_keduanya_baca_arunika(self):
+        layar, export = self._jalankan(True)
+        self.assertEqual(layar, {"arunika"}, "layar tidak membaca Arunika")
+        self.assertEqual(
+            export, {"arunika"},
+            "export membaca sumber lain dari layarnya — ini bug yang sama persis "
+            "seperti yang pernah lolos berbulan-bulan",
+        )
+
+    def test_gerbang_mati_keduanya_baca_legacy(self):
+        layar, export = self._jalankan(False)
+        self.assertEqual(layar, {"legacy"})
+        self.assertEqual(export, {"legacy"})

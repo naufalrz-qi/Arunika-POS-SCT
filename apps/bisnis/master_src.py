@@ -398,7 +398,7 @@ _MASTER: dict[str, dict] = {
         "kolom": ["nomor", "tanggal", "divisi_kode", "pelanggan_kode", "voucher_kode",
                   "kas_kode", "pengguna_kode", "subtotal", "diskon", "pajak", "total",
                   "diskon1", "diskon2", "diskon3", "diskon4", "pajak_persen",
-                  "jatuh_tempo", "keterangan", "jenis_bayar", "status"],
+                  "jatuh_tempo", "keterangan", "jenis_bayar", "status", "tanggal_server"],
         # ## Kenapa memanggil fungsi vendor, bukan menulis formulanya sendiri
         #
         # `t_penjualan_total` hanya menutup 55% nota di grosirPusat (259.258 dari
@@ -443,7 +443,7 @@ _MASTER: dict[str, dict] = {
         "arunika": "SELECT p.nomor, p.tanggal, d.kode, pl.kode, v.kode, ks.kode, pg.kode, "
                    "p.subtotal, p.diskon, p.pajak, p.total, "
                    "p.diskon_ghb, 0, 0, 0, p.pajak_persen, "
-                   "p.jatuh_tempo, p.keterangan, p.jenis_bayar, p.status "
+                   "p.jatuh_tempo, p.keterangan, p.jenis_bayar, p.status, p.tanggal_server "
                    "FROM dbo.penjualan p "
                    "INNER JOIN dbo.divisi d ON d.id = p.divisi_id "
                    "LEFT JOIN dbo.pelanggan pl ON pl.id = p.pelanggan_id "
@@ -454,7 +454,7 @@ _MASTER: dict[str, dict] = {
     "penjualan_baris": {
         "kolom": ["penjualan_nomor", "tanggal", "divisi_kode",
                   "barang_kode", "satuan_kode", "sales_kode", "qty", "harga",
-                  "diskon1", "diskon2", "diskon3", "diskon4", "total"],
+                  "diskon1", "diskon2", "diskon3", "diskon4", "total", "tanggal_server"],
         # ## Kenapa baris membawa tanggal & divisi kepalanya
         #
         # Bukan denormalisasi yang kebablasan -- ini bentuk BACA, dan `tanggal`
@@ -486,11 +486,11 @@ _MASTER: dict[str, dict] = {
                   "d.kd_barang, RTRIM(d.kd_satuan), NULLIF(RTRIM(d.kd_pegawai), ''), "
                   "d.qty, d.harga_jual, "
                   "COALESCE(d.diskon1, 0), COALESCE(d.diskon2, 0), "
-                  "COALESCE(d.diskon3, 0), COALESCE(d.diskon4, 0), d.total "
+                  "COALESCE(d.diskon3, 0), COALESCE(d.diskon4, 0), d.total, h.tanggal_server "
                   "FROM {db}.dbo.t_penjualan_detail d "
                   "INNER JOIN {db}.dbo.t_penjualan h ON h.no_transaksi = d.no_transaksi",
         "arunika": "SELECT p.nomor, p.tanggal, dv.kode, b.kode, s.kode, pg.kode, "
-                   "pb.qty, pb.harga, pb.diskon_ghb, 0, 0, 0, pb.total "
+                   "pb.qty, pb.harga, pb.diskon_ghb, 0, 0, 0, pb.total, p.tanggal_server "
                    "FROM dbo.penjualan_baris pb "
                    "INNER JOIN dbo.penjualan p ON p.id = pb.penjualan_id "
                    "INNER JOIN dbo.divisi dv ON dv.id = p.divisi_id "
@@ -508,12 +508,12 @@ _MASTER: dict[str, dict] = {
                   "subtotal", "diskon", "pajak", "total",
                   "diskon1", "diskon2", "diskon3", "diskon4",
                   "pajak_persen", "ppnbm_persen", "nomor_order", "keterangan",
-                  "jenis_bayar", "status"],
+                  "jenis_bayar", "status", "tanggal_server", "jatuh_tempo"],
         "legacy": _badan_pembelian,
         "arunika": "SELECT p.nomor, p.tanggal, d.kode, pm.kode, "
                    "p.subtotal, p.diskon, p.pajak, p.total, "
                    "p.diskon_ghb, 0, 0, 0, p.pajak_persen, p.ppnbm_persen, "
-                   "p.nomor_order, p.keterangan, p.jenis_bayar, p.status "
+                   "p.nomor_order, p.keterangan, p.jenis_bayar, p.status, p.tanggal_server, p.jatuh_tempo "
                    "FROM dbo.pembelian p "
                    "INNER JOIN dbo.divisi d ON d.id = p.divisi_id "
                    "LEFT JOIN dbo.pemasok pm ON pm.id = p.pemasok_id",
@@ -521,7 +521,7 @@ _MASTER: dict[str, dict] = {
     "pembelian_baris": {
         "kolom": ["pembelian_nomor", "tanggal", "divisi_kode",
                   "barang_kode", "satuan_kode", "qty", "harga",
-                  "diskon1", "diskon2", "diskon3", "diskon4", "total"],
+                  "diskon1", "diskon2", "diskon3", "diskon4", "total", "tanggal_server"],
         # `tanggal` + `divisi_kode` dibawa baris, alasan sama dengan
         # `penjualan_baris`: tanpa keduanya tiap laporan tingkat-baris harus
         # men-join view kepala yang menghitung seluruh nilai uang per nota,
@@ -533,11 +533,11 @@ _MASTER: dict[str, dict] = {
         "legacy": "SELECT d.no_transaksi, h.tanggal, RTRIM(h.kd_divisi), "
                   "d.kd_barang, RTRIM(d.kd_satuan), d.qty, d.harga_beli, "
                   "COALESCE(d.diskon1, 0), COALESCE(d.diskon2, 0), "
-                  "COALESCE(d.diskon3, 0), COALESCE(d.diskon4, 0), d.total "
+                  "COALESCE(d.diskon3, 0), COALESCE(d.diskon4, 0), d.total, h.tanggal_server "
                   "FROM {db}.dbo.t_pembelian_detail d "
                   "INNER JOIN {db}.dbo.t_pembelian h ON h.no_transaksi = d.no_transaksi",
         "arunika": "SELECT p.nomor, p.tanggal, dv.kode, b.kode, s.kode, pb.qty, pb.harga, "
-                   "pb.diskon_ghb, 0, 0, 0, pb.total "
+                   "pb.diskon_ghb, 0, 0, 0, pb.total, p.tanggal_server "
                    "FROM dbo.pembelian_baris pb "
                    "INNER JOIN dbo.pembelian p ON p.id = pb.pembelian_id "
                    "INNER JOIN dbo.divisi dv ON dv.id = p.divisi_id "
@@ -576,12 +576,12 @@ _MASTER: dict[str, dict] = {
     # itu, sama seperti `penjualan_baris`.
     "penjualan_retur": {
         "kolom": ["nomor", "tanggal", "no_bukti", "divisi_kode", "pelanggan_kode",
-                  "cara_bayar_kode", "kas_kode", "keterangan", "pengguna_kode"],
+                  "cara_bayar_kode", "kas_kode", "keterangan", "pengguna_kode", "tanggal_server"],
         "legacy": "SELECT no_retur, tanggal, no_bukti, RTRIM(kd_divisi), kd_customer, "
                   "NULLIF(RTRIM(kd_jenis), ''), NULLIF(RTRIM(kd_kas), ''), keterangan, "
-                  "NULLIF(RTRIM(kd_user), '') FROM {db}.dbo.t_penjualan_retur",
+                  "NULLIF(RTRIM(kd_user), ''), tanggal_server FROM {db}.dbo.t_penjualan_retur",
         "arunika": "SELECT r.nomor, r.tanggal, r.no_bukti, d.kode, pl.kode, cb.kode, "
-                   "ks.kode, r.keterangan, pg.kode "
+                   "ks.kode, r.keterangan, pg.kode, r.tanggal_server "
                    "FROM dbo.penjualan_retur r "
                    "INNER JOIN dbo.divisi d ON d.id = r.divisi_id "
                    "LEFT JOIN dbo.pelanggan pl ON pl.id = r.pelanggan_id "
@@ -591,10 +591,10 @@ _MASTER: dict[str, dict] = {
     },
     "penjualan_retur_baris": {
         "kolom": ["retur_nomor", "tanggal", "divisi_kode", "barang_kode",
-                  "satuan_kode", "sales_kode", "qty", "harga", "total"],
+                  "satuan_kode", "sales_kode", "qty", "harga", "total", "tanggal_server"],
         "legacy": _badan_penjualan_retur_baris,
         "arunika": "SELECT r.nomor, r.tanggal, dv.kode, b.kode, s.kode, pg.kode, "
-                   "rb.qty, rb.harga, rb.total "
+                   "rb.qty, rb.harga, rb.total, r.tanggal_server "
                    "FROM dbo.penjualan_retur_baris rb "
                    "INNER JOIN dbo.penjualan_retur r ON r.id = rb.retur_id "
                    "INNER JOIN dbo.divisi dv ON dv.id = r.divisi_id "
@@ -604,12 +604,12 @@ _MASTER: dict[str, dict] = {
     },
     "pembelian_retur": {
         "kolom": ["nomor", "tanggal", "no_bukti", "divisi_kode", "pemasok_kode",
-                  "cara_bayar_kode", "kas_kode", "keterangan", "pengguna_kode"],
+                  "cara_bayar_kode", "kas_kode", "keterangan", "pengguna_kode", "tanggal_server"],
         "legacy": "SELECT no_retur, tanggal, no_bukti, RTRIM(kd_divisi), RTRIM(kd_supplier), "
                   "NULLIF(RTRIM(kd_jenis), ''), NULLIF(RTRIM(kd_kas), ''), keterangan, "
-                  "NULLIF(RTRIM(kd_user), '') FROM {db}.dbo.t_pembelian_retur",
+                  "NULLIF(RTRIM(kd_user), ''), tanggal_server FROM {db}.dbo.t_pembelian_retur",
         "arunika": "SELECT r.nomor, r.tanggal, r.no_bukti, d.kode, pm.kode, cb.kode, "
-                   "ks.kode, r.keterangan, pg.kode "
+                   "ks.kode, r.keterangan, pg.kode, r.tanggal_server "
                    "FROM dbo.pembelian_retur r "
                    "INNER JOIN dbo.divisi d ON d.id = r.divisi_id "
                    "LEFT JOIN dbo.pemasok pm ON pm.id = r.pemasok_id "
@@ -619,10 +619,10 @@ _MASTER: dict[str, dict] = {
     },
     "pembelian_retur_baris": {
         "kolom": ["retur_nomor", "tanggal", "divisi_kode", "barang_kode",
-                  "satuan_kode", "qty", "harga", "total"],
+                  "satuan_kode", "qty", "harga", "total", "tanggal_server"],
         "legacy": _badan_pembelian_retur_baris,
         "arunika": "SELECT r.nomor, r.tanggal, dv.kode, b.kode, s.kode, "
-                   "rb.qty, rb.harga, rb.total "
+                   "rb.qty, rb.harga, rb.total, r.tanggal_server "
                    "FROM dbo.pembelian_retur_baris rb "
                    "INNER JOIN dbo.pembelian_retur r ON r.id = rb.retur_id "
                    "INNER JOIN dbo.divisi dv ON dv.id = r.divisi_id "
@@ -638,13 +638,13 @@ _MASTER: dict[str, dict] = {
     # ke nota tidak putus.
     "penjualan_order": {
         "kolom": ["nomor", "tanggal", "tanggal_terima", "divisi_kode", "pelanggan_kode",
-                  "status", "nomor_nota", "jml_item", "total_qty", "total"],
+                  "status", "nomor_nota", "jml_item", "total_qty", "total", "tanggal_server"],
         "legacy": _badan_penjualan_order,
         "arunika": "SELECT o.nomor, o.tanggal, o.tanggal_terima, d.kode, pl.kode, "
                    "o.status, o.nomor_nota, "
                    "(SELECT COUNT(*) FROM dbo.penjualan_order_baris ob WHERE ob.order_id = o.id), "
                    "(SELECT COALESCE(SUM(ob.qty), 0) FROM dbo.penjualan_order_baris ob "
-                   "WHERE ob.order_id = o.id), o.total "
+                   "WHERE ob.order_id = o.id), o.total, o.tanggal_server "
                    "FROM dbo.penjualan_order o "
                    "INNER JOIN dbo.divisi d ON d.id = o.divisi_id "
                    "LEFT JOIN dbo.pelanggan pl ON pl.id = o.pelanggan_id",
@@ -677,13 +677,13 @@ _MASTER: dict[str, dict] = {
     # Keempatnya hadir di kedua server. Arah melekat pada jenis -- hanya
     # `lain_plus` menambah stok -- dan view memulangkan TOKEN, bukan teks layar.
     "koreksi_stok": {
-        "kolom": ["nomor", "tanggal", "divisi_kode", "jenis", "keterangan", "pengguna_kode"],
+        "kolom": ["nomor", "tanggal", "divisi_kode", "jenis", "keterangan", "pengguna_kode", "tanggal_server"],
         "legacy": "SELECT no_transaksi, tanggal, RTRIM(kd_divisi), "
                   "CASE status WHEN 0 THEN 'hilang' WHEN 1 THEN 'rusak' "
                   "WHEN 2 THEN 'lain_plus' WHEN 3 THEN 'lain_minus' ELSE '' END, "
-                  "keterangan, NULLIF(RTRIM(kd_user), '') "
+                  "keterangan, NULLIF(RTRIM(kd_user), ''), tanggal_server "
                   "FROM {db}.dbo.t_opname_stok",
-        "arunika": "SELECT k.nomor, k.tanggal, d.kode, k.jenis, k.keterangan, pg.kode "
+        "arunika": "SELECT k.nomor, k.tanggal, d.kode, k.jenis, k.keterangan, pg.kode, k.tanggal_server "
                    "FROM dbo.koreksi_stok k "
                    "INNER JOIN dbo.divisi d ON d.id = k.divisi_id "
                    "LEFT JOIN dbo.pengguna pg ON pg.id = k.pengguna_id",
@@ -693,10 +693,10 @@ _MASTER: dict[str, dict] = {
         # `penjualan_baris`: laporan tingkat-baris tak perlu menyentuh kepala
         # sama sekali untuk menyaring rentang tanggal.
         "kolom": ["koreksi_nomor", "tanggal", "divisi_kode", "barang_kode",
-                  "satuan_kode", "qty"],
+                  "satuan_kode", "qty", "tanggal_server"],
         "legacy": "SELECT no_transaksi, tanggal, RTRIM(kd_divisi), kd_barang, "
-                  "RTRIM(kd_satuan), qty FROM {db}.dbo.t_opname_stok",
-        "arunika": "SELECT k.nomor, k.tanggal, d.kode, b.kode, s.kode, kb.qty "
+                  "RTRIM(kd_satuan), qty, tanggal_server FROM {db}.dbo.t_opname_stok",
+        "arunika": "SELECT k.nomor, k.tanggal, d.kode, b.kode, s.kode, kb.qty, k.tanggal_server "
                    "FROM dbo.koreksi_stok_baris kb "
                    "INNER JOIN dbo.koreksi_stok k ON k.id = kb.koreksi_id "
                    "INNER JOIN dbo.divisi d ON d.id = k.divisi_id "
@@ -705,7 +705,7 @@ _MASTER: dict[str, dict] = {
     },
     "jurnal_kas": {
         "kolom": ["nomor", "tanggal", "divisi_kode", "kas_kode", "kas_tujuan_kode",
-                  "jenis", "kategori_kode", "jumlah", "keterangan"],
+                  "jenis", "kategori_kode", "jumlah", "keterangan", "tanggal_server"],
         # ## Empat tabel legacy, satu buku besar
         #
         # Konsolidasi Sec 4.2, dan ia BUKAN penyederhanaan yang dikarang di sini:
@@ -726,26 +726,26 @@ _MASTER: dict[str, dict] = {
         # ada laporan kas yang memintanya.
         "legacy": lambda db: (
             "SELECT no_transaksi, tanggal, RTRIM(kd_divisi), RTRIM(kd_kas), NULL, "
-            "'biaya', RTRIM(kd_biaya), nominal, COALESCE(keterangan, '') "
+            "'biaya', RTRIM(kd_biaya), nominal, COALESCE(keterangan, ''), tanggal_server "
             f"FROM [{db}].dbo.t_biaya_operasional"
             " UNION ALL "
             "SELECT no_transaksi, tanggal, RTRIM(kd_divisi), RTRIM(kd_kas), NULL, "
-            "'pendapatan', NULL, nominal, COALESCE(keterangan, '') "
+            "'pendapatan', NULL, nominal, COALESCE(keterangan, ''), tanggal_server "
             f"FROM [{db}].dbo.t_pendapatan"
             " UNION ALL "
             "SELECT no_transaksi, tanggal, NULL, RTRIM(kd_kas), NULL, "
-            "'penambahan', NULL, nominal, COALESCE(keterangan, '') "
+            "'penambahan', NULL, nominal, COALESCE(keterangan, ''), NULL "
             f"FROM [{db}].dbo.t_penambahan_kas"
             " UNION ALL "
             # SATU baris per dokumen mutasi, bukan dua. Dua baris adalah bentuk
             # BUKU (keluar dari sumber, masuk ke tujuan) dan itu urusan layar
             # kas; dokumennya satu, dan `kas_tujuan_kode` yang menyatakan ke mana.
             "SELECT no_transaksi, tanggal, NULL, RTRIM(kd_kas_sumber), RTRIM(kd_kas_tujuan), "
-            "'mutasi', NULL, nominal, COALESCE(keterangan, '') "
+            "'mutasi', NULL, nominal, COALESCE(keterangan, ''), tanggal_server "
             f"FROM [{db}].dbo.t_mutasi_kas"
         ),
         "arunika": "SELECT j.nomor, j.tanggal, dv.kode, ks.kode, kt.kode, j.jenis, kb.kode, "
-                   "j.jumlah, j.keterangan "
+                   "j.jumlah, j.keterangan, j.tanggal_server "
                    "FROM dbo.jurnal_kas j "
                    "LEFT JOIN dbo.divisi dv ON dv.id = j.divisi_id "
                    "INNER JOIN dbo.kas ks ON ks.id = j.kas_id "

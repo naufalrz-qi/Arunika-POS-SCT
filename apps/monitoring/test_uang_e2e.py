@@ -110,7 +110,8 @@ class UangTakIkutTerkirim(TestCase):
         _, spec = _spec("/admin-panel/laporan/piutang")
         sisa = {c["key"] for c in v._kolom_tanpa_uang(self.req, spec)}
         self.assertEqual(
-            sisa, {"no_transaksi", "tanggal", "customer", "jatuh_tempo", "hari_terlambat"})
+            sisa, {"no_transaksi", "tanggal", "tanggal_server", "customer",
+                   "jatuh_tempo", "hari_terlambat"})
 
     def test_opname_tak_kehilangan_kuantitasnya(self):
         """`total_masuk`/`koreksi_masuk` di Opname Stok adalah JUMLAH BARANG.

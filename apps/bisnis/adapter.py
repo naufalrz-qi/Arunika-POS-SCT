@@ -284,7 +284,10 @@ def badan_pembelian(db_legacy: str) -> str:
         "CASE n.status_raw WHEN 0 THEN 'kredit' WHEN 1 THEN 'tunai' "
         "WHEN 2 THEN 'lunas' ELSE '' END, "
         # Sama seperti penjualan: kepala nota legacy tak punya kolom pembatalan.
-        "'aktif' "
+        "'aktif', "
+        # Cap waktu server asal, kolom TERAKHIR — ditambahkan di ujung supaya
+        # indeks posisional kolom lain tidak bergeser sama sekali.
+        "n.tanggal_server, n.tanggal_jatuh_tempo "
         f"FROM ({inti}) n"
     )
 
@@ -323,7 +326,10 @@ def badan_retur_baris(db_legacy: str, *, sisi: str) -> str:
     # dan sekalian menghitung berapa rujukan yang benar-benar dikenalinya.
     badan = (
         f"SELECT d.no_retur, h.tanggal, RTRIM(h.kd_divisi), d.kd_barang, "
-        f"RTRIM(d.kd_satuan), {kol_sales}d.qty, d.{harga}, ({net}) "
+        f"RTRIM(d.kd_satuan), {kol_sales}d.qty, d.{harga}, ({net}), "
+        # Cap waktu server asal, dibawa dari KEPALA yang memang sudah
+        # di-join — nol join tambahan.
+        f"h.tanggal_server "
         f"FROM {detail} d "
         f"INNER JOIN {kepala} h ON h.no_retur = d.no_retur"
     )
@@ -358,7 +364,10 @@ def badan_penjualan_order(db_legacy: str) -> str:
         "SELECT n.no_order, n.tanggal, n.tanggal_terima, RTRIM(n.kd_divisi), n.kd_mitra, "
         "CASE n.status WHEN 'Terbuka' THEN 'terbuka' ELSE 'jadi_nota' END, "
         "NULLIF(LTRIM(RTRIM(n.no_transaksi)), ''), "
-        "n.jml_item, n.total_qty, n.total_bersih "
+        "n.jml_item, n.total_qty, n.total_bersih, "
+        # Cap waktu server asal, kolom TERAKHIR — ditambahkan di ujung supaya
+        # indeks posisional kolom lain tidak bergeser sama sekali.
+        "n.tanggal_server "
         f"FROM ({inti}) n"
     )
 
@@ -442,6 +451,9 @@ def badan_penjualan(db_legacy: str) -> str:
         # seluruh nota yang terbaca dari sana adalah nota aktif. Memetakan
         # `status` ke sini -- yang sempat terlihat masuk akal -- akan melabeli
         # setiap penjualan kredit sebagai nota batal.
-        "'aktif' "
+        "'aktif', "
+        # Cap waktu server asal, kolom TERAKHIR — ditambahkan di ujung supaya
+        # indeks posisional kolom lain tidak bergeser sama sekali.
+        "n.tanggal_server "
         f"FROM ({inti}) n"
     )

@@ -121,6 +121,10 @@ ALL_MENUS = [
     # /detail, dan /save mewarisi menu key ini lewat pencocokan prefix di
     # menu_key_for_path — termasuk penjagaannya.
     # Analitik (FMI)
+    # Menyebut NAMA PENGINPUT tiap dokumen, jadi setara `opname` yang juga
+    # admin_only. Bukan superadmin_only: ini pekerjaan yang mengelola toko,
+    # bukan yang memegang seluruh jaringan.
+    {"key": "nota_mundur", "label": "Nota Tanggal Mundur", "icon": "calendar", "href": "/admin-panel/analitik/nota-mundur", "section": "analitik", "admin_only": True},
     {"key": "fmi_penjualan", "label": "FMI Penjualan", "icon": "trending", "href": "/admin-panel/analitik/fmi-penjualan", "section": "analitik"},
     {"key": "fmi_stok", "label": "FMI Stok", "icon": "chart", "href": "/admin-panel/analitik/fmi-stok", "section": "analitik"},
     {"key": "klasifikasi_pelanggan", "label": "Klasifikasi Pelanggan", "icon": "user", "href": "/admin-panel/analitik/klasifikasi-pelanggan", "section": "analitik"},

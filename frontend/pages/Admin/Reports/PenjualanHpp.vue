@@ -24,6 +24,7 @@ const filterDefs = [
   { key: "barang", label: "Barang", type: "text" },
   { key: "kd_barang", label: "Kode Barang", type: "text" },
   { key: "kategori", label: "Kategori", type: "text" },
+  { key: "petugas", label: "Petugas" },
   { key: "laba", label: "Laba", type: "number_range" },
   { key: "margin", label: "Margin %", type: "number_range" },
   { key: "total_bersih", label: "Total Bersih", type: "number_range" },
@@ -36,6 +37,7 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 const columns = [
   { key: "no_transaksi", label: "No. Transaksi" },
   { key: "tanggal", label: "Tanggal", format: "date" },
+  { key: "tanggal_server", label: "Tanggal Server", format: "date" },
   { key: "divisi", label: "Divisi" },
   { key: "customer", label: "Customer" },
   { key: "kd_barang", label: "Kode Barang" },

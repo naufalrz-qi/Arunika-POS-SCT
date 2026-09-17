@@ -90,7 +90,11 @@ class MenuKhususAdminTests(TestCase):
 
     # Empat layar tulis kas ikut di sini dengan alasan yang sama: uang bergerak
     # begitu disimpan, dan tak ada layar yang bisa menariknya kembali.
-    KUNCI = ("opname", "koreksi_stok",
+    # `nota_mundur` masuk dengan alasan BERBEDA dari yang lain: ia tidak menulis
+    # apa pun. Ia menyebut nama penginput tiap dokumen bertanggal janggal, dan
+    # daftar semacam itu bukan bacaan sehari-hari kasir atau supervisor yang
+    # justru namanya ada di sana.
+    KUNCI = ("opname", "koreksi_stok", "nota_mundur",
              "kas_biaya_input", "kas_pendapatan", "kas_penambahan", "kas_mutasi")
 
     def setUp(self):

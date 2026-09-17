@@ -130,13 +130,13 @@ def _nota_net(where_sql: str) -> str:
         # `adapter.badan_penjualan` bisa memaparkannya tanpa subquery kedua.
         # Keempat slot itu PERSEN tingkat nota (kolom DT1-DT4 di layar Penjualan
         # Detail), berbeda dari `diskon_uang` yang rupiah flat.
-        "SELECT no_transaksi, tanggal, kd_customer, kd_divisi, status_raw, kd_voucher, "
+        "SELECT no_transaksi, tanggal, tanggal_server, kd_customer, kd_divisi, status_raw, kd_voucher, "
         "kd_user, kd_kas, tanggal_jatuh_tempo, keterangan, total_kotor, "
         "hd1, hd2, hd3, hd4, pajak_rate, "
         f"({net_pre_tax}) * pajak_rate AS pajak, "
         f"({net_pre_tax}) * (1 + pajak_rate) - diskon_uang AS total_bersih "
         "FROM ("
-        "SELECT h.no_transaksi, h.tanggal, h.kd_customer, h.kd_divisi, "
+        "SELECT h.no_transaksi, h.tanggal, h.tanggal_server, h.kd_customer, h.kd_divisi, "
         "h.status AS status_raw, h.kd_voucher, h.kd_user, h.kd_kas, h.tanggal_jatuh_tempo, "
         "COALESCE(h.keterangan, '') AS keterangan, "
         "SUM(d.qty * d.harga_jual) AS total_kotor, "
@@ -148,7 +148,11 @@ def _nota_net(where_sql: str) -> str:
         "FROM t_penjualan h "
         "INNER JOIN t_penjualan_detail d ON h.no_transaksi = d.no_transaksi "
         f"WHERE {where_sql} "
-        "GROUP BY h.no_transaksi, h.tanggal, h.kd_customer, h.kd_divisi, h.status, "
+        # `h.tanggal_server` masuk GROUP BY, BUKAN MIN(): ia kolom header yang
+        # bergantung fungsional pada `no_transaksi` (kunci yang sudah unik), dan
+        # agregat apa pun di sini memblokir predikat tanggal LUAR turun ke bawah
+        # GROUP BY — ongkos yang sudah diukur 21x di repo ini, dua kali.
+        "GROUP BY h.no_transaksi, h.tanggal, h.tanggal_server, h.kd_customer, h.kd_divisi, h.status, "
         "h.kd_voucher, h.kd_user, h.kd_kas, h.tanggal_jatuh_tempo, h.keterangan, "
         "h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.diskon_uang, h.pajak"
         ") nz"
@@ -207,7 +211,7 @@ def penjualan_detail(f):
     where, params = _base_where(f)
     _search(where, params, f, ["h.no_transaksi", "b.nama", "c.nama"])
     inner = (
-        "SELECT h.no_transaksi, h.tanggal, COALESCE(dv.nama, '') AS divisi, "
+        "SELECT h.no_transaksi, h.tanggal, h.tanggal_server, COALESCE(dv.nama, '') AS divisi, "
         "COALESCE(c.nama, '') AS customer, COALESCE(mk.nama, '') AS kota, "
         "h.tanggal_jatuh_tempo AS jth_tempo, "
         f"{STATUS_PENJUALAN_CASE} AS status, COALESCE(h.keterangan, '') AS keterangan, "
@@ -297,7 +301,7 @@ def penjualan_hpp(f):
     # dasar) sekaligus *konv (Total HPP). VIEW menjoin m_barang_satuan dua kali
     # untuk itu; satu join cukup (predikat identik).
     base = (
-        "SELECT h.no_transaksi, h.tanggal, COALESCE(dv.nama, '') AS divisi, "
+        "SELECT h.no_transaksi, h.tanggal, h.tanggal_server, COALESCE(dv.nama, '') AS divisi, "
         "COALESCE(c.nama, '') AS customer, d.kd_barang, COALESCE(b.nama, '') AS barang, "
         "COALESCE(kt.nama, '') AS kategori, d.qty, COALESCE(st.nama, '') AS satuan, "
         "COALESCE(pg.nama, '') AS petugas, bst.jumlah AS konv, "
@@ -319,7 +323,7 @@ def penjualan_hpp(f):
     )
 
     inner = (
-        "SELECT x.no_transaksi, x.tanggal, x.divisi, x.customer, x.kd_barang, x.barang, "
+        "SELECT x.no_transaksi, x.tanggal, x.tanggal_server, x.divisi, x.customer, x.kd_barang, x.barang, "
         "x.kategori, x.qty, x.satuan, x.petugas, "
         "ROUND(x.harga_net / NULLIF(x.konv, 0), 2) AS harga, "
         "ROUND(x.harga_pokok, 2) AS harga_pokok, "
@@ -357,7 +361,7 @@ def penjualan_nota(f):
         where.append("h.no_transaksi LIKE ?")
         params.append(f"%{f['search']}%")
     inner = (
-        "SELECT n.no_transaksi, n.tanggal, COALESCE(dv.nama, '') AS divisi, "
+        "SELECT n.no_transaksi, n.tanggal, n.tanggal_server, COALESCE(dv.nama, '') AS divisi, "
         "COALESCE(c.nama, '') AS customer, COALESCE(mk.nama, '') AS kota, "
         "n.total_kotor, n.total_kotor - (n.total_bersih - n.pajak) AS potongan, "
         "COALESCE(v.nominal, 0) AS voucher, "
@@ -446,7 +450,7 @@ FILTERS_PENJUALAN_USER = {
 def penjualan_user(f):
     where, params = _base_where(f)
     inner = (
-        "SELECT n.no_transaksi, n.tanggal, COALESCE(dv.nama, '') AS divisi, "
+        "SELECT n.no_transaksi, n.tanggal, n.tanggal_server, COALESCE(dv.nama, '') AS divisi, "
         f"{STATUS_PENJUALAN_CASE.replace('h.status', 'n.status_raw')} AS status, "
         "COALESCE(c.nama, '') AS customer, n.total_bersih AS nominal, "
         "COALESCE(u.nama, RTRIM(n.kd_user)) AS [user], n.kd_user "
@@ -513,7 +517,7 @@ def retur_penjualan(f):
         params.append(f["kd_customer"])
     _search(where, params, f, ["h.no_retur", "b.nama", "c.nama"])
     inner = (
-        "SELECT h.no_retur, h.tanggal, h.no_bukti, COALESCE(dv.nama, '') AS divisi, "
+        "SELECT h.no_retur, h.tanggal, h.tanggal_server, h.no_bukti, COALESCE(dv.nama, '') AS divisi, "
         "COALESCE(dv.keterangan, '') AS keterangan_divisi, COALESCE(dv.kepala_nota, '') AS kepala_nota, "
         "COALESCE(c.nama, '') AS customer, b.nama AS barang, COALESCE(st.nama, '') AS satuan, "
         "COALESCE(jb.nama, '') AS jenis_bayar, COALESCE(kas.no_rekening, '') AS no_rekening, "
@@ -558,8 +562,14 @@ def pembelian(f):
     where, params = _base_where(f)
     _search(where, params, f, ["h.no_transaksi", "b.nama", "s.nama"])
     inner = (
-        "SELECT h.no_transaksi, COALESCE(h.no_order, '') AS no_order, h.tanggal, "
-        "COALESCE(s.nama, '') AS supplier, COALESCE(h.keterangan, '') AS note, "
+        "SELECT h.no_transaksi, COALESCE(h.no_order, '') AS no_order, h.tanggal, h.tanggal_server, "
+        "COALESCE(s.nama, '') AS supplier, COALESCE(dv.nama, '') AS divisi, "
+        "h.tanggal_jatuh_tempo AS jatuh_tempo, "
+        # `t_pembelian.status` adalah CARA BAYAR, bukan penanda batal — view
+        # legacy `mon_t_pembelian` menamainya "Pembayaran" lewat
+        # GetConvertStatus(). Semantiknya sama dengan sisi jual.
+        f"{STATUS_PENJUALAN_CASE} AS pembayaran, "
+        "COALESCE(h.keterangan, '') AS note, "
         "b.nama AS barang, d.qty, COALESCE(st.nama, '') AS satuan, d.harga_beli AS harga, "
         "COALESCE(d.diskon1, 0) AS diskon_item1, COALESCE(d.diskon2, 0) AS diskon_item2, "
         "COALESCE(d.diskon3, 0) AS diskon_item3, COALESCE(d.diskon4, 0) AS diskon_item4, "
@@ -571,6 +581,7 @@ def pembelian(f):
         "INNER JOIN t_pembelian_detail d ON h.no_transaksi = d.no_transaksi "
         "INNER JOIN m_barang b ON d.kd_barang = b.kd_barang "
         "LEFT JOIN m_supplier s ON h.kd_supplier = s.kd_supplier "
+        "LEFT JOIN m_divisi dv ON h.kd_divisi = dv.kd_divisi "
         "LEFT JOIN m_satuan st ON d.kd_satuan = st.kd_satuan "
         f"WHERE {' AND '.join(where)}"
     )
@@ -610,13 +621,14 @@ def _pembelian_nota(where_sql: str) -> str:
         # `badan_pembelian` bisa memaparkannya tanpa subquery kedua. Perhatikan
         # `pajak` (RUPIAH, hasil hitung) berbeda dari `pajak_rate` (fraksi, kolom
         # asli) -- laporan Pembelian menampilkan yang kedua.
-        "SELECT no_transaksi, no_order, tanggal, kd_supplier, kd_divisi, status_raw, "
+        "SELECT no_transaksi, no_order, tanggal, tanggal_server, tanggal_jatuh_tempo, "
+        "kd_supplier, kd_divisi, status_raw, "
         "keterangan, total_kotor, hd1, hd2, hd3, hd4, pajak_rate, ppnbm_rate, "
         f"({net_pre_tax}) * pajak_rate AS pajak, "
         f"({net_pre_tax}) * (1 + pajak_rate) * (1 + ppnbm_rate) AS total_bersih "
         "FROM ("
-        "SELECT h.no_transaksi, COALESCE(h.no_order, '') AS no_order, h.tanggal, "
-        "h.kd_supplier, h.kd_divisi, h.status AS status_raw, "
+        "SELECT h.no_transaksi, COALESCE(h.no_order, '') AS no_order, h.tanggal, h.tanggal_server, "
+        "h.tanggal_jatuh_tempo, h.kd_supplier, h.kd_divisi, h.status AS status_raw, "
         "COALESCE(h.keterangan, '') AS keterangan, "
         "SUM(d.qty * d.harga_beli) AS total_kotor, "
         "COALESCE(h.pajak, 0) AS pajak_rate, COALESCE(h.ppnbm, 0) AS ppnbm_rate, "
@@ -626,7 +638,9 @@ def _pembelian_nota(where_sql: str) -> str:
         "FROM t_pembelian h "
         "INNER JOIN t_pembelian_detail d ON h.no_transaksi = d.no_transaksi "
         f"WHERE {where_sql} "
-        "GROUP BY h.no_transaksi, h.no_order, h.tanggal, h.kd_supplier, h.kd_divisi, "
+        # `h.tanggal_server` kunci GROUP BY, bukan MIN() — alasan sama dgn `_nota_net`.
+        "GROUP BY h.no_transaksi, h.no_order, h.tanggal, h.tanggal_server, "
+        "h.tanggal_jatuh_tempo, h.kd_supplier, h.kd_divisi, "
         "h.status, h.keterangan, "
         "h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.pajak, h.ppnbm"
         ") nz"
@@ -710,7 +724,7 @@ def retur_pembelian(f):
     where, params = _base_where(f)
     _search(where, params, f, ["h.no_retur", "b.nama", "s.nama"])
     inner = (
-        "SELECT h.no_retur, h.tanggal, h.no_bukti, COALESCE(dv.nama, '') AS divisi, "
+        "SELECT h.no_retur, h.tanggal, h.tanggal_server, h.no_bukti, COALESCE(dv.nama, '') AS divisi, "
         "COALESCE(s.nama, '') AS supplier, COALESCE(jb.nama, '') AS pembayaran, "
         "COALESCE(bk.nama, '') AS bank, COALESCE(kas.no_rekening, '') AS no_rekening, "
         "COALESCE(u.nama, '') AS petugas, d.kd_barang, b.nama AS barang, d.harga, "
@@ -798,11 +812,11 @@ def _order_net(where_sql, *, tabel, detail, harga, mitra, mitra_tabel, ekor,
     """
     net_pre_tax = _ghb("net_lines", ["hd1", "hd2", "hd3", "hd4"])
     return (
-        "SELECT no_order, tanggal, tanggal_terima, mitra, divisi, status, no_transaksi, "
+        "SELECT no_order, tanggal, tanggal_server, tanggal_terima, mitra, divisi, status, no_transaksi, "
         "kd_mitra, kd_divisi, jml_item, total_qty, "
         f"({net_pre_tax}) {ekor} AS total_bersih "
         "FROM ("
-        "SELECT h.no_order, h.tanggal, h.tanggal_terima, "
+        "SELECT h.no_order, h.tanggal, h.tanggal_server, h.tanggal_terima, "
         "COALESCE(m.nama, '') AS mitra, COALESCE(dv.nama, '') AS divisi, "
         f"{_ORDER_TERBUKA} AS status, COALESCE(h.no_transaksi, '') AS no_transaksi, "
         f"h.kd_{mitra} AS kd_mitra, h.kd_divisi AS kd_divisi, "
@@ -817,7 +831,8 @@ def _order_net(where_sql, *, tabel, detail, harga, mitra, mitra_tabel, ekor,
         f"LEFT JOIN {mitra_tabel} m ON h.kd_{mitra} = m.kd_{mitra} "
         "LEFT JOIN m_divisi dv ON h.kd_divisi = dv.kd_divisi "
         f"WHERE {where_sql} "
-        "GROUP BY h.no_order, h.tanggal, h.tanggal_terima, m.nama, dv.nama, "
+        # Kunci GROUP BY, bukan MIN() — alasan sama dgn `_nota_net`.
+        "GROUP BY h.no_order, h.tanggal, h.tanggal_server, h.tanggal_terima, m.nama, dv.nama, "
         f"h.no_transaksi, h.kd_{mitra}, h.kd_divisi, "
         "h.diskon1, h.diskon2, h.diskon3, h.diskon4, h.pajak, "
         f"{extra_group}"
@@ -944,7 +959,7 @@ def piutang(f):
 
     nota_sql = _nota_net(" AND ".join(where))
     inner = (
-        "SELECT n.no_transaksi, n.tanggal, COALESCE(c.nama, '') AS customer, "
+        "SELECT n.no_transaksi, n.tanggal, n.tanggal_server, COALESCE(c.nama, '') AS customer, "
         "n.tanggal_jatuh_tempo AS jatuh_tempo, n.total_bersih AS total_penjualan, "
         "COALESCE(cic.total_cicilan, 0) AS total_cicilan, "
         "n.total_bersih - COALESCE(cic.total_cicilan, 0) AS sisa_piutang, "
@@ -1009,16 +1024,19 @@ def hutang(f):
 
     nota_sql = _pembelian_nota(" AND ".join(where))
     inner = (
-        "SELECT n.no_transaksi, n.tanggal, COALESCE(s.nama, '') AS supplier, "
+        "SELECT n.no_transaksi, n.no_order, n.tanggal, n.tanggal_server, "
+        "COALESCE(s.nama, '') AS supplier, "
         "h.tanggal_jatuh_tempo AS jatuh_tempo, n.total_bersih AS total_pembelian, "
         "COALESCE(cic.total_cicilan, 0) AS total_cicilan, "
         "n.total_bersih - COALESCE(cic.total_cicilan, 0) AS sisa_hutang, "
         "CASE WHEN DATEDIFF(day, h.tanggal_jatuh_tempo, ?) > 0 "
         "THEN DATEDIFF(day, h.tanggal_jatuh_tempo, ?) ELSE 0 END AS hari_terlambat "
         f"FROM ({nota_sql}) n "
-        # _pembelian_nota() tak membawa tanggal_jatuh_tempo (Piutang mendapatnya
-        # dari _nota_net yang memang memilihnya). Diambil lewat join balik ke
-        # header, bukan dengan menambah kolom di helper yang dipakai 3 laporan lain.
+        # `_pembelian_nota()` KINI membawa tanggal_jatuh_tempo, tapi join balik ini
+        # sengaja dipertahankan: `h.tanggal_jatuh_tempo` dipakai dua kali lagi di
+        # DATEDIFF pada SELECT list, dan urutan parameternya sudah dijelaskan di
+        # bawah. Menukarnya ke `n.` sekarang hanya memindahkan risiko tanpa
+        # menghemat satu join pun — kuncinya sama dan indeksnya sama.
         "INNER JOIN t_pembelian h ON h.no_transaksi = n.no_transaksi "
         "LEFT JOIN m_supplier s ON n.kd_supplier = s.kd_supplier "
         "LEFT JOIN (SELECT no_transaksi, SUM(nominal) AS total_cicilan FROM t_hutang_cicilan "
@@ -1080,7 +1098,7 @@ def biaya_operasional(f):
         params.append(f["kategori"])
     _search(where, params, f, ["b.nama", "h.keterangan"])
     inner = (
-        "SELECT h.no_transaksi, h.tanggal, COALESCE(dv.nama, '') AS divisi, "
+        "SELECT h.no_transaksi, h.tanggal, h.tanggal_server, COALESCE(dv.nama, '') AS divisi, "
         "b.nama AS biaya, "
         f"{_BIAYA_KATEGORI_CASE} AS kategori, "
         "h.nominal, COALESCE(h.keterangan, '') AS keterangan "
@@ -1137,13 +1155,170 @@ def opname(f):
     # dan arahnya (status=2 masuk, selain itu keluar). Salah satu dari dua kolom
     # itu selalu 0; tak satu pun pernah menjadi "stok menurut sistem".
     inner = (
-        "SELECT h.no_transaksi, h.tanggal, COALESCE(dv.nama, '') AS divisi, h.kd_barang, b.nama AS barang, "
+        "SELECT h.no_transaksi, h.tanggal, h.tanggal_server, COALESCE(dv.nama, '') AS divisi, "
+        "h.kd_barang, b.nama AS barang, "
+        # Qty tanpa satuan tak punya arti: selisih 5 itu 5 lusin atau 5 pcs?
+        # Ada di `mon_t_opname_stok` legacy, hilang saat laporan ini ditulis.
+        "COALESCE(st.nama, RTRIM(h.kd_satuan)) AS satuan, "
+        # Koreksi stok adalah penyesuaian MANUAL; "siapa" dan "kenapa" justru
+        # inti dokumennya, bukan hiasan.
+        "COALESCE(h.keterangan, '') AS keterangan, "
+        "COALESCE(u.nama, RTRIM(h.kd_user)) AS petugas, "
         "CASE WHEN h.status=2 THEN 0 ELSE h.qty END AS koreksi_keluar, "
         "CASE WHEN h.status=2 THEN h.qty ELSE 0 END AS koreksi_masuk, "
         "CASE WHEN h.status=2 THEN h.qty ELSE -h.qty END AS diferensi "
         "FROM t_opname_stok h "
         "INNER JOIN m_barang b ON h.kd_barang = b.kd_barang "
         "LEFT JOIN m_divisi dv ON h.kd_divisi = dv.kd_divisi "
+        "LEFT JOIN m_satuan st ON h.kd_satuan = st.kd_satuan "
+        "LEFT JOIN m_userx u ON h.kd_user = u.kd_user "
+        f"WHERE {' AND '.join(where)}"
+    )
+    return inner, params
+
+
+# --- Nota Tanggal Mundur ---------------------------------------------------
+#
+# Di aplikasi POS legacy, `tanggal` dokumen dirakit dari jam PC kasir dan bisa
+# diubah operator; `tanggal_server` adalah cap waktu saat dokumen benar-benar
+# tersimpan. Seluruh laporan lain bersumbu `tanggal`, jadi sebuah dokumen bisa
+# dimundurkan ke periode yang sudah dilaporkan tanpa meninggalkan jejak di layar
+# mana pun. Layar ini satu-satunya yang membandingkan keduanya.
+#
+# ## Selisih BUKAN dengan sendirinya penyimpangan
+#
+# Terukur di dua profil lokal: 13.021 dari 15.730 pembelian testGudang (83%)
+# bertanggal beda hari dari cap servernya. Itu praktik normal — faktur pemasok
+# bertanggal minggu lalu, diinput hari ini. Bandingkan dengan penjualan
+# grosirPusat: 637 dari 445.873 (0,14%). Yang layak diperiksa adalah ekornya
+# (selisih puluhan sampai 730 hari) dan dokumen PENJUALAN, yang seharusnya
+# diinput saat transaksinya terjadi.
+#
+# Karena itu laporan ini memajang fakta, bukan menuduh, dan `min_selisih` ada
+# supaya ekornya bisa dipisahkan dari punggungnya.
+#
+# ## Kenapa ia tetap cepat walau `tanggal_server` tak berindeks
+#
+# Tak ada satu pun indeks pada `tanggal_server` (apps/transactions/indexes.py
+# memasang enam, semuanya `tanggal`), dan hub_pull.py:200 sudah mengukur
+# akibatnya. Yang menyelamatkan bentuk di bawah adalah URUTAN predikatnya:
+# `tanggal >= ? AND tanggal <= ?` sargable dan mengerjakan index seek, lalu
+# perbandingan CAST hanya disaring di atas baris hasil seek itu.
+#
+# Menukar urutannya — menjadikan perbandingan penyaring utama, atau
+# membungkusnya dalam OR — mengubah tiap arm jadi table scan. Di grosirPusat itu
+# berarti 445.873 baris per arm.
+
+# (label, tabel, kolom nomor dokumen). Kedelapan tabel terverifikasi punya
+# `tanggal`, `tanggal_server`, `kd_divisi`, `kd_user`, `keterangan`; yang
+# berbeda hanya nama kolom nomornya.
+#
+# `t_penambahan_kas` sengaja TIDAK ada di sini: ia satu-satunya dokumen kas yang
+# tak punya `tanggal_server` sama sekali. Mengarang NULL untuknya akan membuat
+# ia terbaca "tak pernah bermasalah", padahal yang benar adalah "tak bisa
+# dijawab".
+_DOK_MUNDUR = (
+    ("Penjualan", "t_penjualan", "no_transaksi"),
+    ("Retur Penjualan", "t_penjualan_retur", "no_retur"),
+    ("Pembelian", "t_pembelian", "no_transaksi"),
+    ("Retur Pembelian", "t_pembelian_retur", "no_retur"),
+    ("Order Penjualan", "t_penjualan_order", "no_order"),
+    ("Order Pembelian", "t_pembelian_order", "no_order"),
+    ("Koreksi Stok", "t_opname_stok", "no_transaksi"),
+    ("Biaya Operasional", "t_biaya_operasional", "no_transaksi"),
+)
+
+JENIS_MUNDUR = [d[0] for d in _DOK_MUNDUR]
+
+_SELISIH = "DATEDIFF(day, CAST(tanggal AS DATE), CAST(tanggal_server AS DATE))"
+
+SORTS_NOTA_MUNDUR = {
+    # Bawaan `jarak_hari` (nilai mutlak), bukan `selisih_hari`: mengurutkan yang
+    # bertanda menurun membuang dokumen bertanggal MAJU ke halaman terakhir,
+    # padahal justru itu yang paling aneh (49 baris di testGudang).
+    "jarak_hari": "jarak_hari",
+    "selisih_hari": "selisih_hari",
+    "tanggal": "tanggal",
+    "tanggal_server": "tanggal_server",
+    "jenis": "jenis",
+    "no_dokumen": "no_dokumen",
+    "divisi": "divisi",
+    "petugas": "petugas",
+}
+SUMMARY_NOTA_MUNDUR = (
+    "COUNT(*) AS jml_dokumen, "
+    "COALESCE(SUM(CASE WHEN q.selisih_hari > 0 THEN 1 ELSE 0 END), 0) AS jml_mundur, "
+    "COALESCE(SUM(CASE WHEN q.selisih_hari < 0 THEN 1 ELSE 0 END), 0) AS jml_maju, "
+    "COALESCE(MAX(q.jarak_hari), 0) AS selisih_terjauh"
+)
+FILTERS_NOTA_MUNDUR = {
+    "no_dokumen": ("no_dokumen", "text"),
+    # Wajib ada, dan bukan demi kelengkapan: dokumen bertanggal MAJU selisihnya
+    # kecil (maksimum 23 hari di testGudang), jadi dengan urutan bawaan menurut
+    # jarak terjauh, ke-73 baris itu selalu terkubur di halaman belakang. Kartu
+    # ringkasan menyebut jumlahnya; tanpa penyaring ini angka itu jalan buntu.
+    "arah": ("arah", "category"),
+    "divisi": ("divisi", "text"),
+    "petugas": ("petugas", "text"),
+    "keterangan": ("keterangan", "text"),
+    "selisih_hari": ("selisih_hari", "number_range"),
+}
+
+
+def nota_mundur(f):
+    """Dokumen yang `tanggal`-nya berbeda HARI dari `tanggal_server`.
+
+    `selisih_hari` BERTANDA, dan itu bukan kebetulan: positif = cap server
+    sesudah tanggal dokumen (dimundurkan), negatif = cap server sebelum tanggal
+    dokumen (bertanggal maju, dokumen bertanggal masa depan saat disimpan).
+    Membungkusnya dengan ABS() akan menghapus kategori kedua tanpa gejala.
+    """
+    # Jenis disaring dengan MEMBUANG ARM-nya, bukan menyaring hasil UNION.
+    # Memilih "Penjualan" berarti tujuh tabel lain tak pernah disentuh sama
+    # sekali — penghematan yang tak bisa didapat filter kolom di luar.
+    jenis = (f.get("jenis") or "").strip()
+    dipakai = [d for d in _DOK_MUNDUR if not jenis or d[0] == jenis]
+    if not dipakai:
+        dipakai = list(_DOK_MUNDUR)
+
+    min_selisih = f.get("min_selisih")
+    try:
+        min_selisih = max(1, int(min_selisih)) if str(min_selisih).strip() else 1
+    except (TypeError, ValueError):
+        min_selisih = 1
+
+    arms, params = [], []
+    for label, tabel, nokol in dipakai:
+        syarat = [
+            # Predikat terindeks DULU — ini yang mengerjakan seek.
+            "tanggal >= ?", "tanggal <= ?",
+            "tanggal_server IS NOT NULL",
+            # Residual, dinilai di atas hasil seek.
+            "CAST(tanggal AS DATE) <> CAST(tanggal_server AS DATE)",
+            f"ABS({_SELISIH}) >= ?",
+        ]
+        arms.append(
+            f"SELECT '{label}' AS jenis, RTRIM({nokol}) AS no_dokumen, tanggal, tanggal_server, "
+            f"{_SELISIH} AS selisih_hari, ABS({_SELISIH}) AS jarak_hari, "
+            "kd_divisi, kd_user, COALESCE(keterangan, '') AS keterangan "
+            f"FROM {tabel} WHERE {' AND '.join(syarat)}"
+        )
+        params += [f["date_from"], f["date_to"], min_selisih]
+
+    where = ["1=1"]
+    _search(where, params, f, ["x.no_dokumen", "x.keterangan"])
+    if f.get("kd_divisi"):
+        where.append("x.kd_divisi = ?")
+        params.append(f["kd_divisi"])
+
+    inner = (
+        "SELECT x.jenis, x.no_dokumen, x.tanggal, x.tanggal_server, x.selisih_hari, x.jarak_hari, "
+        "CASE WHEN x.selisih_hari > 0 THEN 'Mundur' ELSE 'Maju' END AS arah, "
+        "COALESCE(dv.nama, '') AS divisi, "
+        "COALESCE(u.nama, RTRIM(x.kd_user)) AS petugas, x.keterangan "
+        f"FROM ({' UNION ALL '.join(arms)}) x "
+        "LEFT JOIN m_divisi dv ON x.kd_divisi = dv.kd_divisi "
+        "LEFT JOIN m_userx u ON x.kd_user = u.kd_user "
         f"WHERE {' AND '.join(where)}"
     )
     return inner, params
@@ -2179,7 +2354,7 @@ def penjualan_hpp_arunika(f):
         ") z WHERE z.rn = 1"
     )
     base = (
-        "SELECT pb.penjualan_nomor AS no_transaksi, pb.tanggal, "
+        "SELECT pb.penjualan_nomor AS no_transaksi, pb.tanggal, pb.tanggal_server, "
         "COALESCE(dv.nama, '') AS divisi, COALESCE(pl.nama, '') AS customer, "
         "pb.barang_kode AS kd_barang, COALESCE(b.nama, '') AS barang, "
         "COALESCE(kg.nama, '') AS kategori, pb.qty, COALESCE(st.nama, '') AS satuan, "
@@ -2234,9 +2409,15 @@ def pembelian_arunika(f):
     where, params = _base_where_arunika(f, date_col="pb.tanggal", div_col="pb.divisi_kode")
     _search(where, params, f, ["pb.pembelian_nomor", "b.nama", "pm.nama"])
     inner = (
-        "SELECT pb.pembelian_nomor AS no_transaksi, "
+        "SELECT pb.pembelian_nomor AS no_transaksi, pb.tanggal_server, "
         "COALESCE(p.nomor_order, '') AS no_order, pb.tanggal, "
-        "COALESCE(pm.nama, '') AS supplier, COALESCE(p.keterangan, '') AS note, "
+        "COALESCE(pm.nama, '') AS supplier, COALESCE(dv.nama, '') AS divisi, "
+        "p.jatuh_tempo, "
+        # Token bentuk Arunika sudah menyebutkan dirinya sendiri; dipetakan ke
+        # label yang sama dengan jalur legacy supaya kolomnya berbunyi sama.
+        "CASE p.jenis_bayar WHEN 'kredit' THEN 'Kredit' WHEN 'tunai' THEN 'Tunai' "
+        "WHEN 'lunas' THEN 'Lunas' ELSE '' END AS pembayaran, "
+        "COALESCE(p.keterangan, '') AS note, "
         "b.nama AS barang, pb.qty, COALESCE(st.nama, '') AS satuan, pb.harga, "
         "pb.diskon1 AS diskon_item1, pb.diskon2 AS diskon_item2, "
         "pb.diskon3 AS diskon_item3, pb.diskon4 AS diskon_item4, "
@@ -2248,6 +2429,7 @@ def pembelian_arunika(f):
         f"INNER JOIN {SRC}.pembelian p ON p.nomor = pb.pembelian_nomor "
         f"INNER JOIN {SRC}.barang b ON b.kode = pb.barang_kode "
         f"LEFT JOIN {SRC}.pemasok pm ON pm.kode = p.pemasok_kode "
+        f"LEFT JOIN {SRC}.divisi dv ON dv.kode = pb.divisi_kode "
         f"LEFT JOIN {SRC}.satuan st ON st.kode = pb.satuan_kode "
         f"WHERE {' AND '.join(where)}"
     )
@@ -2276,7 +2458,7 @@ def penjualan_detail_arunika(f):
     where, params = _base_where_arunika(f, date_col="pb.tanggal", div_col="pb.divisi_kode")
     _search(where, params, f, ["pb.penjualan_nomor", "b.nama", "pl.nama"])
     inner = (
-        "SELECT pb.penjualan_nomor AS no_transaksi, pb.tanggal, "
+        "SELECT pb.penjualan_nomor AS no_transaksi, pb.tanggal, pb.tanggal_server, "
         "COALESCE(dv.nama, '') AS divisi, COALESCE(pl.nama, '') AS customer, "
         "COALESCE(kt.nama, '') AS kota, p.jatuh_tempo AS jth_tempo, "
         f"{_JENIS_BAYAR_LABEL} AS status, COALESCE(p.keterangan, '') AS keterangan, "
@@ -2318,7 +2500,7 @@ def retur_penjualan_arunika(f):
         params.append(f["kd_customer"])
     _search(where, params, f, ["r.nomor", "b.nama", "pl.nama"])
     inner = (
-        "SELECT r.nomor AS no_retur, rb.tanggal, r.no_bukti, "
+        "SELECT r.nomor AS no_retur, rb.tanggal, rb.tanggal_server, r.no_bukti, "
         "COALESCE(dv.nama, '') AS divisi, "
         "COALESCE(dv.keterangan, '') AS keterangan_divisi, "
         "COALESCE(dv.awalan_nota, '') AS kepala_nota, "
@@ -2352,7 +2534,7 @@ def retur_pembelian_arunika(f):
     where, params = _base_where_arunika(f, date_col="rb.tanggal", div_col="rb.divisi_kode")
     _search(where, params, f, ["r.nomor", "b.nama", "pm.nama"])
     inner = (
-        "SELECT r.nomor AS no_retur, rb.tanggal, r.no_bukti, "
+        "SELECT r.nomor AS no_retur, rb.tanggal, rb.tanggal_server, r.no_bukti, "
         "COALESCE(dv.nama, '') AS divisi, COALESCE(pm.nama, '') AS supplier, "
         "COALESCE(cb.nama, '') AS pembayaran, COALESCE(bk.nama, '') AS bank, "
         "COALESCE(ks.no_rekening, '') AS no_rekening, "
@@ -2401,7 +2583,7 @@ def order_penjualan_arunika(f):
         params.append(f["status_order"])
     _search(where, params, f, ["o.nomor", "pl.nama"])
     inner = (
-        "SELECT o.nomor AS no_order, o.tanggal, o.tanggal_terima, "
+        "SELECT o.nomor AS no_order, o.tanggal, o.tanggal_server, o.tanggal_terima, "
         "COALESCE(pl.nama, '') AS mitra, COALESCE(dv.nama, '') AS divisi, "
         f"{_STATUS_ORDER_LABEL} AS status, "
         "COALESCE(o.nomor_nota, '') AS no_transaksi, "
@@ -2431,9 +2613,12 @@ def opname_arunika(f):
     _search(where, params, f, ["kb.barang_kode", "b.nama", "kb.koreksi_nomor"])
     plus = "k.jenis = 'lain_plus'"
     inner = (
-        "SELECT kb.koreksi_nomor AS no_transaksi, kb.tanggal, "
+        "SELECT kb.koreksi_nomor AS no_transaksi, kb.tanggal, kb.tanggal_server, "
         "COALESCE(dv.nama, '') AS divisi, kb.barang_kode AS kd_barang, "
         "b.nama AS barang, "
+        "COALESCE(st.nama, kb.satuan_kode) AS satuan, "
+        "COALESCE(k.keterangan, '') AS keterangan, "
+        "COALESCE(pgn.nama, '') AS petugas, "
         f"CASE WHEN {plus} THEN 0 ELSE kb.qty END AS koreksi_keluar, "
         f"CASE WHEN {plus} THEN kb.qty ELSE 0 END AS koreksi_masuk, "
         f"CASE WHEN {plus} THEN kb.qty ELSE -kb.qty END AS diferensi "
@@ -2441,6 +2626,8 @@ def opname_arunika(f):
         f"INNER JOIN {SRC}.koreksi_stok k ON k.nomor = kb.koreksi_nomor "
         f"INNER JOIN {SRC}.barang b ON b.kode = kb.barang_kode "
         f"LEFT JOIN {SRC}.divisi dv ON dv.kode = kb.divisi_kode "
+        f"LEFT JOIN {SRC}.satuan st ON st.kode = kb.satuan_kode "
+        f"LEFT JOIN {SRC}.pengguna pgn ON pgn.kode = k.pengguna_kode "
         f"WHERE {' AND '.join(where)}"
     )
     return inner, params
@@ -2474,7 +2661,7 @@ def penjualan_nota_arunika(f):
         where.append("p.nomor LIKE ?")
         params.append(f"%{f['search']}%")
     inner = (
-        "SELECT p.nomor AS no_transaksi, p.tanggal, COALESCE(dv.nama, '') AS divisi, "
+        "SELECT p.nomor AS no_transaksi, p.tanggal, p.tanggal_server, COALESCE(dv.nama, '') AS divisi, "
         "COALESCE(pl.nama, '') AS customer, COALESCE(kt.nama, '') AS kota, "
         "p.subtotal AS total_kotor, p.diskon AS potongan, "
         "COALESCE(v.nominal, 0) AS voucher, "
@@ -2513,7 +2700,7 @@ def penjualan_user_arunika(f):
     """
     where, params = _base_where_arunika(f)
     inner = (
-        "SELECT p.nomor AS no_transaksi, p.tanggal, "
+        "SELECT p.nomor AS no_transaksi, p.tanggal, p.tanggal_server, "
         "COALESCE(dv.nama, '') AS divisi, "
         f"{_JENIS_BAYAR_LABEL} AS status, "
         "COALESCE(pl.nama, '') AS customer, p.total AS nominal, "
@@ -2965,7 +3152,7 @@ def biaya_operasional_arunika(f):
         params.append(token if token is not None else "")
     _search(where, params, f, ["kb.nama", "j.keterangan"])
     inner = (
-        "SELECT j.nomor AS no_transaksi, j.tanggal, COALESCE(dv.nama, '') AS divisi, "
+        "SELECT j.nomor AS no_transaksi, j.tanggal, j.tanggal_server, COALESCE(dv.nama, '') AS divisi, "
         "kb.nama AS biaya, "
         f"{case_label_jenis_biaya('kb.jenis')} AS kategori, "
         "j.jumlah AS nominal, COALESCE(j.keterangan, '') AS keterangan "

@@ -7,6 +7,7 @@ import TableSkeleton from "@/components/ui/TableSkeleton.vue";
 import SummaryStrip from "@/components/ui/SummaryStrip.vue";
 import ServerTable from "@/components/report/ServerTable.vue";
 import ExportButton from "@/components/ui/ExportButton.vue";
+import Badge from "@/components/ui/Badge.vue";
 
 const props = defineProps({
   // Judul halaman sengaja tidak diterima di sini — AdminLayout yang memilikinya.
@@ -33,6 +34,32 @@ const emit = defineEmits(["page-change", "sort-change", "per-page-change"]);
 // Dibaca di dalam computed (Inertia mengganti objek props tiap kunjungan, jadi
 // salinan setup akan basi); dinamai `inertiaPage` supaya tak menutupi prop `page`.
 const inertiaPage = usePage();
+// --- Cap waktu server ------------------------------------------------------
+// Dipakai slot `cell-tanggal_server` di bawah; lihat catatan di sana.
+const tglServer = (v) =>
+  !v ? "—" : new Date(v).toLocaleDateString("id-ID", { year: "numeric", month: "short", day: "numeric" });
+
+/**
+ * Selisih HARI antara cap server dan tanggal dokumen, bertanda.
+ *
+ * Positif = dokumen bertanggal LEBIH AWAL dari saat ia tersimpan (dimundurkan).
+ * Negatif = bertanggal maju, dokumen bertanggal masa depan saat disimpan.
+ * 0/NaN = tak ada yang perlu ditandai.
+ *
+ * Dibandingkan per HARI KALENDER, bukan per jam: nota yang disimpan pukul 23.50
+ * dan dicetak 00.10 bukan anomali, dan selisih jam akan menandainya tiap malam.
+ */
+function bedaHari(row) {
+  if (!row.tanggal || !row.tanggal_server) return 0;
+  const hari = (v) => {
+    const d = new Date(v);
+    return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+  };
+  const n = Math.round((hari(row.tanggal_server) - hari(row.tanggal)) / 86400000);
+  return Number.isFinite(n) ? n : 0;
+}
+
+const sumberArunika = computed(() => inertiaPage.props.sumber_laporan === "arunika");
 const sortKeys = computed(() => inertiaPage.props.filters?.sort_keys || null);
 const cols = computed(() =>
   sortKeys.value
@@ -88,6 +115,18 @@ function cariSeluruhData() {
     <!-- Judul halaman dimiliki AdminLayout (bersama eyebrow seksi). Merender
          ulang di sini membuat judul tercetak dua kali sekaligus dua <h1> dalam
          satu dokumen. -->
+
+    <!-- Sumber data laporan. HANYA muncul saat bentuk Arunika yang dibaca —
+         pemasangan default (ARUNIKA_LAPORAN mati) tak melihat perubahan apa
+         pun. Sebelum ini tak ada satu pun tanda di layar tentang sumber mana
+         yang dipakai, padahal kedua syaratnya tersembunyi di .env dan tabel
+         koneksi. Satu komponen, 26 laporan. -->
+    <div v-if="sumberArunika" class="mb-3">
+      <Badge variant="info">Sumber: Arunika</Badge>
+      <span class="ml-2 text-xs text-ink-muted">
+        Angka di halaman ini dibaca dari database Arunika, bukan tabel legacy.
+      </span>
+    </div>
 
     <!-- Filter panel lives OUTSIDE Deferred so it shows instantly -->
     <slot name="filters" />
@@ -161,6 +200,25 @@ function cariSeluruhData() {
       >
         <template v-for="(_, name) in $slots" #[name]="slotProps">
           <slot :name="name" v-bind="slotProps" />
+        </template>
+
+        <!-- Cap waktu server, dirender SEKALI di sini alih-alih disalin ke 13
+             halaman laporan. `tanggal` bisa diubah operator di aplikasi POS
+             lama, `tanggal_server` tidak — dan tanpa penanda, membandingkan dua
+             kolom tanggal per baris adalah pekerjaan mata.
+
+             Nada penandanya NETRAL: pada data nyata 83% baris pembelian berbeda
+             hari secara sah (faktur pemasok bertanggal mundur). Yang diberi
+             warna hanya dokumen bertanggal MAJU, yang jarang dan tak punya
+             penjelasan wajar. Rinciannya di layar Nota Tanggal Mundur.
+
+             Dijaga `v-if` supaya halaman yang punya kebutuhan sendiri tetap
+             bisa menyediakan slot bernama sama tanpa bentrok. -->
+        <template v-if="!$slots['cell-tanggal_server']" #cell-tanggal_server="{ row }">
+          <span>{{ tglServer(row.tanggal_server) }}</span>
+          <Badge v-if="bedaHari(row)" :variant="bedaHari(row) < 0 ? 'warning' : 'neutral'" class="ml-2">
+            {{ bedaHari(row) < 0 ? `maju ${-bedaHari(row)} hari` : `beda ${bedaHari(row)} hari` }}
+          </Badge>
         </template>
       </ServerTable>
     </Deferred>

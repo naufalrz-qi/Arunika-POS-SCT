@@ -26,6 +26,56 @@ from apps.bisnis import master_src
 from apps.transactions import reports as rpt
 
 
+
+def _arm_select(badan: str) -> list:
+    """Daftar SELECT tingkat atas. UNION ALL dipecah; arm bersarang diabaikan."""
+    potong, kini = [], []
+    i, n = 0, len(badan)
+    dalam, kutip = 0, False
+    while i < n:
+        c = badan[i]
+        if c == "'":
+            kutip = not kutip
+        elif not kutip:
+            if c == "(":
+                dalam += 1
+            elif c == ")":
+                dalam -= 1
+            elif dalam == 0 and badan[i:i + 9].upper() == "UNION ALL":
+                potong.append("".join(kini)); kini = []; i += 9; continue
+        kini.append(c); i += 1
+    potong.append("".join(kini))
+    return [p for p in potong if "SELECT" in p.upper()]
+
+
+def _hitung_kolom(arm: str) -> int:
+    """Jumlah kolom di daftar SELECT terluar satu arm.
+
+    Koma di dalam kurung (fungsi, subquery) dan di dalam literal string tidak
+    dihitung — persis jebakan yang membuat penghitungan naif salah pada
+    `COALESCE(x, '')` dan `CASE ... WHEN 'a,b'`.
+    """
+    atas = arm.upper()
+    i = atas.index("SELECT") + 6
+    sisa = arm[i:]
+    kolom, dalam, kutip = 1, 0, False
+    for j, c in enumerate(sisa):
+        if c == "'":
+            kutip = not kutip
+            continue
+        if kutip:
+            continue
+        if c == "(":
+            dalam += 1
+        elif c == ")":
+            dalam -= 1
+        elif dalam == 0 and c == "," :
+            kolom += 1
+        elif dalam == 0 and sisa[j:j + 6].upper() == " FROM ":
+            return kolom
+    return kolom
+
+
 class DdlDasar(SimpleTestCase):
     def test_semua_entitas_punya_kedua_mode(self):
         for nama in master_src.daftar():
@@ -57,6 +107,32 @@ class DdlDasar(SimpleTestCase):
             a = master_src.ddl(nama, "legacy", db_legacy="X").split(" AS\n")[0]
             b = master_src.ddl(nama, "arunika").split(" AS\n")[0]
             self.assertEqual(a, b)
+
+    def test_badan_memulangkan_kolom_sebanyak_yang_dideklarasikan(self):
+        """Yang di atas membandingkan HEADER DDL; ini membandingkan BADANnya.
+
+        Keduanya diturunkan dari sumber berbeda: header dari `kolom`, badan dari
+        SELECT yang ditulis tangan. Menambah satu kolom ke `kolom` tanpa
+        menambahkannya ke salah satu badan tidak memunculkan galat di test mana
+        pun — ia baru gagal saat `CREATE VIEW` dijalankan di server, yaitu saat
+        seseorang menjalankan `init_arunika`, mungkin berminggu-minggu kemudian.
+
+        Pemetaan `muat._rencana` juga POSISIONAL terhadap `kolom`, jadi badan
+        yang bergeser satu kolom akan memuat nilai ke field yang salah — dan
+        `tanggal` yang mendarat di kolom `keterangan` tidak melanggar satu pun
+        constraint.
+        """
+        for nama in master_src.daftar():
+            harap = len(master_src._MASTER[nama]["kolom"])
+            for mode in ("legacy", "arunika"):
+                ddl = master_src.ddl(nama, mode, db_legacy="X")
+                badan = ddl.split(" AS\n", 1)[1]
+                for i, arm in enumerate(_arm_select(badan)):
+                    self.assertEqual(
+                        _hitung_kolom(arm), harap,
+                        f"{nama}/{mode} arm#{i}: badan memulangkan "
+                        f"{_hitung_kolom(arm)} kolom, dideklarasikan {harap}",
+                    )
 
 
 class ModeLegacy(SimpleTestCase):

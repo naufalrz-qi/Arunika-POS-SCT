@@ -2321,7 +2321,15 @@ def _report_export(spec):
         if not profile:
             request.session["flash_error"] = CONN_ERROR
             return redirect(spec["url"])
-        inner, params = spec["inner"](f)
+        # Bentuknya HARUS sama dengan yang dipakai `_report_view` — lihat
+        # `_pakai_bentuk_arunika`. Sebelumnya baris ini `spec["inner"](f)` tanpa
+        # syarat, jadi dengan ARUNIKA_LAPORAN=1 layar membaca Arunika sementara
+        # tombol Excel di layar yang sama membaca legacy. Tidak ada galat, tidak
+        # ada tanda apa pun: dua angka berbeda untuk satu pertanyaan, dan yang
+        # dipercaya orang justru yang dicetak.
+        lewat_arunika = _pakai_bentuk_arunika(spec, profile)
+        bangun = spec["inner_arunika"] if lewat_arunika else spec["inner"]
+        inner, params = bangun(f)
         inner, params = reporting.apply_column_filters(inner, params, f)
 
         # Export = STREAMING XLSX: query di-execute lalu ditulis baris-per-baris
@@ -2335,10 +2343,15 @@ def _report_export(spec):
         # mudah terlewat saat menambah pembatasan — dan pembatasan yang terlewat
         # di sini membuat pembatasan di layar tak berarti apa-apa.
         columns = _kolom_tanpa_uang(request, spec)
+        # Bentuk Arunika tak punya replica: ia dibaca dari database pendamping di
+        # instans yang sama, jadi tak ada yang bisa di-fallback-i. Jalur legacy
+        # tetap memakai daftar replica. Sama persis dengan `_report_view`.
+        kandidat = [profile] if lewat_arunika else mssql.report_read_profiles(profile)
+        buka = mssql.arunika_cursor if lewat_arunika else mssql.report_cursor
         resp, last_exc = None, None
-        for read_profile in mssql.report_read_profiles(profile):
+        for read_profile in kandidat:
             try:
-                with mssql.report_cursor(read_profile) as cur:
+                with buka(read_profile) as cur:
                     cur.execute(order_sql, params)
                     resp = reporting.xlsx_stream_response(spec["filename"], columns, cur)
                 break
@@ -2435,6 +2448,7 @@ _PENJUALAN_ALL = {
     "columns": [
         {"key": "no_transaksi", "label": "No. Transaksi"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "divisi", "label": "Divisi"},
         {"key": "customer", "label": "Customer"},
         {"key": "kota", "label": "Kota"},
@@ -2480,11 +2494,13 @@ _PENJUALAN_HPP = {
     "columns": [
         {"key": "no_transaksi", "label": "No. Transaksi"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "divisi", "label": "Divisi"},
         {"key": "customer", "label": "Customer"},
         {"key": "kd_barang", "label": "Kode Barang"},
         {"key": "barang", "label": "Barang"},
         {"key": "kategori", "label": "Kategori"},
+        {"key": "petugas", "label": "Petugas"},
         {"key": "qty", "label": "Qty", "align": "right", "format": "number"},
         {"key": "satuan", "label": "Satuan"},
         {"key": "harga", "label": "Harga", "align": "right", "format": "rupiah"},
@@ -2515,6 +2531,7 @@ _PENJUALAN_NOTA = {
     "columns": [
         {"key": "no_transaksi", "label": "No. Nota"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "divisi", "label": "Divisi"},
         {"key": "customer", "label": "Customer"},
         {"key": "kota", "label": "Kota"},
@@ -2574,6 +2591,7 @@ _PENJUALAN_USER = {
     "columns": [
         {"key": "no_transaksi", "label": "No. Transaksi"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "divisi", "label": "Divisi"},
         {"key": "status", "label": "Status Transaksi"},
         {"key": "customer", "label": "Customer"},
@@ -2630,6 +2648,7 @@ _RETUR_PENJUALAN = {
     "columns": [
         {"key": "no_retur", "label": "No. Retur"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "no_bukti", "label": "No. Bukti"},
         {"key": "divisi", "label": "Divisi"},
         {"key": "keterangan_divisi", "label": "Keterangan Divisi"},
@@ -2665,6 +2684,7 @@ _PIUTANG = {
     "columns": [
         {"key": "no_transaksi", "label": "No. Nota"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "customer", "label": "Customer"},
         {"key": "jatuh_tempo", "label": "Jatuh Tempo"},
         {"key": "total_penjualan", "label": "Total Penjualan"},
@@ -2694,7 +2714,9 @@ _HUTANG = {
     "filename": "hutang",
     "columns": [
         {"key": "no_transaksi", "label": "No. Nota"},
+        {"key": "no_order", "label": "No. Order"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "supplier", "label": "Supplier"},
         {"key": "jatuh_tempo", "label": "Jatuh Tempo"},
         {"key": "total_pembelian", "label": "Total Pembelian"},
@@ -2711,6 +2733,7 @@ hutang_export = _report_export(_HUTANG)
 _KOLOM_ORDER = [
     {"key": "no_order", "label": "No. Order"},
     {"key": "tanggal", "label": "Tanggal"},
+    {"key": "tanggal_server", "label": "Tanggal Server"},
     {"key": "tanggal_terima", "label": "Tgl. Terima"},
     {"key": "divisi", "label": "Divisi"},
     {"key": "status", "label": "Status"},
@@ -2780,7 +2803,11 @@ _PEMBELIAN = {
         {"key": "no_transaksi", "label": "No. Transaksi"},
         {"key": "no_order", "label": "No Order"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "supplier", "label": "Supplier"},
+        {"key": "divisi", "label": "Divisi"},
+        {"key": "pembayaran", "label": "Pembayaran"},
+        {"key": "jatuh_tempo", "label": "Jatuh Tempo", "format": "date"},
         {"key": "note", "label": "Note"},
         {"key": "barang", "label": "Barang"},
         {"key": "qty", "label": "Qty"},
@@ -2870,6 +2897,7 @@ _RETUR_PEMBELIAN = {
     "columns": [
         {"key": "no_retur", "label": "No. Retur"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "no_bukti", "label": "No. Bukti"},
         {"key": "divisi", "label": "Divisi"},
         {"key": "supplier", "label": "Supplier"},
@@ -3184,10 +3212,65 @@ _OPNAME = {
     "filename": "opname",
     # Layar ini murni laporan. Jalur tulisnya pindah ke halaman Koreksi Stok —
     # satu sesi balancing menyentuh ratusan baris dan tak muat di modal.
-    "columns": [{"key": "no_transaksi", "label": "No. Opname"}, {"key": "tanggal", "label": "Tanggal", "format": "date"}, {"key": "divisi", "label": "Divisi"}, {"key": "kd_barang", "label": "Kd. Barang"}, {"key": "barang", "label": "Barang"}, {"key": "koreksi_masuk", "label": "Koreksi Masuk", "format": "number"}, {"key": "koreksi_keluar", "label": "Koreksi Keluar", "format": "number"}, {"key": "diferensi", "label": "Diferensi", "format": "number"}],
+    "columns": [{"key": "no_transaksi", "label": "No. Opname"}, {"key": "tanggal", "label": "Tanggal", "format": "date"}, {"key": "tanggal_server", "label": "Tanggal Server", "format": "date"}, {"key": "divisi", "label": "Divisi"}, {"key": "kd_barang", "label": "Kd. Barang"}, {"key": "barang", "label": "Barang"}, {"key": "satuan", "label": "Satuan"}, {"key": "petugas", "label": "Petugas"}, {"key": "keterangan", "label": "Keterangan"}, {"key": "koreksi_masuk", "label": "Koreksi Masuk", "format": "number"}, {"key": "koreksi_keluar", "label": "Koreksi Keluar", "format": "number"}, {"key": "diferensi", "label": "Diferensi", "format": "number"}],
 }
 opname = _report_view(_OPNAME)
 opname_export = _report_export(_OPNAME)
+
+
+# --- Nota Tanggal Mundur ---------------------------------------------------
+#
+# Sengaja TANPA `inner_arunika`: bentuk Arunika belum menyimpan cap waktu server
+# asal sama sekali (`dibuat_pada` adalah waktu baris masuk Arunika, bukan jam
+# server legacy). Memberinya kembaran sekarang berarti memajang angka yang
+# terlihat benar dan tidak benar.
+_NOTA_MUNDUR = {
+    "component": "Admin/Analytics/NotaMundur",
+    "url": "/admin-panel/analitik/nota-mundur",
+    "inner": rpt.nota_mundur,
+    "sorts": rpt.SORTS_NOTA_MUNDUR,
+    "default_sort": "jarak_hari",
+    "summary": rpt.SUMMARY_NOTA_MUNDUR,
+    "filters": rpt.FILTERS_NOTA_MUNDUR,
+    # `jenis` dan `min_selisih` disaring DI DALAM inner, bukan sebagai filter
+    # kolom di luar: yang pertama membuang seluruh arm UNION, yang kedua
+    # memangkas tiap arm sebelum digabung. Keduanya mustahil dari luar.
+    "filter_keys": ["kd_divisi", "jenis", "min_selisih"],
+    # Tanpa ini kotak "min. selisih" tampil kosong sementara nilainya diam-diam
+    # berlaku — pelajaran dari Klasifikasi Pelanggan.
+    "filter_defaults": {"min_selisih": 1},
+    # Clamp 92 hari DILEPAS, dan ini pertanyaan sejarah bukan periode: temuan
+    # terbesar di data nyata adalah koreksi stok bertanggal Maret 2024 yang baru
+    # tersimpan Januari 2026 — 683 hari. Laporan yang hanya bisa melihat 92 hari
+    # ke belakang tak akan pernah menemukannya.
+    #
+    # Terukur sebelum dilepas, sesuai syarat yang ditetapkan saat merancang:
+    # delapan arm UNION atas rentang TIGA TAHUN memakan 0,06 dtk di testGudang
+    # dan 0,04 dtk di grosirPusat (445.873 nota). Murah karena tiap arm
+    # mengerjakan index seek pada `tanggal`, bukan scan — lihat catatan bentuk
+    # predikat di `rpt.nota_mundur`.
+    "max_range_days": None,
+    # Setahun ke belakang, bukan awal bulan: bawaan sebulan membuat layar yang
+    # dibuka pertama kali hampir selalu kosong, dan orang menyimpulkan tak ada
+    # apa-apa alih-alih melebarkan rentangnya.
+    "default_from_days": 365,
+    "options": lambda p: {"divisi": _opt_divisi(p),
+                          "jenis": [{"value": j, "label": j} for j in rpt.JENIS_MUNDUR]},
+    "filename": "nota-tanggal-mundur",
+    "columns": [
+        {"key": "jenis", "label": "Jenis Dokumen"},
+        {"key": "no_dokumen", "label": "No. Dokumen"},
+        {"key": "tanggal", "label": "Tanggal", "format": "date"},
+        {"key": "tanggal_server", "label": "Tanggal Server", "format": "date"},
+        {"key": "selisih_hari", "label": "Selisih (hari)", "format": "number"},
+        {"key": "arah", "label": "Arah"},
+        {"key": "divisi", "label": "Divisi"},
+        {"key": "petugas", "label": "Petugas"},
+        {"key": "keterangan", "label": "Keterangan"},
+    ],
+}
+nota_mundur = _report_view(_NOTA_MUNDUR)
+nota_mundur_export = _report_export(_NOTA_MUNDUR)
 
 
 # Neraca Opname — mencocokkan selisih lintas sesi, yang tak bisa dilihat oleh
@@ -3933,6 +4016,7 @@ _BIAYA = {
     "columns": [
         {"key": "no_transaksi", "label": "No. Transaksi"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "divisi", "label": "Divisi"},
         {"key": "biaya", "label": "Biaya"},
         {"key": "kategori", "label": "Kategori"},

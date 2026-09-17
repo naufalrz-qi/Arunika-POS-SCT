@@ -46,6 +46,27 @@ def _auth_user_dict(user):
 NOTIF_TAMPIL = 8
 
 
+def _sumber_laporan() -> str:
+    """"arunika" atau "legacy" — sumber yang benar-benar dibaca laporan.
+
+    Sampai sekarang tak ada satu pun tanda di layar tentang ini. Dua syaratnya
+    (`ARUNIKA_LAPORAN` di env, `db_arunika` terisi di profil aktif) sama-sama
+    tak terlihat dari mana pun kecuali membuka `.env` dan tabel koneksi, jadi
+    sebuah laporan bisa pindah sumber tanpa seorang pun tahu bahwa angkanya
+    kini datang dari tempat lain.
+
+    Impor di dalam fungsi: `apps.monitoring.views` mengimpor middleware ini.
+    """
+    from core import mssql
+
+    try:
+        from apps.monitoring import views
+
+        return "arunika" if views._arunika_siap(mssql.get_active_profile()) else "legacy"
+    except Exception:  # pragma: no cover — badge tak boleh menjatuhkan halaman
+        return "legacy"
+
+
 def _notif(user):
     """Isi lonceng untuk `user`. Lazy — hanya jalan pada render Inertia.
 
@@ -120,6 +141,14 @@ def inertia_share(get_response):
             allowed_menus=lambda: menus_for(user),
             active_connection=active_connection,
             connections=connections_list,
+            # Sumber yang benar-benar dibaca laporan spec-driven: "arunika" atau
+            # "legacy". Shared prop, bukan prop per-halaman — 26 laporan memakai
+            # `ReportPage.vue` yang sama, jadi satu kunci di sini menjawabnya
+            # untuk semuanya tanpa merantai prop lewat tiap view.
+            #
+            # Lazy: hanya dievaluasi pada respons Inertia yang sungguhan, dan
+            # isinya cuma membaca env + satu kolom SQLite — nol round-trip.
+            sumber_laporan=lambda: _sumber_laporan(),
             notif=lambda: _notif(user),
             flash=lambda: {
                 "success": request.session.pop("flash_success", None),

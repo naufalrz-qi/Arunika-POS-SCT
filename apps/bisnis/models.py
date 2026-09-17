@@ -407,6 +407,21 @@ class Penjualan(models.Model):
 
     jenis_bayar = models.CharField(max_length=10, choices=JenisBayar.choices, default=JenisBayar.TUNAI)
     status = models.CharField(max_length=10, choices=StatusPenjualan.choices, default=StatusPenjualan.AKTIF)
+    # Cap waktu saat server ASAL benar-benar menyimpan dokumen ini.
+    #
+    # BUKAN `dibuat_pada` di bawahnya, dan bedanya penting: `dibuat_pada`
+    # `auto_now_add`, yaitu kapan baris ini masuk ke database Arunika — kapan
+    # transfernya dijalankan. Memakainya sebagai "Tanggal Server" berarti
+    # memajang angka yang terlihat benar dan bukan.
+    #
+    # Ada karena `tanggal` bisa DIUBAH operator di aplikasi POS lama (dirakit
+    # dari jam PC kasir), sementara ini tidak. Terukur di data nyata: 13.021
+    # dari 15.730 pembelian testGudang bertanggal beda hari dari cap servernya,
+    # dengan selisih terjauh 730 hari.
+    #
+    # Nullable karena ada sumber yang memang tak punya (`t_penambahan_kas`).
+    # "Tidak tahu" harus bisa dikatakan; mengarang tanggal lebih buruk.
+    tanggal_server = models.DateTimeField(null=True, blank=True)
     dibuat_oleh = models.IntegerField(null=True, blank=True)  # id user aplikasi
     dibuat_pada = models.DateTimeField(auto_now_add=True)
 
@@ -532,10 +547,18 @@ class Pembelian(models.Model):
     pajak_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
     ppnbm_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
     nomor_order = models.CharField(max_length=30, blank=True, null=True)
+    # Sejajar dengan `Penjualan.jatuh_tempo`. Ada di sisi beli sejak awal di
+    # legacy (`t_pembelian.tanggal_jatuh_tempo`) dan dipakai laporan Hutang,
+    # tapi bentuk Arunika sempat tak membawanya sama sekali.
+    jatuh_tempo = models.DateTimeField(null=True, blank=True)
     keterangan = models.CharField(max_length=100, blank=True)
 
     jenis_bayar = models.CharField(max_length=10, choices=JenisBayar.choices, default=JenisBayar.TUNAI)
     status = models.CharField(max_length=10, choices=StatusPenjualan.choices, default=StatusPenjualan.AKTIF)
+    # Cap waktu server ASAL — lihat catatan lengkap di `Penjualan`.
+    # Sekali lagi: BUKAN `dibuat_pada`, yang mencatat kapan baris ini masuk
+    # ke Arunika, bukan kapan server asal menyimpannya.
+    tanggal_server = models.DateTimeField(null=True, blank=True)
     dibuat_oleh = models.IntegerField(null=True, blank=True)
     dibuat_pada = models.DateTimeField(auto_now_add=True)
 
@@ -778,6 +801,10 @@ class JurnalKas(models.Model):
 
     jumlah = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     keterangan = models.CharField(max_length=200, blank=True)
+    # Cap waktu server ASAL — lihat catatan lengkap di `Penjualan`.
+    # Sekali lagi: BUKAN `dibuat_pada`, yang mencatat kapan baris ini masuk
+    # ke Arunika, bukan kapan server asal menyimpannya.
+    tanggal_server = models.DateTimeField(null=True, blank=True)
     dibuat_oleh = models.IntegerField(null=True, blank=True)
     dibuat_pada = models.DateTimeField(auto_now_add=True)
 
@@ -882,6 +909,21 @@ class KoreksiStok(models.Model):
     jenis = models.CharField(max_length=12, choices=JenisKoreksi.choices)
     keterangan = models.CharField(max_length=100, blank=True)
     pengguna = models.ForeignKey("Pengguna", null=True, blank=True, on_delete=models.PROTECT)
+    # Cap waktu saat server ASAL benar-benar menyimpan dokumen ini.
+    #
+    # BUKAN `dibuat_pada` di bawahnya, dan bedanya penting: `dibuat_pada`
+    # `auto_now_add`, yaitu kapan baris ini masuk ke database Arunika — kapan
+    # transfernya dijalankan. Memakainya sebagai "Tanggal Server" berarti
+    # memajang angka yang terlihat benar dan bukan.
+    #
+    # Ada karena `tanggal` bisa DIUBAH operator di aplikasi POS lama (dirakit
+    # dari jam PC kasir), sementara ini tidak. Terukur di data nyata: 13.021
+    # dari 15.730 pembelian testGudang bertanggal beda hari dari cap servernya,
+    # dengan selisih terjauh 730 hari.
+    #
+    # Nullable karena ada sumber yang memang tak punya (`t_penambahan_kas`).
+    # "Tidak tahu" harus bisa dikatakan; mengarang tanggal lebih buruk.
+    tanggal_server = models.DateTimeField(null=True, blank=True)
     dibuat_oleh = models.IntegerField(null=True, blank=True)  # id user aplikasi
     dibuat_pada = models.DateTimeField(auto_now_add=True)
 
@@ -938,6 +980,21 @@ class PenjualanOrder(models.Model):
     nomor_nota = models.CharField(max_length=30, blank=True, null=True)
     total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
 
+    # Cap waktu saat server ASAL benar-benar menyimpan dokumen ini.
+    #
+    # BUKAN `dibuat_pada` di bawahnya, dan bedanya penting: `dibuat_pada`
+    # `auto_now_add`, yaitu kapan baris ini masuk ke database Arunika — kapan
+    # transfernya dijalankan. Memakainya sebagai "Tanggal Server" berarti
+    # memajang angka yang terlihat benar dan bukan.
+    #
+    # Ada karena `tanggal` bisa DIUBAH operator di aplikasi POS lama (dirakit
+    # dari jam PC kasir), sementara ini tidak. Terukur di data nyata: 13.021
+    # dari 15.730 pembelian testGudang bertanggal beda hari dari cap servernya,
+    # dengan selisih terjauh 730 hari.
+    #
+    # Nullable karena ada sumber yang memang tak punya (`t_penambahan_kas`).
+    # "Tidak tahu" harus bisa dikatakan; mengarang tanggal lebih buruk.
+    tanggal_server = models.DateTimeField(null=True, blank=True)
     dibuat_oleh = models.IntegerField(null=True, blank=True)  # id user aplikasi
     dibuat_pada = models.DateTimeField(auto_now_add=True)
 
@@ -997,6 +1054,21 @@ class _ReturBase(models.Model):
     kas = models.ForeignKey("Kas", null=True, blank=True, on_delete=models.PROTECT)
     keterangan = models.CharField(max_length=100, blank=True)
     pengguna = models.ForeignKey("Pengguna", null=True, blank=True, on_delete=models.PROTECT)
+    # Cap waktu saat server ASAL benar-benar menyimpan dokumen ini.
+    #
+    # BUKAN `dibuat_pada` di bawahnya, dan bedanya penting: `dibuat_pada`
+    # `auto_now_add`, yaitu kapan baris ini masuk ke database Arunika — kapan
+    # transfernya dijalankan. Memakainya sebagai "Tanggal Server" berarti
+    # memajang angka yang terlihat benar dan bukan.
+    #
+    # Ada karena `tanggal` bisa DIUBAH operator di aplikasi POS lama (dirakit
+    # dari jam PC kasir), sementara ini tidak. Terukur di data nyata: 13.021
+    # dari 15.730 pembelian testGudang bertanggal beda hari dari cap servernya,
+    # dengan selisih terjauh 730 hari.
+    #
+    # Nullable karena ada sumber yang memang tak punya (`t_penambahan_kas`).
+    # "Tidak tahu" harus bisa dikatakan; mengarang tanggal lebih buruk.
+    tanggal_server = models.DateTimeField(null=True, blank=True)
     dibuat_oleh = models.IntegerField(null=True, blank=True)  # id user aplikasi
     dibuat_pada = models.DateTimeField(auto_now_add=True)
 
