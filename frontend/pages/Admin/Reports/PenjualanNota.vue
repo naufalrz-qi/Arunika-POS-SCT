@@ -34,15 +34,15 @@ const columns = [
   { key: "tanggal_server", label: "Tanggal Server", format: "date" },
   { key: "divisi", label: "Divisi" },
   { key: "customer", label: "Customer" },
-  { key: "kota", label: "Kota" },
+  { key: "kota", label: "Kota", opsional: true },
   { key: "total_kotor", label: "Total Kotor", align: "right", format: "rupiah" },
   { key: "potongan", label: "Potongan", align: "right", format: "rupiah" },
-  { key: "voucher", label: "Voucher", align: "right", format: "rupiah" },
-  { key: "total_setelah_voucher", label: "Total Setelah Voucher", align: "right", format: "rupiah" },
+  { key: "voucher", label: "Voucher", align: "right", format: "rupiah", opsional: true },
+  { key: "total_setelah_voucher", label: "Total Setelah Voucher", align: "right", format: "rupiah", opsional: true },
   { key: "pajak", label: "Pajak", align: "right", format: "rupiah" },
-  { key: "pajak2", label: "Pajak 2", align: "right", format: "rupiah" },
+  { key: "pajak2", label: "Pajak 2", align: "right", format: "rupiah", opsional: true },
   { key: "total_bersih", label: "Total Bersih", align: "right", format: "rupiah" },
-  { key: "petugas", label: "Petugas" },
+  { key: "petugas", label: "Petugas", opsional: true },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);

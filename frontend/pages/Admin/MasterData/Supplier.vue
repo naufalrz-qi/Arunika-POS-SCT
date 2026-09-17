@@ -64,14 +64,14 @@ const columns = [
   { key: "kd_kota", label: "Kota" },
   { key: "alamat", label: "Alamat" },
   { key: "telepon", label: "Telepon" },
-  { key: "fax", label: "Fax" },
-  { key: "kontak", label: "Kontak" },
+  { key: "fax", label: "Fax", opsional: true },
+  { key: "kontak", label: "Kontak", opsional: true },
   { key: "hp", label: "HP" },
-  { key: "email", label: "Email" },
-  { key: "kd_bank", label: "Bank" },
-  { key: "rekening", label: "No. Rekening" },
+  { key: "email", label: "Email", opsional: true },
+  { key: "kd_bank", label: "Bank", opsional: true },
+  { key: "rekening", label: "No. Rekening", opsional: true },
   { key: "jenis", label: "Jenis" },
-  { key: "keterangan", label: "Keterangan" },
+  { key: "keterangan", label: "Keterangan", opsional: true },
 ];
 
 const exportColumns = columns.map(({ key, label }) => ({ key, label }));

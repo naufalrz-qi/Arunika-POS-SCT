@@ -22,18 +22,19 @@ const SECTION_LABELS = {
   admin: "Administrasi",
 };
 
-// Navbar tabs: backend sections consolidated into 5 groups so the tab row
-// stays airy; the original sections become sub-headers in the sidebar.
+// Sidebar groups: backend sections consolidated into 6 groups; the original
+// sections become sub-headers inside each group. `icon` is what the collapsed
+// sidebar shows in place of the group label.
 const NAV_GROUPS = [
   // Tetap SATU tab "Kasir"; pemecahannya terjadi di sidebar sebagai tiga
   // sub-judul, sama seperti Master Data. Menjadikannya tiga tab akan memaksa
   // kasir berpindah tab untuk pekerjaan yang ia lakukan berselang-seling.
-  { key: "pos", label: "Kasir", sections: ["pos_jual", "pos_beli", "pos_lain"] },
-  { key: "ringkasan", label: "Ringkasan", sections: ["ringkasan"] },
-  { key: "laporan", label: "Laporan", sections: ["penjualan", "pembelian", "akuntansi", "analitik"] },
-  { key: "operasional", label: "Operasional", sections: ["stok", "promo", "kas"] },
-  { key: "master", label: "Master Data", sections: ["master", "master_harga", "master_sync"] },
-  { key: "admin", label: "Administrasi", sections: ["admin"] },
+  { key: "pos", label: "Kasir", icon: "cart", sections: ["pos_jual", "pos_beli", "pos_lain"] },
+  { key: "ringkasan", label: "Ringkasan", icon: "dashboard", sections: ["ringkasan"] },
+  { key: "laporan", label: "Laporan", icon: "chart", sections: ["penjualan", "pembelian", "akuntansi", "analitik"] },
+  { key: "operasional", label: "Operasional", icon: "box", sections: ["stok", "promo", "kas"] },
+  { key: "master", label: "Master Data", icon: "list", sections: ["master", "master_harga", "master_sync"] },
+  { key: "admin", label: "Administrasi", icon: "key", sections: ["admin"] },
 ];
 
 // Single source for nav logic: section grouping + active-state matching.
@@ -77,7 +78,7 @@ export function useNav() {
       null,
   );
 
-  // Navbar tabs: NAV_GROUPS with only the (RBAC-visible) sections present;
+  // Sidebar groups: NAV_GROUPS with only the (RBAC-visible) sections present;
   // sections outside NAV_GROUPS get their own tab so nothing silently vanishes.
   const tabs = computed(() => {
     const byKey = Object.fromEntries(sections.value.map((s) => [s.key, s]));
@@ -87,13 +88,14 @@ export function useNav() {
       return {
         key: g.key,
         label: g.label,
+        icon: g.icon,
         subsections,
         items: subsections.flatMap((s) => s.items),
       };
     }).filter((t) => t.items.length);
     for (const s of sections.value) {
       if (!grouped.has(s.key)) {
-        out.push({ key: s.key, label: s.label, subsections: [s], items: s.items });
+        out.push({ key: s.key, label: s.label, icon: s.items[0].icon, subsections: [s], items: s.items });
       }
     }
     return out;

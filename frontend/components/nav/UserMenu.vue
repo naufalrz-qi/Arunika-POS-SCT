@@ -3,9 +3,11 @@ import { Link } from "@inertiajs/vue3";
 import { storeToRefs } from "pinia";
 import { useUserStore } from "@/stores/user";
 import { useDismissable } from "@/composables/useDismissable";
+import { useUiStore } from "@/stores/ui";
 import { ROLE_LABELS } from "@/utils/labels";
 import Icon from "./Icon.vue";
 
+const ui = useUiStore();
 const userStore = useUserStore();
 const { user } = storeToRefs(userStore);
 const { open, root, close, toggle } = useDismissable();
@@ -46,6 +48,17 @@ const { open, root, close, toggle } = useDismissable();
         >
           <Icon name="user" size="h-4 w-4" /> Profil Saya
         </Link>
+        <!-- Pindah dari header: dipakai sekali lalu dibiarkan, tak perlu tombol
+             sendiri di baris yang di ponsel sudah penuh. Menu tetap terbuka
+             supaya hasilnya langsung terlihat. -->
+        <button
+          type="button"
+          class="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-ink hover:bg-surface-3"
+          @click="ui.toggleTheme()"
+        >
+          <Icon :name="ui.theme === 'dark' ? 'sun' : 'moon'" size="h-4 w-4" />
+          {{ ui.theme === "dark" ? "Tema terang" : "Tema gelap" }}
+        </button>
         <Link
           href="/logout"
           method="post"

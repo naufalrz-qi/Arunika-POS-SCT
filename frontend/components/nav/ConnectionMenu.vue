@@ -37,7 +37,10 @@ function choose(c) {
       <span v-if="switching" class="h-2 w-2 animate-pulse rounded-full bg-brand-400" />
       <span v-else :class="['h-2 w-2 rounded-full', dot(active?.status)]" />
       <span class="hidden text-xs text-ink-muted sm:inline">Koneksi</span>
-      <span class="text-xs font-medium">{{ active?.name || "Belum ada" }}</span>
+      <!-- Nama tetap tampil di ponsel, hanya dipotong: koneksi menentukan ke
+           cabang MANA nota tertulis, jadi tak boleh disembunyikan di balik
+           menu hanya demi ruang. -->
+      <span class="max-w-[6.5rem] truncate text-xs font-medium sm:max-w-none">{{ active?.name || "Belum ada" }}</span>
       <span
         v-if="uji(active)"
         class="shrink-0 rounded bg-warning-bg px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-warning-fg"

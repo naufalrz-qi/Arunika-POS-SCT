@@ -42,11 +42,11 @@ const columns = [
   { key: "customer", label: "Customer" },
   { key: "kd_barang", label: "Kode Barang" },
   { key: "barang", label: "Barang" },
-  { key: "kategori", label: "Kategori" },
+  { key: "kategori", label: "Kategori", opsional: true },
   { key: "qty", label: "Qty", align: "right", format: "number" },
   { key: "satuan", label: "Satuan" },
-  { key: "harga", label: "Harga", align: "right", format: "rupiah" },
-  { key: "harga_pokok", label: "Harga Pokok", align: "right", format: "rupiah" },
+  { key: "harga", label: "Harga", align: "right", format: "rupiah", opsional: true },
+  { key: "harga_pokok", label: "Harga Pokok", align: "right", format: "rupiah", opsional: true },
   { key: "total_bersih", label: "Total Bersih", align: "right", format: "rupiah" },
   { key: "total_harga_pokok", label: "Total HPP", align: "right", format: "rupiah" },
   { key: "laba", label: "Laba", align: "right", format: "rupiah" },
@@ -115,7 +115,7 @@ const summaryItems = computed(() => {
         </FilterPanel>
       </template>
       <template #cell-laba="{ value }">
-        <span :class="Number(value) < 0 ? 'text-red-600 font-medium' : ''">
+        <span :class="Number(value) < 0 ? 'text-danger-fg font-medium' : ''">
           {{ value == null ? "—" : new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(value) }}
         </span>
       </template>

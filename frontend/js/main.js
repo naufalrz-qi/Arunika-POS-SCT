@@ -32,6 +32,6 @@ createInertiaApp({
       .mount(el);
   },
   progress: {
-    color: "#ff2d2d",
+    color: "#2563eb", // = brand-600; hex karena NProgress tak membaca var CSS
   },
 });

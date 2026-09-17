@@ -19,7 +19,13 @@ const colClass = computed(
 </script>
 <template>
   <div v-if="items.length" :class="['mb-4 grid grid-cols-2 gap-3', colClass]">
-    <div v-for="it in items" :key="it.label" class="surface-flat flex h-full flex-col justify-between px-3.5 py-3">
+    <!-- Kartu terakhir yang jatuh sendirian di grid dua kolom ponsel (3 atau 5
+         ringkasan) dilebarkan penuh, alih-alih menyisakan setengah baris kosong. -->
+    <div
+      v-for="it in items"
+      :key="it.label"
+      class="surface-flat flex h-full flex-col justify-between px-4 py-3.5 max-sm:odd:last:col-span-2"
+    >
       <p class="text-xs text-ink-muted">{{ it.label }}</p>
       <p class="mt-1.5 text-xl font-semibold tabular-nums tracking-tight text-ink">{{ it.value }}</p>
     </div>

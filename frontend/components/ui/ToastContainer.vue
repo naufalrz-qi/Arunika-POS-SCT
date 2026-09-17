@@ -30,7 +30,9 @@ const styles = {
 
 <template>
   <Teleport to="body">
-    <!-- w-80 tetap (320px) meluber di viewport 320px begitu ditambah right-4. -->
+    <!-- w-80 tetap (320px) meluber di viewport 320px begitu ditambah right-4.
+         top-[4.5rem]: di bawah header 56px. Di top-4 toast menutupi lonceng,
+         koneksi, dan menu akun selama 3,5 detik tepat setelah login. -->
     <!-- role=status + aria-live: tanpa ini setiap konfirmasi simpan/hapus lewat
          tanpa pernah terdengar oleh pembaca layar. "polite" supaya tidak
          memotong pengumuman yang sedang berjalan. -->
@@ -38,7 +40,7 @@ const styles = {
       role="status"
       aria-live="polite"
       aria-atomic="false"
-      class="fixed right-4 top-4 z-[60] flex w-[calc(100vw-2rem)] max-w-80 flex-col gap-2"
+      class="fixed right-4 top-[4.5rem] z-[60] flex w-[calc(100vw-2rem)] max-w-80 flex-col gap-2"
     >
       <TransitionGroup
         enter-active-class="transition duration-200 ease-out"

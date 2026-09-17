@@ -35,17 +35,17 @@ const columns = [
   { key: "kategori", label: "Kategori" },
   // Nama, bukan kode. Kolom ini dulu berlabel manusiawi tapi terikat ke kunci
   // kd_* sehingga yang tampil MAA003, bukan namanya.
-  { key: "jenis_bahan", label: "Jenis Bahan" },
-  { key: "departemen", label: "Departemen" },
-  { key: "divisi_barang", label: "Divisi Barang" },
-  { key: "sub_kategori", label: "Sub Kategori" },
-  { key: "ukuran", label: "Ukuran" },
-  { key: "pabrik", label: "Pabrik" },
+  { key: "jenis_bahan", label: "Jenis Bahan", opsional: true },
+  { key: "departemen", label: "Departemen", opsional: true },
+  { key: "divisi_barang", label: "Divisi Barang", opsional: true },
+  { key: "sub_kategori", label: "Sub Kategori", opsional: true },
+  { key: "ukuran", label: "Ukuran", opsional: true },
+  { key: "pabrik", label: "Pabrik", opsional: true },
   { key: "satuan", label: "Satuan", align: "center" },
   { key: "harga_jual", label: "Harga", align: "right", format: "rupiah" },
   { key: "status", label: "Status", align: "center" },
-  { key: "status_pinjam", label: "Status Pinjam", align: "center" },
-  { key: "keterangan", label: "Keterangan" },
+  { key: "status_pinjam", label: "Status Pinjam", align: "center", opsional: true },
+  { key: "keterangan", label: "Keterangan", opsional: true },
 ];
 
 const summaryItems = computed(() => {

@@ -68,7 +68,10 @@ const presets = [
          alih-alih menumpuk baris sendiri di atas kolom tanggal — baris ekstra
          di atas membuat kolom tanggal turun sendirian dan tak lagi sejajar
          dengan Divisi/Cari di sebelahnya. -->
-    <div class="flex flex-wrap items-center gap-1.5">
+    <!-- Rapat (gap-1, px-2): dengan jarak lama, pemilih mode + lima pintasan
+         melebihi dua kolom filter di layar 1440px dan "Bulan Lalu" turun ke
+         baris sendiri. -->
+    <div class="flex flex-wrap items-center gap-1">
       <slot name="leading" />
       <span v-if="$slots.leading" class="mx-0.5 h-4 w-px bg-border-default" aria-hidden="true"></span>
       <button
@@ -76,7 +79,7 @@ const presets = [
         :key="p.key"
         type="button"
         @click="setPreset(p.key)"
-        class="rounded-full border border-border-default px-2.5 py-0.5 text-[11px] text-ink-muted transition-colors hover:border-brand-400 hover:text-brand-fg"
+        class="rounded-full border border-border-default px-2 py-0.5 text-[11px] text-ink-muted transition-colors hover:border-brand-400 hover:text-brand-fg"
       >
         {{ p.label }}
       </button>

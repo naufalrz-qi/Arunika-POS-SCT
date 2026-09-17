@@ -17,7 +17,7 @@ const open = ref(props.defaultOpen);
     <button
       type="button"
       :aria-expanded="open"
-      class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-2"
+      class="flex w-full items-center justify-between gap-3 rounded-card px-5 py-3.5 text-left transition-colors hover:bg-surface-2"
       @click="open = !open"
     >
       <div class="flex items-center gap-3">
@@ -35,7 +35,7 @@ const open = ref(props.defaultOpen);
         :class="['shrink-0 text-ink-subtle transition-transform duration-200', open ? '' : '-rotate-90']"
       />
     </button>
-    <div v-show="open" class="border-t border-border-default p-4">
+    <div v-show="open" class="px-5 pb-5">
       <slot />
     </div>
   </div>

@@ -24,7 +24,9 @@ import Pagination from "./Pagination.vue";
 
 const props = defineProps({
   // columns: [{ key, label, sortable?, align?: 'left'|'right'|'center',
-  //             format?: 'number'|'rupiah'|'persen'|'date' }]
+  //             format?: 'number'|'rupiah'|'persen'|'date', opsional? }]
+  // `opsional: true` = tersembunyi sampai pengguna menyalakannya lewat menu
+  // Kolom. Hanya tampilan: export tetap membawa semua kolom.
   columns: { type: Array, required: true },
   rows: { type: Array, default: () => [] },
   rowKey: { type: String, default: "id" },
@@ -50,17 +52,26 @@ const halaman = computed(() => usePage().url.split(/[?#]/)[0].replace(/\/+$/, ""
 const storageKey = computed(() => `sct.cols.${halaman.value}`);
 const lebarKey = computed(() => `sct.lebar.${halaman.value}`);
 
+// Kolom opsional tersembunyi selama pengguna belum pernah memilih sendiri.
+// Penjualan Detail punya 26 kolom; tanpa ini delapan slot diskon dan kolom
+// sekunder lain mendorong Barang/Qty/Subtotal keluar layar di setiap kunjungan.
+function bawaan() {
+  return new Set(props.columns.filter((c) => c.opsional).map((c) => c.key));
+}
+
 function loadHidden() {
   try {
     const raw = localStorage.getItem(storageKey.value);
-    if (!raw) return new Set();
+    // null = belum pernah memilih. "[]" = sengaja menampilkan semua, dan itu
+    // harus tetap dihormati walau ada kolom opsional.
+    if (raw === null) return bawaan();
     const keys = JSON.parse(raw);
     // Saring terhadap kolom yang benar-benar ada: definisi kolom bisa berubah
     // setelah rilis, dan key basi akan menyembunyikan kolom yang salah.
     const known = new Set(props.columns.map((c) => c.key));
     return new Set((Array.isArray(keys) ? keys : []).filter((k) => known.has(k)));
   } catch {
-    return new Set();
+    return bawaan();
   }
 }
 
@@ -79,17 +90,31 @@ function toggleColumn(key) {
   else next.add(key);
   // Sisakan minimal satu kolom; tabel tanpa kolom tak bisa dipulihkan lewat UI.
   if (next.size >= props.columns.length) return;
+  simpanKolom(next);
+}
+
+// Selalu ditulis, termasuk himpunan kosong: kosong ≠ bawaan begitu ada kolom
+// opsional (lihat loadHidden).
+function simpanKolom(next) {
   hiddenKeys.value = next;
   try {
-    if (next.size) localStorage.setItem(storageKey.value, JSON.stringify([...next]));
-    else localStorage.removeItem(storageKey.value);
+    localStorage.setItem(storageKey.value, JSON.stringify([...next]));
   } catch {
     /* mode privat / kuota penuh: pilihan tetap berlaku untuk sesi ini */
   }
 }
 
 function resetColumns() {
-  hiddenKeys.value = new Set();
+  simpanKolom(new Set());
+}
+
+const bedaDariBawaan = computed(() => {
+  const b = bawaan();
+  return b.size > 0 && (b.size !== hiddenKeys.value.size || [...b].some((k) => !hiddenKeys.value.has(k)));
+});
+
+function kolomBawaan() {
+  hiddenKeys.value = bawaan();
   try {
     localStorage.removeItem(storageKey.value);
   } catch {
@@ -248,8 +273,12 @@ function isNumeric(col) {
   <!-- Satu-satunya permukaan terangkat di halaman ini; lihat catatan
        .surface-raised di main.css. -->
   <div class="surface-raised overflow-hidden">
-      <div class="flex justify-end border-b border-border-default bg-surface-2 px-3 py-1.5">
-        <div ref="columnMenuRoot" class="relative">
+      <!-- Baris alat: `toolbar` milik pemanggil (hitungan baris, export) di kiri,
+           menu kolom di kanan. Dulu hitungan dan export duduk di baris sendiri
+           di atas tabel. -->
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border-default px-3 py-1.5">
+        <slot name="toolbar" />
+        <div ref="columnMenuRoot" class="relative ml-auto">
           <button
             type="button"
             class="rounded-control border border-border-default px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-3"
@@ -280,6 +309,14 @@ function isNumeric(col) {
               @click="resetColumns"
             >
               Tampilkan semua kolom
+            </button>
+            <button
+              v-if="bedaDariBawaan"
+              type="button"
+              class="mt-1 w-full border-t border-border-default px-2 pt-2 text-left text-xs text-brand-fg hover:underline"
+              @click="kolomBawaan"
+            >
+              Kembalikan kolom bawaan
             </button>
             <!-- Lebar juga tersimpan antar-kunjungan, jadi ia butuh jalan
                  pulang yang sama jelasnya. Tanpa ini kolom yang telanjur
@@ -317,10 +354,10 @@ function isNumeric(col) {
                di dalam tabel: garis brand 2px di tepi bawah judulnya. Itu
                menjawab "tabel ini urut berdasarkan apa?" tanpa harus mencari
                tanda panah kecil di antara 25 judul kolom. -->
-          <thead class="sticky top-0 z-10 bg-surface-3">
+          <thead class="sticky top-0 z-10 bg-surface-2">
             <tr ref="barisJudul">
               <th
-                v-for="col in visibleColumns"
+                v-for="(col, i) in visibleColumns"
                 :key="col.key"
                 scope="col"
                 :role="col.sortable ? 'button' : undefined"
@@ -335,7 +372,11 @@ function isNumeric(col) {
                     : undefined
                 "
                 :class="[
-                  'relative whitespace-nowrap border-b border-border-strong px-2 py-1.5 text-[11px] font-semibold',
+                  'whitespace-nowrap border-b border-border-strong px-2 py-1.5 text-[11px] font-semibold',
+                  // Kolom pertama (biasanya nomor dokumen/kode) terkunci saat
+                  // tabel digeser ke samping. `sticky` juga jadi acuan posisi
+                  // pegangan lebar di dalamnya, sama seperti `relative`.
+                  i === 0 ? 'sticky left-0 z-20 bg-surface-2' : 'relative',
                   adaLebar ? 'overflow-hidden' : '',
                   alignClass(col),
                   sortKey === col.key ? 'text-ink shadow-[inset_0_-2px_0_var(--color-brand-500)]' : 'text-ink-muted',
@@ -392,13 +433,20 @@ function isNumeric(col) {
             <tr
               v-for="row in loading ? [] : rows"
               :key="row[rowKey]"
-              class="even:bg-surface-2/60 hover:bg-surface-3"
+              class="group/row even:bg-surface-2 hover:bg-surface-3"
             >
               <td
-                v-for="col in visibleColumns"
+                v-for="(col, i) in visibleColumns"
                 :key="col.key"
                 :class="[
                   'px-2 py-1 leading-snug text-ink',
+                  // Sel terkunci butuh latar pekat sendiri yang mengikuti zebra
+                  // dan hover barisnya — tanpa itu kolom lain tembus di bawahnya.
+                  // Garis kanannya pseudo-elemen: border sel tertinggal saat
+                  // digeser karena tabel memakai border-collapse.
+                  i === 0
+                    ? 'sticky left-0 z-[5] bg-surface group-even/row:bg-surface-2 group-hover/row:bg-surface-3 after:pointer-events-none after:absolute after:inset-y-0 after:right-0 after:w-px after:bg-border-default'
+                    : '',
                   adaLebar ? 'overflow-hidden' : '',
                   alignClass(col),
                 ]"
@@ -440,7 +488,7 @@ function isNumeric(col) {
 
       <div
         v-if="!loading && total"
-        class="flex flex-wrap items-center justify-between gap-2 border-t border-border-default bg-surface-2 px-3 py-1.5 text-xs text-ink-muted"
+        class="flex flex-wrap items-center justify-between gap-2 border-t border-border-default px-3 py-1.5 text-xs text-ink-muted"
       >
         <div class="flex items-center gap-2">
           <label :for="`${rowKey}-per-page`">Per halaman:</label>

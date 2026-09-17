@@ -67,7 +67,7 @@ function exportXlsx() {
       <div v-if="searchKeys.length" class="sm:max-w-xs sm:flex-1">
         <Input v-model="q" label="Cari (dalam data)" :placeholder="searchPlaceholder" />
       </div>
-      <p class="text-xs text-neutral-400 sm:pb-2">
+      <p class="text-xs text-ink-subtle sm:pb-2">
         Menampilkan {{ idNum(displayed.length) }} dari {{ idNum(rows.length) }} baris.
       </p>
       <div class="sm:ml-auto sm:pb-0.5">

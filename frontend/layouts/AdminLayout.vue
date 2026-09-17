@@ -3,13 +3,10 @@ import { Head } from "@inertiajs/vue3";
 import TopNav from "@/components/nav/TopNav.vue";
 import SideNav from "@/components/nav/SideNav.vue";
 import ToastContainer from "@/components/ui/ToastContainer.vue";
-import { useNav } from "@/composables/useNav";
 
 defineProps({
   title: { type: String, default: "" },
 });
-
-const { activeSection } = useNav();
 </script>
 
 <template>
@@ -20,22 +17,15 @@ const { activeSection } = useNav();
   <!-- 100dvh, bukan 100vh: di browser ponsel 100vh termasuk area yang tertutup
        toolbar, jadi baris terbawah (footer tabel: pemilih per-halaman dan
        paginasi) tersembunyi di balik chrome browser. -->
-  <div class="flex h-[100dvh] flex-col overflow-hidden bg-surface-2">
-    <TopNav />
-    <div class="flex min-h-0 flex-1">
-      <SideNav />
-      <main class="scroll-slim min-w-0 flex-1 overflow-y-auto">
-        <div class="page-enter mx-auto max-w-[1600px] p-3 sm:p-4 lg:p-6">
-          <!-- Judul halaman: nama bagian sebagai konteks, lalu judulnya.
-               Sebelumnya baris ini juga membawa "// " di depan nama bagian dan
-               tiga kotak merah/kuning/biru berdenyut di sisi kanan — hiasan
-               yang tak menunjuk apa pun, di baris yang dibaca paling sering. -->
-          <div v-if="title" class="mb-4">
-            <p v-if="activeSection" class="text-xs text-ink-subtle">
-              {{ activeSection.label }}
-            </p>
-            <h1 class="mt-0.5 text-xl font-semibold tracking-tight text-ink">{{ title }}</h1>
-          </div>
+  <div class="flex h-[100dvh] overflow-hidden bg-surface-2">
+    <SideNav />
+    <div class="flex min-w-0 flex-1 flex-col">
+      <TopNav />
+      <main class="scroll-slim min-h-0 flex-1 overflow-y-auto">
+        <div class="page-enter mx-auto max-w-[1600px] px-3 py-4 sm:px-5 lg:px-8 lg:py-6">
+          <!-- Nama bagian tidak lagi ditulis di atas judul: sudah ada di jejak
+               header, tepat di atasnya. -->
+          <h1 v-if="title" class="mb-5 text-xl font-semibold tracking-tight text-ink sm:text-2xl">{{ title }}</h1>
           <slot />
         </div>
       </main>
