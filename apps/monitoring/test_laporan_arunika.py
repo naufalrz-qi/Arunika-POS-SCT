@@ -14,6 +14,8 @@ kunci itu), dan bahwa gerbangnya tetap mati kecuali ketiga syaratnya terpenuhi.
 import re
 from pathlib import Path
 
+from pathlib import Path
+
 from django.test import RequestFactory, SimpleTestCase, TestCase
 
 from apps.core import reporting
@@ -404,7 +406,15 @@ class SumberLayarDanExportSama(TestCase):
         asli = views.LAPORAN_ARUNIKA
         views.LAPORAN_ARUNIKA = nyalakan
         try:
-            with patch.object(views.mssql, "arunika_cursor", perekam("arunika")), \
+            # Pilihan dropdown divisi (`inv.list_divisi`) membaca master legacy
+            # lewat `report_cursor`, DENGAN SENGAJA: master divisi tak punya
+            # kembaran Arunika. Hasilnya dicache per profil, jadi laporan mana
+            # yang kebetulan mengisi cache duluan berpindah-pindah mengikuti
+            # urutan test — dan laporan itu lalu terlihat "membaca legacy".
+            # Yang dijaga test ini BADAN laporannya, jadi pemuat pilihan
+            # dimatikan alih-alih ikut terekam.
+            with patch.object(views, "_opt_divisi", lambda p: []), \
+                 patch.object(views.mssql, "arunika_cursor", perekam("arunika")), \
                  patch.object(views.mssql, "report_cursor", perekam("legacy")):
                 for nama, spec in _spec_arunika():
                     fase["kini"] = "layar"
@@ -433,3 +443,56 @@ class SumberLayarDanExportSama(TestCase):
         layar, export = self._jalankan(False)
         self.assertEqual(layar, {"legacy"})
         self.assertEqual(export, {"legacy"})
+
+
+class PetaKembaranTerdaftar(SimpleTestCase):
+    """Peta "laporan mana yang sudah pindah" di KESIAPAN-FITUR.md harus benar.
+
+    Daftar semacam itu sudah pernah basi sekali: §7.13 rancangan masih
+    mendaftar Master Produk sebagai sisa berbulan-bulan sesudah kembarannya
+    terpasang, dan tak ada yang tahu sampai seseorang bertanya. Daftar yang
+    tidak diperiksa apa pun akan selalu berakhir begitu — jadi yang ini
+    dihitung ulang dari `views.py` setiap kali test jalan.
+    """
+
+    # Layar yang pindah lewat `_arunika_siap`, bukan `inner_arunika`: keduanya
+    # tak punya satu `inner` untuk ditukar (export dua sheet + panel detail),
+    # jadi spec-nya sengaja tanpa kunci itu — lihat KlasifikasiBespoke di atas.
+    LEWAT_BESPOKE = {"Klasifikasi Pelanggan"}
+
+    def _bagian_peta(self) -> str:
+        from django.conf import settings
+
+        teks = (Path(settings.BASE_DIR) / "KESIAPAN-FITUR.md").read_text(encoding="utf-8")
+        awal = teks.index("## Kembaran Arunika per laporan")
+        return teks[awal : teks.index("\n## ", awal + 10)]
+
+    def _label_per_spec(self) -> list[tuple[str, bool]]:
+        from apps.core.menus import ALL_MENUS
+
+        label = {m["href"]: m["label"] for m in ALL_MENUS}
+        keluar = []
+        for nama in dir(views):
+            o = getattr(views, nama)
+            if isinstance(o, dict) and o.get("inner") and o.get("url") in label:
+                keluar.append((label[o["url"]], bool(o.get("inner_arunika"))))
+        return keluar
+
+    def test_setiap_laporan_ada_di_peta_dan_di_sisi_yang_benar(self):
+        bagian = self._bagian_peta()
+        # Tabel "belum" dimulai di baris header-nya; apa pun sesudah itu = belum.
+        potong = bagian.index("| Laporan | Hambatan |")
+        sudah, belum = bagian[:potong], bagian[potong:]
+
+        spec = self._label_per_spec()
+        self.assertGreaterEqual(len(spec), 20, "penghitung spec nyaris tak menemukan apa pun")
+
+        salah = []
+        for nama, punya_kembaran in spec:
+            pindah = punya_kembaran or nama in self.LEWAT_BESPOKE
+            tujuan, lawan = (sudah, belum) if pindah else (belum, sudah)
+            if nama not in tujuan:
+                salah.append(
+                    f"{nama}: {'sudah' if pindah else 'belum'} punya kembaran, "
+                    + ("tercatat di sisi sebaliknya" if nama in lawan else "tak ada di peta"))
+        self.assertEqual(salah, [], "KESIAPAN-FITUR.md § Kembaran Arunika tidak sesuai kode")

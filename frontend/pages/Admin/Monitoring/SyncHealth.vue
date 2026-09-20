@@ -17,6 +17,7 @@ import Button from "@/components/ui/Button.vue";
 import Badge from "@/components/ui/Badge.vue";
 import Banner from "@/components/ui/Banner.vue";
 import DataTable from "@/components/ui/DataTable.vue";
+import { tanggal as fmtTanggal } from "@/utils/tanggal";
 import LoadingCard from "@/components/ui/LoadingCard.vue";
 import CollapsibleSection from "@/components/ui/CollapsibleSection.vue";
 import Select from "@/components/ui/Select.vue";
@@ -170,9 +171,9 @@ const jam = (v) =>
   !v ? "—" : new Date(v).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 // Tanggal saja, tanpa jam: tutup buku selalu jatuh di 23:59:59 dan menampilkan
-// jamnya cuma menambah tujuh karakter yang sama di setiap baris.
-const tanggal = (v) =>
-  !v ? "—" : new Date(v).toLocaleDateString("id-ID", { year: "numeric", month: "short", day: "numeric" });
+// jamnya cuma menambah tujuh karakter yang sama di setiap baris. Bentuknya dari
+// helper bersama, supaya layar ini tak jadi bentuk tanggal ketiga di aplikasi.
+const tanggal = (v) => (!v ? "—" : fmtTanggal(v));
 
 const ringkas = computed(() => {
   const total = data.value.total || 0;

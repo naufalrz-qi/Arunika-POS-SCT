@@ -68,7 +68,7 @@ function reset() {
 }
 
 const columns = [
-  { key: "created_at", label: "Waktu", sortable: true, format: "date" },
+  { key: "created_at", label: "Waktu", sortable: true, format: "datetime" },
   { key: "user", label: "Pelaku" },
   { key: "feature", label: "Fitur" },
   { key: "src", label: "Sumber" },

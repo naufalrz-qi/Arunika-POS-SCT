@@ -33,8 +33,8 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 
 const columns = [
   { key: "no_transaksi", label: "No. Nota" },
-  { key: "tanggal", label: "Tanggal", format: "date" },
-  { key: "tanggal_server", label: "Tanggal Server", format: "date" },
+  { key: "tanggal", label: "Tanggal", format: "datetime" },
+  { key: "tanggal_server", label: "Tanggal Server", format: "datetime" },
   { key: "customer", label: "Customer" },
   { key: "jatuh_tempo", label: "Jatuh Tempo", format: "date" },
   { key: "total_penjualan", label: "Total Penjualan", align: "right", format: "rupiah" },

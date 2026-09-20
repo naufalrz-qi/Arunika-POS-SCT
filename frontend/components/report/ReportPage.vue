@@ -7,6 +7,7 @@ import SummaryStrip from "@/components/ui/SummaryStrip.vue";
 import ServerTable from "@/components/report/ServerTable.vue";
 import ExportButton from "@/components/ui/ExportButton.vue";
 import Badge from "@/components/ui/Badge.vue";
+import { tanggalJam } from "@/utils/tanggal";
 
 const props = defineProps({
   // Judul halaman sengaja tidak diterima di sini — AdminLayout yang memilikinya.
@@ -34,9 +35,11 @@ const emit = defineEmits(["page-change", "sort-change", "per-page-change"]);
 // salinan setup akan basi); dinamai `inertiaPage` supaya tak menutupi prop `page`.
 const inertiaPage = usePage();
 // --- Cap waktu server ------------------------------------------------------
-// Dipakai slot `cell-tanggal_server` di bawah; lihat catatan di sana.
-const tglServer = (v) =>
-  !v ? "—" : new Date(v).toLocaleDateString("id-ID", { year: "numeric", month: "short", day: "numeric" });
+// Formatnya SAMA PERSIS dengan kolom `tanggal` di sebelahnya (`utils/tanggal.js`,
+// dipakai juga oleh BaseTable). Dulu slot ini punya formatter sendiri
+// (`20 Sep 2026`) sementara tetangganya `20/9/2026` — dua kolom yang dipasang
+// bersebelahan justru untuk DIBANDINGKAN, dengan dua bentuk berbeda dan
+// jam yang sama-sama dibuang.
 
 /**
  * Selisih HARI antara cap server dan tanggal dokumen, bertanda.
@@ -151,7 +154,7 @@ const nf = new Intl.NumberFormat("id-ID");
              Dijaga `v-if` supaya halaman yang punya kebutuhan sendiri tetap
              bisa menyediakan slot bernama sama tanpa bentrok. -->
         <template v-if="!$slots['cell-tanggal_server']" #cell-tanggal_server="{ row }">
-          <span>{{ tglServer(row.tanggal_server) }}</span>
+          <span>{{ row.tanggal_server ? tanggalJam(row.tanggal_server) : "—" }}</span>
           <Badge v-if="bedaHari(row)" :variant="bedaHari(row) < 0 ? 'warning' : 'neutral'" class="ml-2">
             {{ bedaHari(row) < 0 ? `maju ${-bedaHari(row)} hari` : `beda ${bedaHari(row)} hari` }}
           </Badge>

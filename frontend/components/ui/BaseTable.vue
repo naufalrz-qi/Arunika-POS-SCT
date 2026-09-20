@@ -18,13 +18,18 @@
 import { computed, ref, watch } from "vue";
 import { usePage } from "@inertiajs/vue3";
 import { useDismissable } from "@/composables/useDismissable";
+import { tanggal as fmtTanggal, tanggalJam } from "@/utils/tanggal";
 import Spinner from "./Spinner.vue";
 import EmptyState from "./EmptyState.vue";
 import Pagination from "./Pagination.vue";
 
 const props = defineProps({
   // columns: [{ key, label, sortable?, align?: 'left'|'right'|'center',
-  //             format?: 'number'|'rupiah'|'persen'|'date', opsional? }]
+  //             format?: 'number'|'rupiah'|'persen'|'date'|'datetime', opsional? }]
+  // `datetime` dipakai kolom yang jamnya BERARTI (tanggal nota, cap waktu
+  // server). Jatuh tempo dan tanggal terima sengaja tetap `date`: keduanya
+  // memang menyimpan jam, tapi jamnya jam pencatatan yang tersebar acak
+  // (diukur: jatuh tempo menumpuk di sore hari), bukan janji waktu.
   // `opsional: true` = tersembunyi sampai pengguna menyalakannya lewat menu
   // Kolom. Hanya tampilan: export tetap membawa semua kolom.
   columns: { type: Array, required: true },
@@ -249,10 +254,10 @@ function fmt(value, col) {
   if (col.format === "number") return nf.format(value);
   if (col.format === "rupiah") return rp.format(value);
   if (col.format === "persen") return `${pf.format(value)}%`;
-  if (col.format === "date") {
-    const d = new Date(value);
-    return isNaN(d) ? value : d.toLocaleDateString("id-ID");
-  }
+  // Dua-duanya lewat satu formatter di utils/tanggal.js — lihat catatan di sana
+  // soal kenapa string server diurai sendiri alih-alih lewat `new Date()`.
+  if (col.format === "date") return fmtTanggal(value);
+  if (col.format === "datetime") return tanggalJam(value);
   return value;
 }
 

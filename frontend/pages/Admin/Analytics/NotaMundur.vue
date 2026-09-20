@@ -35,8 +35,8 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 const columns = [
   { key: "jenis", label: "Jenis Dokumen" },
   { key: "no_dokumen", label: "No. Dokumen" },
-  { key: "tanggal", label: "Tanggal", format: "date" },
-  { key: "tanggal_server", label: "Tanggal Server", format: "date" },
+  { key: "tanggal", label: "Tanggal", format: "datetime" },
+  { key: "tanggal_server", label: "Tanggal Server", format: "datetime" },
   { key: "selisih_hari", label: "Selisih (hari)", align: "right", format: "number" },
   { key: "arah", label: "Arah" },
   { key: "divisi", label: "Divisi" },

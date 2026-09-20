@@ -1218,6 +1218,34 @@ tiap kali tertipu.
 | Order Pembelian, Promo, Hutang, Shift | tabelnya **nol baris di kedua server** |
 | Piutang | 5 baris, hanya grosirPusat |
 
+#### Koreksi, 2026-09-20
+
+Daftar di atas sudah tertinggal dari kode, dan itu terungkap saat seseorang bertanya
+"laporan mana yang belum pindah?" — tak ada satu pun tempat di repo yang bisa
+menjawabnya. Dua hal yang perlu diluruskan:
+
+1. **Master Produk sudah pindah.** `rpt.master_produk_arunika` terpasang di
+   `_MASTER_PRODUK`; tiga kolom bermasalah dipapar apa adanya dan `status_pinjam`
+   dipulangkan konstan 0. Arti `ukuran` dan `pabrik` tetap pertanyaan terbuka, tapi ia
+   bukan lagi penghalang laporannya.
+2. **Tiga laporan lain tak pernah tercatat di sini sama sekali**, dan penghalangnya
+   berbeda jenis dari yang di tabel — bukan menunggu data, melainkan belum punya jalur:
+
+   | Laporan | Penghalang |
+   |---|---|
+   | Nota Tanggal Mundur | **sengaja**: bentuk Arunika tak menyimpan cap waktu server asal. `dibuat_pada` adalah waktu baris masuk Arunika, bukan jam server legacy — memberinya kembaran berarti memajang angka yang terlihat benar dan tidak benar |
+   | Transaksi Barang | UNION 9 tabel gerakan stok legacy (`_TX_BLOCKS`); entitas `pergerakan_stok` ada di rancangan (§4.1) tapi belum punya adapter baca laporan |
+   | Laba Rugi | modul tersendiri (`apps/transactions/laba_rugi.py`), bukan spec `reports.py`, dan ikut menambal `t_piutang_cicilan` — lihat §7.10 |
+
+   Seluruh keluarga stok (Stok Akhir, Stok per Divisi, Mutasi Stok, Stok Awal, Barang
+   Histori, FMI Stok) juga masih legacy penuh: semuanya lewat mesin stok
+   `apps/inventory/services.py`, jadi tak punya `inner` untuk ditukar. §8.3 sudah
+   menyimpulkan `pos_stok_snapshot` "masih perlu, dan bukan sedikit"; memindahkan
+   keluarga itu proyek tersendiri, bukan satu spec.
+
+Peta yang dibaca manusia sekarang tinggal di `KESIAPAN-FITUR.md` § "Kembaran Arunika
+per laporan", dan dijaga test supaya tidak ikut basi seperti tabel di atas.
+
 ## 8. Yang harus diverifikasi sebelum rancangan ini dibekukan
 
 1. ~~Ulangi hitungan baris §2 terhadap GUDANG produksi.~~ **Selesai — §8.1.**

@@ -99,6 +99,49 @@ Kolom **Sumber baca**: `replica` = bisa membaca replica laporan bila dikonfigura
 
 ---
 
+## Kembaran Arunika per laporan
+
+Kolom "Sumber baca" di matriks atas menjawab pertanyaan lain (replica lawan primary).
+Bagian ini menjawab: **laporan mana yang sudah bisa dibaca dari skema Arunika sendiri,
+dan mana yang masih legacy penuh.** Gerbangnya `ARUNIKA_LAPORAN=1` + profil punya
+`db_arunika`; default MATI, jadi pemasangan biasa tetap membaca legacy.
+
+Daftar ini dijaga `apps/monitoring/test_laporan_arunika.PetaKembaranTerdaftar` —
+ia menghitung sendiri dari `views.py` dan menolak kalau daftar di bawah menyimpang.
+
+**Sudah punya kembaran (18 spec + 2 layar khusus).** Nama ditulis utuh, bukan
+disingkat: penjaganya mencocokkan label menu satu per satu.
+
+Penjualan (Detail), Laba per Barang, Penjualan per Nota, Penjualan per Customer,
+Penjualan per User, Penjualan per Periode, Retur Penjualan, Order Penjualan,
+Pembelian, Pembelian per Supplier, Pembelian per Periode, Retur Pembelian,
+Opname Stok, Voucher, FMI Penjualan, Biaya Operasional, Biaya per Kategori,
+Master Produk.
+
+Ditambah dua layar khusus lewat jalur `_arunika_siap`, bukan `inner_arunika`
+(keduanya tak punya satu `inner` untuk ditukar): **Klasifikasi Pelanggan** dan
+**Kas Harian**.
+
+**Belum, dan hampir semuanya bukan soal kode:**
+
+| Laporan | Hambatan |
+|---|---|
+| Hutang Supplier | `t_hutang_cicilan` **nol baris di setiap server** |
+| Order Pembelian | `t_pembelian_order` nol baris di kedua server |
+| Promo & Diskon | `m_barang_promo` nol baris di kedua server |
+| Shift Kasir | `t_pegawai_ganti_shift` nol baris di kedua server |
+| Piutang Pelanggan | `t_piutang_cicilan` 5 baris, hanya grosirPusat |
+| Nota Tanggal Mundur | **sengaja**: bentuk Arunika tak menyimpan cap waktu server asal (`views.py`) |
+| Transaksi Barang | UNION 9 tabel gerakan stok legacy; belum punya jalur baca Arunika |
+| Laba Rugi | modul tersendiri (`apps/transactions/laba_rugi.py`), di luar `reports.py` |
+| Stok Akhir, Stok per Divisi, Mutasi Stok, Stok Awal, Barang Histori, FMI Stok | seluruhnya lewat mesin stok `apps/inventory/services.py`; tak ada `inner` untuk ditukar |
+
+Lima yang pertama menunggu **data**, bukan kode: adapternya bisa ditulis, yang tak bisa
+adalah membuktikannya — "identik" atas nol baris lawan nol baris tak menyatakan apa pun
+(rancangan §7.12). Empat yang terakhir proyek tersendiri, bukan satu spec.
+
+---
+
 ## Model hak akses
 
 RBAC di sini **3 tingkat, bukan per-menu-per-peran**:

@@ -47,8 +47,8 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 
 const columns = [
   { key: "no_transaksi", label: "No. Transaksi" },
-  { key: "tanggal", label: "Tanggal", format: "date" },
-  { key: "tanggal_server", label: "Tanggal Server", format: "date" },
+  { key: "tanggal", label: "Tanggal", format: "datetime" },
+  { key: "tanggal_server", label: "Tanggal Server", format: "datetime" },
   { key: "divisi", label: "Divisi" },
   { key: "customer", label: "Customer" },
   { key: "kota", label: "Kota", opsional: true },
