@@ -261,6 +261,27 @@ class Command(BaseCommand):
                 if any(m._base_manager.using("default").exists() for m in model):
                     self._verifikasi(model)
                 else:
+                    # Kunci diperiksa terhadap SUMBER di sini, bukan target: target
+                    # masih kosong, dan menunggu verifikasi sesudah penyalinan berarti
+                    # baru tahu password profil tak bisa dibuka setelah datanya pindah.
+                    # `POS_FERNET_KEY` ikut `.env`, jadi di mesin baru ia bisa saja
+                    # bukan kunci yang dipakai mengenkripsi baris-baris itu.
+                    from apps.connections.models import ServerProfile  # noqa: PLC0415
+
+                    kunci = self._cek_kunci(ALIAS) if ServerProfile in model else []
+                    if kunci:
+                        self.stdout.write(self.style.ERROR(
+                            "POS_FERNET_KEY yang aktif tak bisa membuka password profil: "
+                            + ", ".join(kunci)))
+                        raise CommandError(
+                            "Kunci di .env mesin ini bukan kunci yang dipakai pemasangan "
+                            "lama. Salin POS_FERNET_KEY dari .env lama sebelum menyalin — "
+                            "sesudah pindah, password koneksi tak bisa dipulihkan darinya."
+                        )
+                    if ServerProfile in model:
+                        self.stdout.write(
+                            f"Password profil: {ServerProfile.objects.using(ALIAS).count()} "
+                            "terbaca dengan POS_FERNET_KEY yang aktif.")
                     self.stdout.write(self.style.SUCCESS(
                         "Target masih kosong. " + ("Bereskan cacat di atas dulu."
                                                    if cacat else "Siap disalin.")))
@@ -277,6 +298,24 @@ class Command(BaseCommand):
             lupakan(ALIAS)
 
     # ------------------------------------------------------------ praperiksa
+    def _cek_kunci(self, using: str) -> list[str]:
+        """Profil yang password-nya TAK bisa dibuka `POS_FERNET_KEY` yang aktif.
+
+        Dipakai dua kali dengan alias berbeda, dan itu disengaja: terhadap sumber
+        saat praperiksa, terhadap target saat verifikasi. Kuncinya ikut `.env`, jadi
+        di mesin baru ia bisa saja bukan kunci yang dipakai mengenkripsi barisnya.
+        """
+        from apps.connections.models import ServerProfile  # noqa: PLC0415
+        from core.encryption import decrypt_checked  # noqa: PLC0415
+
+        buruk = []
+        for p in ServerProfile.objects.using(using):
+            try:
+                decrypt_checked(p.password_encrypted)
+            except Exception as exc:  # noqa: BLE001 — pesannya yang penting
+                buruk.append(f"{p.name}: {type(exc).__name__}")
+        return buruk
+
     def _praperiksa_berkas(self, berkas: Path, paksa: bool):
         if not berkas.is_file():
             raise CommandError(f"Berkas sumber tak ada: {berkas}")
@@ -399,7 +438,6 @@ class Command(BaseCommand):
 
         from apps.auth_app.models import TautanUser
         from apps.connections.models import ServerProfile
-        from core.encryption import decrypt_checked
 
         tautan_sumber = {(t.user_id, t.profile_id) for t in TautanUser.objects.using(ALIAS)}
         tautan_target = {(t.user_id, t.profile_id) for t in TautanUser.objects.using("default")}
@@ -409,12 +447,7 @@ class Command(BaseCommand):
         else:
             self.stdout.write(f"TautanUser: {len(tautan_target)} pasangan, sama dengan sumber.")
 
-        buruk = []
-        for p in ServerProfile.objects.using("default"):
-            try:
-                decrypt_checked(p.password_encrypted)
-            except Exception as exc:  # noqa: BLE001 — pesannya yang penting
-                buruk.append(f"{p.name}: {type(exc).__name__}")
+        buruk = self._cek_kunci("default")
         if buruk:
             gagal.append("password profil tak bisa didekripsi: " + ", ".join(buruk))
         else:

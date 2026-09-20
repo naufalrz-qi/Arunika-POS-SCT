@@ -13,10 +13,12 @@ from django.db import models
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
+from apps.connections.models import ServerProfile
 from apps.core.management.commands.pindah_pangkal import (
-    LEWAT_ARUNIKA, _bekukan_waktu, keputusan_model, model_disalin,
+    LEWAT_ARUNIKA, Command, _bekukan_waktu, keputusan_model, model_disalin,
 )
 from apps.core.models import ActivityLog, log_activity
+from core.encryption import encrypt
 
 
 class PkAsliBertahan(TestCase):
@@ -149,3 +151,27 @@ class SkemaArunikaTakIkutPindah(SimpleTestCase):
         m = self._model("core")
         self.assertEqual(keputusan_model(m, True, 0, ["profile_id"])[0], "lewati")
         self.assertEqual(keputusan_model(m, True, 5, ["profile_id"])[0], "tolak_skema")
+
+
+class KunciFernetDiperiksaSebelumMenyalin(TestCase):
+    """Kunci yang salah harus ketahuan SEBELUM data pindah, bukan sesudah.
+
+    `POS_FERNET_KEY` ikut `.env`, jadi di mesin cutover ia bisa saja bukan kunci yang
+    dipakai mengenkripsi baris `ServerProfile` di pemasangan lama. Sebelumnya
+    pemeriksaan itu hanya ada di `_verifikasi()`, yang jalan sesudah penyalinan --
+    dan penyalinan yang sudah terjadi tak membatalkan sendiri.
+    """
+
+    def test_profil_yang_gagal_dilaporkan_dengan_namanya(self):
+        ServerProfile.objects.create(
+            name="Gudang", host="SERVER-GUDANG", db_name="gudang",
+            username="sa", password_encrypted="bukan-fernet-sama-sekali")
+        buruk = Command()._cek_kunci("default")
+        self.assertEqual(len(buruk), 1)
+        self.assertTrue(buruk[0].startswith("Gudang: "), buruk)
+
+    def test_profil_sehat_tak_dilaporkan(self):
+        ServerProfile.objects.create(
+            name="Sehat", host="SERVER-GUDANG", db_name="gudang",
+            username="sa", password_encrypted=encrypt("rahasia"))
+        self.assertEqual(Command()._cek_kunci("default"), [])

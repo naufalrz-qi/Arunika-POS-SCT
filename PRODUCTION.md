@@ -198,6 +198,29 @@ akun yang sama.
 
 ### Pindah dari pemasangan SQLite lama (sekali, saat cutover)
 
+**Rekam seluruh sesinya.** Ini operasi sekali jalan di mesin yang mungkin tak ada
+orang lain di dekatnya; transkrip adalah satu-satunya cara menjelaskan apa yang terjadi
+kalau ada yang gagal. Di PowerShell:
+
+```powershell
+Start-Transcript -Path D:\backup\arunika\cutover-$(Get-Date -f yyyyMMdd-HHmm).log
+```
+
+…kerjakan langkah 1–7 di bawah…
+
+```powershell
+Stop-Transcript
+```
+
+Tiga baris yang harus Anda lihat sebelum melanjutkan, dan artinya kalau tak muncul:
+
+| Baris | Kalau tak muncul |
+|---|---|
+| `Password profil: N terbaca dengan POS_FERNET_KEY yang aktif.` | Kunci di `.env` salah. **Berhenti** — jangan salin apa pun. |
+| `TautanUser: N pasangan, sama dengan sumber.` | Tujuh layar kasir yang menulis akan menolak jalan; barisnya tak bisa dibuat ulang dari server mana pun. |
+| `check_constraints(): bersih` | Ada FK atau CHECK yang tak lolos; jangan nyalakan layanan. |
+
+
 `manage.py pindah_pangkal` yang mengerjakannya: ia membaca berkas SQLite READ-ONLY dan menulis
 dengan `bulk_create` berbatch. `loaddata` tidak dipakai karena menyimpan satu objek per
 `save()` — 778.916 baris `BarangHargaState` lewat jalur itu butuh berjam-jam; perintah ini
@@ -232,6 +255,12 @@ python manage.py pindah_pangkal --sumber D:\backup\arunika\db-20260918.sqlite3 -
 ```bash
 python manage.py pindah_pangkal --sumber D:\backup\arunika\db-20260918.sqlite3 --perbaiki
 ```
+
+**Praperiksa itu memeriksa `POS_FERNET_KEY` terhadap SUMBER**, dan itu gerbang yang
+paling penting di seluruh runbook ini: kalau kunci di `.env` mesin baru bukan kunci
+yang dipakai mengenkripsi profil lama, perintahnya berhenti di situ — sebelum ada satu
+baris pun yang pindah. Sesudah pindah, password koneksi tak bisa dipulihkan dari mana
+pun.
 
 `--perbaiki` hanya memotong nilai yang melebihi `max_length`, dan melaporkan tiap
 pemotongannya. Ia tidak pernah menghapus baris: kunci unik yang kembar harus dibereskan di
