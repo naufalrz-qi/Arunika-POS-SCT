@@ -35,7 +35,6 @@ satu dari 14 profil legacy, bahkan kalau seseorang memalsukan form-nya.
 from __future__ import annotations
 
 import os
-import sqlite3
 from pathlib import Path
 
 import pyodbc
@@ -104,18 +103,22 @@ def catat(jenis: str, profile, berkas: Path, username: str = "") -> CadanganBerk
 
 
 def jalankan_pangkal(username: str = "") -> CadanganBerkas:
-    """Cadangkan basis data pangkal — SQLite atau MS SQL, mengikuti vendornya."""
+    """Cadangkan basis data pangkal lewat `BACKUP DATABASE` di instansnya sendiri."""
     tujuan = _folder()
-    if connection.vendor == "sqlite":
-        berkas = backup_db.backup_sqlite(connection, tujuan)
-    elif connection.vendor in _VENDOR_MSSQL:
-        with connection.cursor() as cur:
-            berkas = backup_db.backup_mssql(cur, connection.settings_dict["NAME"], tujuan)
-    else:
+    # Penjagaan vendor dipertahankan walau settings hanya mengizinkan MS SQL:
+    # ENGINE salah setel harus berhenti dengan pesan, bukan diam.
+    if connection.vendor not in _VENDOR_MSSQL:
         raise Ditolak(
-            f"Basis data aplikasi bukan SQLite maupun MS SQL ({connection.vendor}). "
+            f"Basis data pangkal bukan MS SQL ({connection.vendor}). "
             "Cadangkan sendiri dengan alat bawaan mesinnya."
         )
+    # Catatan: SQL Server menolak BACKUP di dalam transaksi (galat 3021). Jalur
+    # web tak pernah berada di dalamnya (`ATOMIC_REQUESTS` mati), dan penjaga
+    # eksplisit di sini justru salah menyala di `TestCase` — yang memang
+    # membungkus tiap test dalam transaksi. Penjagaannya ada di management
+    # command, tempat seseorang bisa memanggilnya dari dalam `atomic()`.
+    with connection.cursor() as cur:
+        berkas = backup_db.backup_mssql(cur, connection.settings_dict["NAME"], tujuan)
     return catat(PANGKAL, None, berkas, username)
 
 
@@ -138,13 +141,19 @@ def jalankan_hub(username: str = "") -> CadanganBerkas:
 def verifikasi(cadangan_id: int) -> CadanganBerkas:
     """Periksa apakah berkas cadangan benar-benar bisa dibaca kembali.
 
-    Dua jalur, dua alat:
+    Satu alat, dua instans — dan instansnya yang menentukan, bukan jenis
+    berkasnya:
 
-    - **SQLite** — `PRAGMA integrity_check` pada berkasnya, dibuka READ-ONLY
-      lewat URI `file:...?mode=ro`. Tanpa `mode=ro`, sqlite bisa membuat
-      `-wal`/`-shm` di sebelah berkas cadangan: menulis ke folder cadangan
-      justru saat sedang memeriksanya.
-    - **MS SQL** — `RESTORE VERIFYONLY ... WITH CHECKSUM`. Ia TIDAK memulihkan
+    - **Pangkal** diverifikasi lewat koneksi Django sendiri. Berkasnya ditulis
+      oleh instans pangkal, jadi hanya instans itu yang bisa membacanya.
+    - **AMPHOREUS** lewat `mssql.cursor(hub)`. Ia ada di mesin lain
+      (SERVER-RETAIL), dan berkasnya pun ada di sana.
+
+    Memverifikasi cadangan pangkal lewat cursor AMPHOREUS — yang dulu terjadi —
+    berarti menyuruh mesin yang tak bisa melihat berkasnya untuk membacanya,
+    lalu melaporkan cadangan yang sehat sebagai rusak.
+
+    - **`RESTORE VERIFYONLY ... WITH CHECKSUM`**. Ia TIDAK memulihkan
       apa pun, tidak menyentuh database target, tidak membuat atau menimpa
       database mana pun; ia membaca perangkat cadangan dan memeriksa bahwa set
       cadangannya lengkap serta terbaca. `WITH CHECKSUM` memverifikasi checksum
@@ -152,17 +161,14 @@ def verifikasi(cadangan_id: int) -> CadanganBerkas:
       `WITH ... CHECKSUM` saat backup.
 
       Satu syarat yang bisa menggigit: `VERIFYONLY` butuh izin setingkat
-      `CREATE DATABASE` pada instansnya. Kalau akun profil AMPHOREUS tak
-      punya, kegagalannya muncul sebagai `verifikasi_ok=False` dengan pesan
-      pyodbc yang jelas — bukan diam.
+      `CREATE DATABASE` pada instansnya. Kalau akunnya tak punya, kegagalannya
+      muncul sebagai `verifikasi_ok=False` dengan pesan pyodbc yang jelas —
+      bukan diam.
     """
     baris = CadanganBerkas.objects.get(pk=cadangan_id)
     ok, pesan = False, ""
     try:
-        if baris.jenis == PANGKAL and baris.path.endswith(".sqlite3"):
-            ok, pesan = _cek_sqlite(Path(baris.path))
-        else:
-            ok, pesan = _cek_mssql(baris)
+        ok, pesan = _cek_pangkal(baris) if baris.jenis == PANGKAL else _cek_mssql(baris)
     except Ditolak as exc:
         pesan = str(exc)
     except pyodbc.Error as exc:
@@ -176,15 +182,18 @@ def verifikasi(cadangan_id: int) -> CadanganBerkas:
     return baris
 
 
-def _cek_sqlite(berkas: Path) -> tuple[bool, str]:
-    if not berkas.exists():
-        return False, "Berkasnya tidak ada di path yang tercatat."
-    con = sqlite3.connect(f"file:{berkas}?mode=ro", uri=True)
-    try:
-        hasil = con.execute("PRAGMA integrity_check").fetchone()[0]
-    finally:
-        con.close()
-    return hasil == "ok", hasil
+def _cek_pangkal(baris: CadanganBerkas) -> tuple[bool, str]:
+    """Verifikasi lewat koneksi Django — instans yang menulis berkasnya.
+
+    `%s`, bukan `?`: ini cursor Django (mssql-django), bukan pyodbc mentah.
+    """
+    with connection.cursor() as cur:
+        cur.execute("RESTORE VERIFYONLY FROM DISK = %s WITH CHECKSUM", [baris.path])
+        # Alasan yang sama dengan BACKUP: pesannya result set, dan galat
+        # "berkasnya rusak" justru datang SESUDAH result set pertama.
+        while cur.nextset():
+            pass
+    return True, "ok"
 
 
 def _cek_mssql(baris: CadanganBerkas) -> tuple[bool, str]:
@@ -193,11 +202,13 @@ def _cek_mssql(baris: CadanganBerkas) -> tuple[bool, str]:
         raise Ditolak("Baris ini bukan cadangan AMPHOREUS; verifikasi ditolak.")
     with mssql.cursor(hub) as cur:
         cur.execute("RESTORE VERIFYONLY FROM DISK = ? WITH CHECKSUM", [baris.path])
+        while cur.nextset():
+            pass
     return True, "ok"
 
 
 def daftar() -> list[dict]:
-    """Isi layar Cadangan & Pemulihan. Murni SQLite + satu `os.path.exists`."""
+    """Isi layar Cadangan & Pemulihan: tabel pangkal + satu `os.path.exists`."""
     keluar = []
     for c in CadanganBerkas.objects.select_related("profile")[:200]:
         p = Path(c.path)
@@ -216,9 +227,12 @@ def daftar() -> list[dict]:
             "verifikasi_pesan": c.verifikasi_pesan,
             "verifikasi_at": (timezone.localtime(c.verifikasi_at).strftime("%d/%m %H:%M")
                               if c.verifikasi_at else ""),
-            # Berkas AMPHOREUS memang sering tak terjangkau dari mesin ini, jadi
-            # "hilang" hanya berarti sesuatu untuk cadangan pangkal.
-            "ada": p.exists() if c.jenis == PANGKAL else None,
+            # None = tak diketahui. Berkas AMPHOREUS ditulis di mesin lain,
+            # dan sejak pangkal pun ditulis oleh layanan SQL Server, berkas
+            # pangkal hanya terlihat dari sini kalau instansnya memang satu
+            # mesin. Karena itu `or None`: "hilang" cuma dilaporkan kalau
+            # memang ada yang bisa dilihat.
+            "ada": (p.exists() or None) if c.jenis == PANGKAL else None,
         })
     return keluar
 
@@ -248,30 +262,20 @@ LANGKAH 0 - KUNCI DULU, BARU DATABASE
   utuh, tapi aplikasi tidak bisa menghubungi satu server pun.
   Pastikan salinan kuncinya ada sebelum melanjutkan.
 
-A. PANGKAL, SQLite (POS_APP_DB_ENGINE=sqlite)
-  1. Hentikan layanan waitress. Pastikan tidak ada proses python yang memegang
-     db.sqlite3.
-  2. Pindahkan db.sqlite3 yang rusak ke nama lain (jangan hapus - ia masih
-     bisa jadi bahan pemeriksaan).
-  3. Hapus sisa db.sqlite3-wal dan db.sqlite3-shm kalau ada. Berkas -wal milik
-     database LAMA; membiarkannya di sebelah database hasil pulih membuat
-     sqlite menggabungkan dua database berbeda.
-  4. Salin db-YYYYMMDD.sqlite3 dari folder cadangan menjadi db.sqlite3.
-  5. venv\\Scripts\\python.exe manage.py migrate --check
+A. PANGKAL
+  1. Hentikan layanan waitress. RESTORE menolak berjalan selama masih ada
+     koneksi aktif ke database itu.
+  2. Dijalankan di SSMS, DI MESIN SQL SERVER, bukan dari aplikasi:
+       RESTORE DATABASE [nama_db] FROM DISK = 'D:\\backup\\arunika\\db-YYYYMMDD.bak'
+         WITH REPLACE, RECOVERY;
+  3. venv\\Scripts\\python.exe manage.py migrate --check
      Kalau ia mengeluh ada migrasi tertunda, cadangan itu lebih tua daripada
      kode yang terpasang: jalankan manage.py migrate.
-  6. Nyalakan waitress. Login, lalu buka Kelola Tautan User dan pastikan
-     jumlah barisnya masuk akal - itu data yang paling mahal di berkas ini.
+  4. Nyalakan waitress. Login, lalu buka Kelola Tautan User dan pastikan
+     jumlah barisnya masuk akal - itu data yang paling mahal di database ini.
 
-B. PANGKAL, MS SQL (POS_APP_DB_ENGINE=mssql)
-  Dijalankan di SSMS, DI MESIN SQL SERVER, bukan dari aplikasi:
-     RESTORE DATABASE [nama_db] FROM DISK = 'D:\\backup\\arunika\\db-YYYYMMDD.bak'
-       WITH REPLACE, RECOVERY;
-  Hentikan waitress dulu: RESTORE menolak berjalan selama masih ada koneksi
-  aktif ke database itu.
-
-C. AMPHOREUS
-  1. RESTORE seperti B, memakai berkas .bak AMPHOREUS.
+B. AMPHOREUS
+  1. RESTORE seperti A, memakai berkas .bak AMPHOREUS.
   2. Sesudah pulih, isi ulang jendela segarnya:
        manage.py pull_hub --mode segar --hari 30
   3. Tarik arsip TIDAK perlu diulang selama HubPullState ikut pulih bersama

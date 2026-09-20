@@ -84,15 +84,15 @@ Kolom **Sumber baca**: `replica` = bisa membaca replica laporan bila dikonfigura
 | Master Pelanggan | `customers` | khusus | primary | — (hanya baca) | Siap |
 | Master Supplier | `suppliers` | khusus | primary | — (hanya baca) | Siap |
 | Update Barang | `update_barang` | khusus | primary | **Ya** (harga, status, nama & keterangan—khusus gudang) | Siap |
-| Riwayat Update Barang | `riwayat_update_barang` | khusus | SQLite | — | Siap |
+| Riwayat Update Barang | `riwayat_update_barang` | khusus | pangkal | — | Siap |
 | Pergerakan Harga | `pergerakan_harga` | khusus | primary | — | Siap |
 | Sinkronisasi Harga | `sync_harga` | khusus | 2 server | **Ya** (lintas server) | Siap dengan catatan |
 | Sinkronisasi Master Data | `sync_master` | khusus | 2 server | **Ya** (lintas server) | Siap dengan catatan |
-| Riwayat Sinkronisasi | `sync_history` | khusus | SQLite | — | Siap |
-| Manajemen User | `users` | khusus | SQLite | — | Siap |
-| Koneksi Server | `connections` | khusus | SQLite | — | Siap |
-| Log Aktivitas | `logs` | khusus | SQLite | — | Siap |
-| Kelola Menu | `menus` | khusus | SQLite | — | Siap (superadmin) |
+| Riwayat Operasi | `sync_history` | khusus | pangkal | — | Siap |
+| Manajemen User | `users` | khusus | pangkal | — | Siap |
+| Koneksi Server | `connections` | khusus | pangkal | — | Siap |
+| Log Aktivitas | `logs` | khusus | pangkal | — | Siap |
+| Kelola Menu | `menus` | khusus | pangkal | — | Siap (superadmin) |
 
 ⚠ **Jebakan penamaan:** key `stok_akhir` menunjuk halaman **Mutasi Stok**, sedangkan halaman
 **Stok Akhir** ber-key `stock`. Hati-hati saat memberikan hak menu per key.

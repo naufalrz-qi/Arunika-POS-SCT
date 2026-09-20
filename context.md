@@ -6,7 +6,7 @@ Ringkasan arsitektur + status untuk planning lanjutan. Django + Inertia.js + Vue
 
 - Backend: Django 5 (`config/settings.py`), Inertia-Django 1.2 (`defer`/`optional` tersedia), pyodbc → MS SQL "ODBC Driver 17".
 - Frontend: Vue 3.5 + `@inertiajs/vue3` 2.0 (punya komponen `<Deferred>`), Pinia, Tailwind 4, Vite 6. Build: `npm run build` → `frontend/dist/`.
-- DB Django (auth/config/log/session): SQLite `db.sqlite3` (WAL aktif).
+- DB Django (auth/config/log/session): pangkal MS SQL dari `POS_APP_DB_*` (`the_nameless`).
 - 1 koneksi MS SQL aktif global (bukan per-tipe), switcher di navbar. `core/mssql.get_active_profile()`.
 - Opsional: tiap `ServerProfile` bisa punya `report_source` (server replica untuk laporan, disinkron via CDC — lihat bagian "Reporting replica" di bawah). `core/mssql.get_report_source(profile)`.
 
@@ -153,7 +153,7 @@ Aturan yang masing-masing dibayar pengukuran:
 
 ## Perubahan harga harian (snapshot diff-only)
 
-Harga bisa diubah langsung di POS/server tanpa lewat aplikasi ini (`BarangUpdateLog` cuma menangkap perubahan lewat aplikasi). Untuk memantau semua perubahan harga per hari: `manage.py snapshot_harga [--profile ID] [--prune-days N]` membaca `m_barang_satuan` server (reuse `master._harga_map`) dan membandingkannya dengan baseline tersimpan di SQLite.
+Harga bisa diubah langsung di POS/server tanpa lewat aplikasi ini (`BarangUpdateLog` cuma menangkap perubahan lewat aplikasi). Untuk memantau semua perubahan harga per hari: `manage.py snapshot_harga [--profile ID] [--prune-days N]` membaca `m_barang_satuan` server (reuse `master._harga_map`) dan membandingkannya dengan baseline tersimpan di pangkal.
 
 - Diff-only, bukan snapshot penuh: `apps/core/models.BarangHargaState` menyimpan harga terkini per SKU (di-update di tempat, ukuran tetap ~jumlah SKU × server), `BarangHargaChange` hanya diisi saat harga beda (append-only, tumbuh ∝ jumlah perubahan). Menghindari ledakan baris kalau full-snapshot 54rb produk × hari.
 - Idempotent: run kedua di hari sama tanpa perubahan → 0 baris. SKU baru → seed state tanpa log.
@@ -343,7 +343,7 @@ Layar tulis pertama yang tabelnya **tidak punya satu pun baris lama untuk ditiru
 Satu blok `<pre>` monospace 40 kolom untuk Epson LX-310, `@page 241mm x 140mm`. Tabel/border/warna memaksa driver Windows masuk mode grafis — lambat, buram, boros pita — jadi seluruh tata letaknya spasi, bukan CSS.
 
 - **Kasir dari `m_userx`, pegawai dari `m_pegawai`, dan keduanya orang yang berbeda.** `kd_user` dan `kd_pegawai` ruang kode terpisah (`apps/auth_app/models.TautanUser`): terukur di server Testing, `LEFT JOIN m_pegawai ON kd_pegawai = h.kd_user` memulangkan **NULL di setiap nota**. Versi pertama menambal NULL itu dengan `kd_pegawai` baris detail PERTAMA, jadi struk mencetak nama SPG di bawah label "Kasir" — salah orang, tanpa satu pun galat. Kasir = `m_userx` (sama seperti `reports.py:286, 353, 430, 682`), Pegawai = `m_pegawai` lewat `t_penjualan_detail.kd_pegawai`.
-- **Identitas perusahaan pindah ke tabel Arunika sendiri** (`core.InfoPerusahaan`, SQLite, satu baris per KONEKSI). `g_info_profile` cuma DIBACA sebagai cadangan, tak pernah ditulis lagi. Alasannya di bawah.
+- **Identitas perusahaan pindah ke tabel Arunika sendiri** (`core.InfoPerusahaan`, di pangkal, satu baris per KONEKSI). `g_info_profile` cuma DIBACA sebagai cadangan, tak pernah ditulis lagi. Alasannya di bawah.
 - **Tiga kertas, dipilih saat cetak.** Toko memakai ketiganya bergantian: thermal 76 mm (TM-U220, 40 kolom), nota 12 x 14 cm (LX-310, 48 kolom), dan 1/2 A4 potrait 14,8 x 21 cm (LX-310, 64 kolom). Lebar kolomnya diturunkan dari lebar cetak, bukan ditebak: Courier lebarnya 0,6 x ukuran font, jadi `kolom x 0,6 x pt x 0,3528mm` harus muat di kertas dikurangi margin — angka `pt` tiap preset sudah dicocokkan begitu. **Ketiga ukuran itu dari keterangan operator, belum diukur langsung**; kalau hasil cetak membungkus, yang diubah cuma `kolom`/`pt` di dict `KERTAS`.
 - **`@page size` ikut berganti**, dan itu wajib: tanpa itu struk thermal dicetak pada bidang A4 dan tiap struk memakan satu lembar penuh. Karena nilainya berubah-ubah, ia dikelola lewat satu elemen `<style>` buatan sendiri — CSS scoped tak bisa memuat `@page` yang dinamis.
 - **Di bawah 60 kolom tata letaknya menurun jadi satu kolom.** Dua kolom berdampingan pada 40-48 kolom membuat label dan angkanya bertabrakan; yang sempit mendapat metadata berlabel pendek (`Tgl`/`No`) dan blok uang di atas keterangan, bukan di sebelahnya.
@@ -448,7 +448,7 @@ Nol perubahan skema, nol risiko ke legacy, dan seluruh bahaya cascade di atas ma
 
 ## Scalability (Fase 0 SUDAH dikerjakan)
 
-Target 200–500 request. Sudah: `waitress`+`whitenoise` (requirements), env-driven DEBUG/SECRET_KEY/ALLOWED_HOSTS, `GZipMiddleware` (payload 5MB→~500KB), `SESSION_SAVE_EVERY_REQUEST=False` (killer #1 SQLite), SQLite WAL (`connection_created` signal), `conn.timeout=60` di `core/mssql.py`. `pyodbc.pooling=True` sudah ada.
+Target 200–500 request. Sudah: `waitress`+`whitenoise` (requirements), env-driven DEBUG/SECRET_KEY/ALLOWED_HOSTS, `GZipMiddleware` (payload 5MB→~500KB), `SESSION_SAVE_EVERY_REQUEST=False`, `conn.timeout=60` di `core/mssql.py`. `pyodbc.pooling=True` sudah ada.
 Sisa (di luar scope sekarang): Redis/multi-proses, pagination server-side ReportView, HTTPS/reverse proxy.
 
 ## Pola deferred (shell dulu, data menyusul) — SUDAH TERBUKTI

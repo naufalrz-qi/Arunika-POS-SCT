@@ -19,7 +19,7 @@ pip install -r requirements.txt
 npm install
 copy .env.example .env
 python manage.py generate_key   # → paste into POS_FERNET_KEY in .env
-python manage.py migrate        # SQLite: auth, sessions, logs, connection profiles
+python manage.py migrate        # pangkal MS SQL: auth, sessions, logs, connection profiles
 python manage.py seed_dev       # optional: admin user + dev grosir connection
 
 # Run — Mode A: dev / hot-reload, localhost only (.env DJANGO_VITE_DEV=1), two terminals
@@ -41,7 +41,7 @@ python manage.py test apps.master_data.test_margin # single module
 
 # Custom manage.py commands
 python manage.py generate_key    # generate POS_FERNET_KEY (encrypts connection passwords)
-python manage.py backup_db --dir D:\backup\arunika --keep-days 30   # VACUUM INTO daily backup of db.sqlite3
+python manage.py backup_db --dir D:\backup\arunika --keep-days 30   # BACKUP DATABASE daily backup of the pangkal DB
 python manage.py seed_dev        # seed admin user + dev connection profile
 python manage.py ensure_indexes  # create report/stock indexes on MS SQL (idempotent)
 python manage.py check_stock_agg # self-check: SQL aggregation vs Python aggregation
@@ -63,7 +63,7 @@ python manage.py sync_master --dry-run                      # GUDANG names/brand
 ## Architecture
 
 **Two datastores, deliberately split:**
-- **The "pangkal" database (Django ORM)** — only app-local state: users/auth, sessions, `ActivityLog`, `ServerProfile` (MS SQL connection profiles), and `TautanUser` (legacy-user links, **one row per user × connection** — see `context.md` § "Tautan user legacy"; `kd_user` codes are generated independently by each server, so the same code means a different person elsewhere, and `apps/auth_app/tautan.py` never falls back to another connection's link). This is the only thing `migrate` touches. **Engine is chosen by `POS_APP_DB_ENGINE` in `.env`** — `sqlite` (default: `db.sqlite3`, used by dev and `manage.py test`) or `mssql` (production, via `mssql-django`). It is deliberately configured from `.env` rather than from a `ServerProfile`, because `ServerProfile` is what stores how to reach every *other* server — it has to be readable before any profile exists. Moving between engines is a runbook, not a config flip: see `PRODUCTION.md` § "Pindah dari SQLite ke MS SQL" (`dumpdata` first — `TautanUser` cannot be reconstructed from any server).
+- **The "pangkal" database (Django ORM)** — only app-local state: users/auth, sessions, `ActivityLog`, `ServerProfile` (MS SQL connection profiles), and `TautanUser` (legacy-user links, **one row per user × connection** — see `context.md` § "Tautan user legacy"; `kd_user` codes are generated independently by each server, so the same code means a different person elsewhere, and `apps/auth_app/tautan.py` never falls back to another connection's link). This is the only thing `migrate` touches. **It is MS SQL, always** (`POS_APP_DB_*` in `.env`, via `mssql-django`) — including `manage.py test`, which creates `test_<POS_APP_DB_NAME>` on the same instance. SQLite is gone, and not for uniformity's sake: it treats two NULLs as distinct in a unique constraint and does not enforce column length at all, so rows that are impossible on MS SQL lived for years without a symptom, and no test could catch them while the tests themselves ran on SQLite (both defects were real — one 505-char `ActivityLog.detail` in a 255 column, and three pairs of snapshot rows with a NULL `profile`). The DSN is deliberately configured from `.env` rather than from a `ServerProfile`, because `ServerProfile` is what stores how to reach every *other* server — it has to be readable before any profile exists, and it lives inside this very database. For the same reason the pangkal is **not** registered as a `ServerProfile`: every "for all profiles" loop (stock snapshots, sync health, transfer sources) would sweep it too. Moving an old SQLite installation across is `manage.py pindah_pangkal` — see `PRODUCTION.md` § "Basis data pangkal". Two consequences worth knowing: if that server is down nobody can log in, and the instance collation (`SQL_Latin1_General_CP1_CI_AS`) is case-**in**sensitive where SQLite was binary, so `superadmin` and `SUPERADMIN` are now the same account.
 - **MS SQL Server (raw `pyodbc`)** — all business data (`m_barang`, `t_penjualan`, `t_pembelian`, opname, mutasi, …). There are **no Django models/migrations for these tables**; access is hand-written SQL in per-app `services.py`. Don't try to model the legacy schema with the ORM.
 
 **Single active connection, multi-server.** All MS SQL access flows through `core/mssql.py` → `get_active_profile()`, which returns the one globally-active `ServerProfile` (switched from the navbar, not per-user/per-request). Profile passwords are **Fernet-encrypted** (`POS_FERNET_KEY`) and only decrypted in-process inside `core/mssql.py`.

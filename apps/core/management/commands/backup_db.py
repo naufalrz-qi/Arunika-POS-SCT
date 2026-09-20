@@ -1,25 +1,21 @@
-"""Cadangan basis data aplikasi — satu berkas per hari, plus pemangkasan retensi.
+"""Cadangan basis data pangkal — satu berkas per hari, plus pemangkasan retensi.
 
-Yang hilang bersama satu berkas `db.sqlite3` bukan cuma "data aplikasi": seluruh
-akun beserta hak menunya, seluruh `TautanUser` (tautan ke user legacy PER
-KONEKSI — pekerjaan manual belasan baris per orang yang tak bisa direkonstruksi
-dari mana pun), seluruh audit trail, seluruh cursor sync, dan seluruh password
-koneksi terenkripsi. Data bisnisnya sendiri aman di MS SQL; yang di sini justru
+Yang hilang bersama basis data pangkal bukan cuma "data aplikasi": seluruh akun
+beserta hak menunya, seluruh `TautanUser` (tautan ke user legacy PER KONEKSI —
+pekerjaan manual belasan baris per orang yang tak bisa direkonstruksi dari mana
+pun), seluruh audit trail, seluruh cursor sync, dan seluruh password koneksi
+terenkripsi. Data bisnisnya sendiri aman di MS SQL cabang; yang di sini justru
 satu-satunya yang tak punya salinan di tempat lain.
 
-`VACUUM INTO`, bukan `shutil.copy`. Pada mode WAL — dan aplikasi ini memakainya
-(`config/settings.py` `_enable_sqlite_wal`) — menyalin berkas `.sqlite3` saja
-saat server hidup menghasilkan salinan yang KEHILANGAN semua transaksi yang masih
-duduk di `-wal` dan belum ter-checkpoint. `VACUUM INTO` mengambil kunci baca,
-menulis satu berkas yang konsisten, dan tidak menghentikan siapa pun.
+`BACKUP DATABASE`, dan ada satu perbedaan yang mudah menjebak: **berkasnya
+ditulis di mesin SQL SERVER, bukan di mesin yang menjalankan perintah ini.**
+Path `--dir` diartikan oleh SQL Server, akun layanannya yang harus punya izin
+tulis di sana, dan pemangkasan retensi hanya bisa dilakukan kalau folder itu
+kebetulan juga terjangkau dari mesin ini (mesin yang sama, atau share UNC).
 
-Sejak basis data aplikasi bisa pindah ke MS SQL (`POS_APP_DB_ENGINE=mssql`),
-perintah ini punya dua jalur. Yang MS SQL memakai `BACKUP DATABASE`, dan ada
-satu perbedaan yang mudah menjebak: **berkasnya ditulis di mesin SQL SERVER,
-bukan di mesin yang menjalankan perintah ini.** Path `--dir` diartikan oleh
-SQL Server, akun layanannya yang harus punya izin tulis di sana, dan
-pemangkasan retensi hanya bisa dilakukan kalau folder itu kebetulan juga
-terjangkau dari mesin ini (mesin yang sama, atau share UNC).
+Jalur SQLite (`VACUUM INTO`) sudah dihapus bersama SQLite itu sendiri. Berkas
+`db-YYYYMMDD.sqlite3` dari pemasangan lama tetap bisa dibaca — bukan oleh
+perintah ini, melainkan `manage.py pindah_pangkal`.
 
 `COMPRESSION` sengaja tidak dipakai: SQL Server Express tidak mendukungnya, dan
 Express justru edisi yang paling mungkin dipakai pemasangan kecil.
@@ -53,22 +49,6 @@ _VENDOR_MSSQL = ("microsoft", "mssql")
 # Django. Pemeriksaan `]` ikut pindah ke dalam, jadi jalur web mewarisi
 # penjagaannya tanpa menyalinnya.
 
-def backup_sqlite(conn, tujuan: Path) -> Path:
-    tujuan.mkdir(parents=True, exist_ok=True)
-    berkas = tujuan / f"db-{dt.date.today():%Y%m%d}.sqlite3"
-    # VACUUM INTO menolak menimpa berkas yang sudah ada; dijalankan dua kali
-    # dalam sehari itu wajar (uji coba, restart), dan gagal karenanya bukan
-    # perilaku yang berguna untuk tugas terjadwal.
-    if berkas.exists():
-        berkas.unlink()
-
-    with conn.cursor() as cur:
-        # Parameter, bukan f-string: path Windows memuat backslash, dan nama
-        # folder yang memuat kutip tunggal akan mematahkan literal SQL.
-        cur.execute("VACUUM INTO %s", [str(berkas)])
-    return berkas
-
-
 def backup_mssql(cur, nama_db: str, tujuan: Path, ph: str = "%s") -> Path:
     """`ph` adalah gaya placeholder cursor yang diberikan.
 
@@ -99,6 +79,14 @@ def backup_mssql(cur, nama_db: str, tujuan: Path, ph: str = "%s") -> Path:
     # ia memberi keyakinan palsu. Didukung semua edisi termasuk Express, tidak
     # seperti COMPRESSION.
     cur.execute(f"BACKUP DATABASE [{nama_db}] TO DISK = {ph} WITH INIT, CHECKSUM", [str(berkas)])
+    # WAJIB, dan ini bukan kerapian: BACKUP mengirim pesan progresnya sebagai
+    # RESULT SET, dan pekerjaannya baru benar-benar selesai setelah semuanya
+    # dihabiskan. Cursor yang ditutup lebih dulu membuat ODBC MEMBATALKAN
+    # statement-nya — tanpa berkas, tanpa baris di msdb.dbo.backupset, dan
+    # TANPA SATU PUN GALAT. Terukur: perintah yang sama menghasilkan berkas 238
+    # MB begitu `nextset()` dihabiskan, dan nol byte tanpa itu.
+    while cur.nextset():
+        pass
     return berkas
 
 
@@ -116,7 +104,7 @@ def pangkas_berkas(tujuan: Path, berkas: Path, sufiks: str, hari: int) -> int:
 
 
 class Command(BaseCommand):
-    help = "Salin db.sqlite3 ke berkas cadangan bertanggal (VACUUM INTO) + pangkas yang lama."
+    help = "Cadangkan basis data pangkal ke berkas bertanggal (BACKUP DATABASE) + pangkas yang lama."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -131,25 +119,30 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         tujuan = Path(options["dir"])
-        if connection.vendor == "sqlite":
-            berkas, sufiks = backup_sqlite(connection, tujuan), "sqlite3"
-            ukuran = berkas.stat().st_size / 1_048_576
-            self.stdout.write(self.style.SUCCESS(f"Cadangan: {berkas} ({ukuran:.1f} MB)"))
-        elif connection.vendor in _VENDOR_MSSQL:
-            with connection.cursor() as cur:
-                berkas = backup_mssql(cur, connection.settings_dict["NAME"], tujuan)
-            sufiks = "bak"
-            self.stdout.write(self.style.SUCCESS(f"Cadangan: {berkas} (di mesin SQL Server)"))
-            if not berkas.exists():
-                self.stdout.write(
-                    "Catatan: berkasnya tidak terlihat dari mesin ini, jadi ukuran dan "
-                    "pemangkasan retensi dilewati. Itu wajar kalau SQL Server ada di "
-                    "mesin lain; verifikasi cadangannya di sana."
-                )
-        else:
+        # Penjagaan vendor DIPERTAHANKAN walau settings kini hanya mengizinkan
+        # MS SQL: ENGINE yang salah setel harus berhenti di sini dengan pesan,
+        # bukan menghasilkan "berhasil" tanpa satu berkas pun.
+        if connection.vendor not in _VENDOR_MSSQL:
             raise CommandError(
-                f"Basis data aplikasi bukan SQLite maupun MS SQL ({connection.vendor}). "
+                f"Basis data pangkal bukan MS SQL ({connection.vendor}). "
                 "Cadangkan sendiri dengan alat bawaan mesinnya."
+            )
+        # SQL Server menolak BACKUP di dalam transaksi (galat 3021). Dicegat di
+        # sini supaya pesannya menyebut sebabnya, bukan kode galat ODBC.
+        if connection.in_atomic_block:
+            raise CommandError(
+                "BACKUP DATABASE tidak bisa dijalankan di dalam transaksi. "
+                "Jalankan perintah ini di luar `atomic()`."
+            )
+        with connection.cursor() as cur:
+            berkas = backup_mssql(cur, connection.settings_dict["NAME"], tujuan)
+        sufiks = "bak"
+        self.stdout.write(self.style.SUCCESS(f"Cadangan: {berkas} (di mesin SQL Server)"))
+        if not berkas.exists():
+            self.stdout.write(
+                "Catatan: berkasnya tidak terlihat dari mesin ini, jadi ukuran dan "
+                "pemangkasan retensi dilewati. Itu wajar kalau SQL Server ada di "
+                "mesin lain; verifikasi cadangannya di sana."
             )
 
         # Dicatat ke `CadanganBerkas` supaya layar Cadangan & Pemulihan

@@ -1434,7 +1434,12 @@ def cadangan_jalankan(request):
         return tolak
     from apps.core import cadangan as cad
 
-    jenis = (request.POST.get("jenis") or "").strip()
+    # `get_data`, BUKAN `request.POST`: Inertia mengirim body JSON, dan untuk
+    # body JSON `request.POST` selalu kosong — tombolnya lalu selalu dijawab
+    # "Jenis cadangan tidak dikenal" sementara jalur CLI/test client (yang
+    # mengirim form-encoded) tetap hijau. 18 view lain di berkas ini sudah
+    # memakai helper yang sama.
+    jenis = (get_data(request).get("jenis") or "").strip()
     try:
         if jenis == cad.PANGKAL:
             baris = cad.jalankan_pangkal(request.user.username)
@@ -1462,10 +1467,12 @@ def cadangan_verifikasi(request):
     from apps.core import cadangan as cad
     from apps.core.models import CadanganBerkas
 
-    if not CadanganBerkas.objects.filter(pk=request.POST.get("id") or 0).exists():
+    # Alasan yang sama dengan `cadangan_jalankan`: body-nya JSON.
+    kirim = get_data(request)
+    if not CadanganBerkas.objects.filter(pk=kirim.get("id") or 0).exists():
         request.session["flash_error"] = "Baris cadangan tidak ditemukan."
         return redirect("/admin-panel/pengaturan/cadangan")
-    baris = cad.verifikasi(int(request.POST["id"]))
+    baris = cad.verifikasi(int(kirim["id"]))
     if baris.verifikasi_ok:
         request.session["flash_success"] = f"{baris.nama_berkas}: terbaca utuh."
     else:
@@ -1487,8 +1494,10 @@ def sync_health_jalankan(request):
         return tolak
     from apps.connections.models import ServerProfile
 
-    nama = (request.POST.get("tugas") or "").strip()
-    profil = ServerProfile.objects.filter(pk=request.POST.get("profil") or 0).first()
+    # Alasan yang sama dengan `cadangan_jalankan`: body-nya JSON.
+    kirim = get_data(request)
+    nama = (kirim.get("tugas") or "").strip()
+    profil = ServerProfile.objects.filter(pk=kirim.get("profil") or 0).first()
     try:
         run = tugas.mulai(nama, profil, request.user.username)
     except Ditolak as exc:

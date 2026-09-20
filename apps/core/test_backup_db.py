@@ -39,6 +39,11 @@ class _CursorPalsu:
     def execute(self, sql, params=None):
         self.rekaman.append((sql, params))
 
+    def nextset(self):
+        # BACKUP mengirim pesan progres sebagai result set dan HARUS dihabiskan;
+        # lihat `backup_db.backup_mssql`. Palsu ini tak punya apa-apa lagi.
+        return False
+
 
 def _jalankan(vendor, nama_db="arunika", **opts):
     """Jalankan backup_db terhadap koneksi palsu; pulangkan SQL yang dijalankan."""
@@ -46,6 +51,9 @@ def _jalankan(vendor, nama_db="arunika", **opts):
     conn = mock.MagicMock()
     conn.vendor = vendor
     conn.settings_dict = {"NAME": nama_db}
+    # MagicMock memulangkan objek truthy untuk atribut apa pun, dan penjaga
+    # "jangan BACKUP di dalam transaksi" membaca yang ini.
+    conn.in_atomic_block = False
     conn.cursor.return_value = _CursorPalsu(rekaman)
     with mock.patch("apps.core.management.commands.backup_db.connection", conn):
         call_command("backup_db", "--dir", r"D:\backup\arunika", "--keep-days", "0", **opts)

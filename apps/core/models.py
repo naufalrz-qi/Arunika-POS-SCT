@@ -65,7 +65,14 @@ def log_activity(request, action, detail=""):
         user=user if (user and user.is_authenticated) else None,
         username=(user.username if (user and user.is_authenticated) else ""),
         action=action,
-        detail=detail,
+        # Dipotong DI SINI, penulis satu-satunya, bukan di pemanggil yang
+        # kebetulan meluap duluan (`monitoring.views.menus_save` mengirim
+        # daftar 40+ kunci menu dipisah koma). SQLite tak menegakkan panjang
+        # kolom, jadi baris 505 karakter lolos bertahun-tahun; MS SQL
+        # menolaknya. Kolomnya sengaja tidak dilebarkan: 255 -> 1000 hanya
+        # memindahkan tebingnya, dan layar Log Aktivitas menampilkan detail
+        # ini apa adanya dalam satu baris.
+        detail=str(detail)[:255],
         ip_address=ip,
     )
 
@@ -360,7 +367,17 @@ class HargaSnapshotRun(models.Model):
     class Meta:
         ordering = ["-ran_at"]
         constraints = [
-            models.UniqueConstraint(fields=["profile", "run_date"], name="unique_harga_snapshot_run_per_day")
+            # `condition`, karena `profile` nullable (SET_NULL saat profilnya
+            # dihapus). SQLite menganggap dua NULL berbeda; SQL Server
+            # menganggapnya SAMA, jadi tanpa syarat ini run yatim milik dua
+            # profil berbeda di hari yang sama saling menabrak. Penulisnya
+            # (apps/core/scheduler.py) selalu mengisi `profile`, jadi indeks
+            # tersaring menutupi setiap baris yang benar-benar dibaca.
+            models.UniqueConstraint(
+                fields=["profile", "run_date"],
+                condition=models.Q(profile__isnull=False),
+                name="unique_harga_snapshot_run_per_day",
+            )
         ]
 
     def __str__(self) -> str:
@@ -384,7 +401,13 @@ class StokSnapshotRun(models.Model):
     class Meta:
         ordering = ["-ran_at"]
         constraints = [
-            models.UniqueConstraint(fields=["profile", "run_date"], name="unique_stok_snapshot_run_per_day")
+            # Sama seperti HargaSnapshotRun di atas: NULL yang dianggap sama
+            # oleh SQL Server.
+            models.UniqueConstraint(
+                fields=["profile", "run_date"],
+                condition=models.Q(profile__isnull=False),
+                name="unique_stok_snapshot_run_per_day",
+            )
         ]
 
     def __str__(self) -> str:
@@ -408,7 +431,12 @@ class StokSnapshotBaseRun(models.Model):
     class Meta:
         ordering = ["-ran_at"]
         constraints = [
-            models.UniqueConstraint(fields=["profile", "base_month"], name="unique_stok_snapshot_base_per_month")
+            # Sama seperti dua di atas.
+            models.UniqueConstraint(
+                fields=["profile", "base_month"],
+                condition=models.Q(profile__isnull=False),
+                name="unique_stok_snapshot_base_per_month",
+            )
         ]
 
     def __str__(self) -> str:

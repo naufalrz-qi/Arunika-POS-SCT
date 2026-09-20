@@ -36,9 +36,10 @@ Set these in the shell or `.env` before running:
 
 | Var | Default | Note |
 |-----|---------|------|
-| `POS_APP_DB_ENGINE` | `sqlite` | `mssql` untuk produksi. Lihat bagian "Basis data aplikasi" di bawah — **jangan diubah tanpa `dumpdata` lebih dulu.** |
-| `POS_APP_DB_HOST` / `_PORT` / `_NAME` / `_USER` / `_PASSWORD` | *(kosong)* | Wajib saat `POS_APP_DB_ENGINE=mssql`; HOST & NAME diperiksa saat boot. |
-| `POS_APP_DB_DRIVER` | `ODBC Driver 17 for SQL Server` | Disamakan dengan jalur pyodbc di `core/mssql.py`. |
+| `POS_APP_DB_HOST` / `_NAME` | *(wajib)* | Basis data pangkal. Diperiksa saat boot; tanpa keduanya aplikasi menolak start. |
+| `POS_APP_DB_PORT` / `_USER` / `_PASSWORD` | `1433` / kosong / kosong | USER kosong = autentikasi Windows. |
+| `POS_APP_DB_DRIVER` / `_EXTRA` | Driver 17 / `Encrypt=yes;TrustServerCertificate=yes` | Disamakan dengan jalur pyodbc di `core/mssql.py`. |
+| `POS_APP_DB_TEST_NAME` | `test_<NAME>` | Database yang dibuat `manage.py test`. |
 | `DEBUG` | `0` (false) | Secure default. Set `1` only for dev. |
 | `SECRET_KEY` | `django-insecure-...` (dev fallback) | **Must set in production.** With `DEBUG=0` the app REFUSES TO BOOT while the dev key is in place. Generate: `python -c "import secrets; print(secrets.token_urlsafe(50))"`. |
 | `ALLOWED_HOSTS` | `127.0.0.1,localhost` | Comma-separated IPs; add LAN/Tailscale hosts. |
@@ -169,51 +170,91 @@ Caddy mengirim `X-Forwarded-For` + `X-Forwarded-Proto` sendiri. Sesudah itu baru
 memang diizinkan) punya arti. Untuk HTTPS, tambahkan nama yang punya sertifikat — `tailscale
 cert` untuk nama tailnet mesin itu, atau CA internal untuk nama LAN-nya.
 
-## Basis data aplikasi: SQLite atau MS SQL
+## Basis data pangkal: MS SQL, dan hanya itu
 
-Sejak `POS_APP_DB_ENGINE` ada, basis data aplikasi (akun, sesi, `ServerProfile`, `TautanUser`,
-`ActivityLog`, cursor sync, snapshot) bisa tinggal di dua tempat:
+Basis data pangkal (akun, sesi, `ServerProfile`, `TautanUser`, `ActivityLog`, cursor sync,
+snapshot) tinggal di sebuah database MS SQL yang alamatnya ada di `.env` (`POS_APP_DB_*`).
+Pemasangan ini memakai `the_nameless` di instans mesin aplikasi.
 
-| `POS_APP_DB_ENGINE` | Di mana | Untuk apa |
-|---|---|---|
-| `sqlite` (default) | `db.sqlite3` di folder proyek | Pengembangan, `manage.py test`, klon baru. Tak butuh server apa pun. |
-| `mssql` | Server MS SQL "pangkal" dari `.env` | Produksi |
+Alamatnya sengaja dari `.env`, bukan dari `ServerProfile` seperti server bisnis. Alasannya
+melingkar: `ServerProfile` justru yang menyimpan cara menyambung ke server-server itu, dan ia
+tinggal DI DALAM pangkal — jadi pangkal harus bisa dibaca lebih dulu tanpa profil apa pun.
+Karena itu pula pangkal tidak didaftarkan sebagai profil koneksi: setiap pekerjaan yang
+menyapu "semua profil" (snapshot stok, sync health, sumber transfer) akan ikut menyentuhnya.
 
-Ini **koneksi pangkal**, dan sengaja dari `.env` — bukan dari `ServerProfile` seperti server
-bisnis. Alasannya melingkar: `ServerProfile` justru yang menyimpan cara menyambung ke
-server-server itu, jadi ia sendiri harus bisa dibaca lebih dulu tanpa profil apa pun.
+SQLite sudah dihapus seluruhnya, termasuk untuk `manage.py test`. Alasannya bukan
+keseragaman: SQLite menganggap dua NULL berbeda di unique constraint dan tidak menegakkan
+panjang kolom sama sekali, jadi baris yang mustahil ada di MS SQL hidup bertahun-tahun tanpa
+gejala — dan tak satu pun test bisa menangkapnya selama test-nya sendiri jalan di SQLite.
+Keduanya benar-benar ditemukan saat pemindahan (satu `ActivityLog.detail` 505 karakter di
+kolom 255, dan tiga pasang baris snapshot ber-`profile` NULL).
 
-> **Konsekuensi yang harus disadari sebelum menaikkan ke `mssql`: kalau server pangkal mati,
-> tak ada yang bisa login.** Dengan SQLite, login tetap jalan walau server bisnis tak
-> terjangkau. Karena itu server pangkal sebaiknya mesin lokal aplikasi, bukan server jauh
-> lewat Tailscale.
+> **Kalau server pangkal mati, tak ada yang bisa login.** Karena itu ia instans di mesin
+> aplikasi sendiri, bukan server jauh lewat Tailscale.
 
-### Pindah dari SQLite ke MS SQL (sekali, dan tidak bisa diulang kalau salah)
+Collation-nya mengikuti `model` instans, di sini `SQL_Latin1_General_CP1_CI_AS` — **tidak peka
+huruf besar/kecil**, tak seperti SQLite. Sesudah pindah, `superadmin` dan `SUPERADMIN` adalah
+akun yang sama.
 
-**Langkah 1 tidak boleh dilewati.** `TautanUser` adalah pekerjaan manual belasan baris per
-orang yang **tidak bisa direkonstruksi dari server mana pun**. Kehilangannya tidak bisa
-diperbaiki dengan kode.
+### Pindah dari pemasangan SQLite lama (sekali, saat cutover)
+
+`manage.py pindah_pangkal` yang mengerjakannya: ia membaca berkas SQLite READ-ONLY dan menulis
+dengan `bulk_create` berbatch. `loaddata` tidak dipakai karena menyimpan satu objek per
+`save()` — 778.916 baris `BarangHargaState` lewat jalur itu butuh berjam-jam; perintah ini
+memindahkan 810 ribu baris dalam ±3 menit.
+
+Yang dijaga perintah itu dan tidak akan Anda lihat kalau dikerjakan tangan: cap waktu
+`auto_now`/`auto_now_add` tidak ditimpa jam migrasi, primary key asli bertahan, urutan foreign
+key tak jadi soal (penjagaan constraint dimatikan lalu **divalidasi ulang eksplisit**), dan
+benih IDENTITY di-reseed supaya insert pertama tidak menabrak pk lama.
+
+1. Hentikan waitress. Pastikan tak ada proses yang memegang `db.sqlite3`.
+2. **Masih dengan kode lama** (yang jalur SQLite-nya belum dihapus):
+   `python manage.py backup_db --dir D:\backup\arunika`.
+   Berkas `db-YYYYMMDD.sqlite3` itu sekaligus artefak rollback dan sumber salin yang bersih —
+   `VACUUM INTO` selalu menghasilkan berkas ter-checkpoint, sementara `db.sqlite3` hidup masih
+   punya `-wal` dan tak bisa dibuka read-only. Salin berkas itu **dan `.env`**
+   (`POS_FERNET_KEY`!) ke luar mesin.
+3. Di SQL Server: `CREATE DATABASE [the_nameless];` tanpa klausa `COLLATE`, lalu
+   `ALTER DATABASE [the_nameless] SET RECOVERY SIMPLE;`
+4. Isi `POS_APP_DB_*` di `.env`, hapus baris `POS_APP_DB_ENGINE`, dan pastikan `BACKUP_DIR_HUB`
+   menunjuk folder yang BERBEDA dari `BACKUP_DIR` (lihat catatan di bagian Cadangan).
+5. `python manage.py migrate`, lalu `python manage.py migrate --check` harus diam.
+6. Praperiksa dulu, baru pindahkan:
 
 ```bash
-python manage.py dumpdata --natural-foreign --natural-primary -e contenttypes -e auth.Permission -o pindah-app-db.json
-```
-
-Simpan `pindah-app-db.json` **dan** salinan `db.sqlite3` di luar mesin sebelum melanjutkan.
-Lalu buat database kosong di SQL Server, isi `POS_APP_DB_*` di `.env`, set
-`POS_APP_DB_ENGINE=mssql`, dan:
-
-```bash
-python manage.py migrate
+python manage.py pindah_pangkal --sumber D:\backup\arunika\db-20260918.sqlite3 --periksa-saja
 ```
 
 ```bash
-python manage.py loaddata pindah-app-db.json
+python manage.py pindah_pangkal --sumber D:\backup\arunika\db-20260918.sqlite3 --perbaiki
 ```
 
-**Verifikasi sebelum menyatakan selesai** — bandingkan jumlah baris per model, lama vs baru.
-Yang paling penting `TautanUser`: kalau jumlahnya berkurang, tujuh layar kasir yang menulis
-akan menolak jalan, dan barisnya tidak bisa dibuat ulang. Lalu uji login, lonceng notif, dan
-ganti koneksi di navbar.
+`--perbaiki` hanya memotong nilai yang melebihi `max_length`, dan melaporkan tiap
+pemotongannya. Ia tidak pernah menghapus baris: kunci unik yang kembar harus dibereskan di
+sumbernya (migrasi `core.0017` sudah melakukannya untuk ketiga tabel snapshot).
+
+Perintahnya berhenti dan menolak menyalin kalau targetnya sudah berisi — tak ada mode
+lanjut-separuh. Kalau gagal di tengah: `DROP DATABASE`, buat ulang, `migrate`, ulangi.
+
+**Gerbang sebelum menyalakan layanan.** Perintah itu memverifikasi sendiri dan menolak diam:
+jumlah baris per model sumber vs target, `check_constraints()` (FK + ISJSON + CHECK >= 0),
+benih IDENTITY, `TautanUser` beserta pasangannya, dan bahwa ke-14 password profil bisa
+didekripsi dengan `POS_FERNET_KEY` yang aktif. `TautanUser` yang paling mahal: kalau
+jumlahnya berkurang, tujuh layar kasir yang menulis akan menolak jalan, dan barisnya tidak
+bisa dibuat ulang dari server mana pun.
+
+7. Nyalakan waitress. Login, lalu periksa Kelola Tautan User, ganti koneksi di navbar, Log
+   Aktivitas, Riwayat Operasi, dan Kesehatan Sync. Terakhir buka Cadangan & Pemulihan →
+   **Cadangkan pangkal** → **Verifikasi** baris yang baru dibuat: itu satu-satunya bukti
+   ujung-ke-ujung bahwa cadangan pangkal di jalur MS SQL benar-benar bisa dibaca kembali.
+8. Tugas Task Scheduler `backup_db` sekarang menulis berkasnya lewat **akun layanan SQL
+   Server**, bukan akun yang menjalankan perintah. Folder tujuannya harus bisa ditulis akun
+   itu — kalau tidak, foldernya tinggal kosong dan tak ada yang memberi tahu.
+
+**Rollback** kapan pun sebelum langkah 7 selesai: hentikan waitress, kembalikan `.env` lama,
+pakai lagi `db.sqlite3` bersama kode versi sebelumnya. Berkas SQLite tak pernah ditulis
+sepanjang proses ini.
 
 ## Cadangan (WAJIB — tak ada salinan lain)
 
@@ -225,18 +266,21 @@ aman di MS SQL; yang di sini tidak punya cadangan di mana pun.
 python manage.py backup_db --dir D:\backup\arunika --keep-days 30
 ```
 
-Jadwalkan harian lewat Windows Task Scheduler. Perintah ini menyesuaikan diri dengan mesinnya:
+Jadwalkan harian lewat Windows Task Scheduler. Isinya `BACKUP DATABASE ... WITH INIT,
+CHECKSUM`, dan ada satu hal yang mudah menjebak: **berkasnya ditulis di mesin SQL Server,
+bukan di mesin yang menjalankan perintah ini**. `--dir` diartikan oleh SQL Server, akun
+layanannya yang harus punya izin tulis di sana, dan kalau folder itu tak terjangkau dari mesin
+ini, pemangkasan retensi dilewati — perintahnya mengatakan begitu. `COMPRESSION` sengaja tidak
+dipakai karena SQL Server Express tidak mendukungnya.
 
-- **SQLite** — `VACUUM INTO`, bukan menyalin berkasnya. Pada mode WAL, menyalin `db.sqlite3`
-  saat server hidup menghasilkan salinan yang kehilangan transaksi yang belum ter-checkpoint.
-- **MS SQL** — `BACKUP DATABASE ... WITH INIT`. **Berkasnya ditulis di mesin SQL Server, bukan
-  di mesin yang menjalankan perintah ini**; `--dir` diartikan oleh SQL Server dan akun
-  layanannya yang harus punya izin tulis di sana. Kalau folder itu tak terjangkau dari mesin
-  ini, pemangkasan retensi dilewati dan perintahnya mengatakan begitu. `COMPRESSION` sengaja
-  tidak dipakai karena SQL Server Express tidak mendukungnya.
-
-Mesin selain keduanya **ditolak dengan galat**, bukan dilewati diam-diam — cadangan yang gagal
+Mesin selain MS SQL **ditolak dengan galat**, bukan dilewati diam-diam — cadangan yang gagal
 tanpa suara persis sama buruknya dengan tidak ada cadangan.
+
+> **`BACKUP_DIR_HUB` harus berbeda dari `BACKUP_DIR`.** Sejak cadangan pangkal juga berkas
+> `.bak`, keduanya memakai pola nama yang sama (`db-YYYYMMDD.bak`). Dengan folder yang sama —
+> dan `BACKUP_DIR_HUB` kosong memang berarti "ikut `BACKUP_DIR`" — layar menampilkan dua baris
+> ber-path identik, dan kalau folder itu suatu saat dipetakan sebagai share UNC, pemangkasan
+> retensi pangkal akan menghapus cadangan AMPHOREUS.
 
 **`POS_FERNET_KEY` tidak ikut tercadang, dan harus disalin terpisah.** Tanpa kuncinya, ke-14
 password koneksi di dalam cadangan tetap terenkripsi selamanya — cadangan yang lengkap tapi
@@ -258,11 +302,14 @@ Ke-14 server legacy **tidak** dicadangkan dari sini, dan tidak bisa dijadikan sa
 cadangan AMPHOREUS tidak menerima parameter profil sama sekali — sasarannya ditentukan
 `HUB_NAME`, bukan input.
 
-**Verifikasi** memeriksa apakah berkasnya benar-benar terbaca kembali: `PRAGMA
-integrity_check` untuk SQLite, `RESTORE VERIFYONLY ... WITH CHECKSUM` untuk MS SQL.
-`VERIFYONLY` tidak memulihkan apa pun dan tidak menyentuh database mana pun, tapi ia
-**butuh izin setingkat `CREATE DATABASE`** pada instansnya; kalau akun profil AMPHOREUS tak
-punya, hasilnya tampil sebagai gagal dengan pesan pyodbc-nya, bukan diam. Checksum halaman
+**Verifikasi** memeriksa apakah berkasnya benar-benar terbaca kembali dengan
+`RESTORE VERIFYONLY ... WITH CHECKSUM`, **di instans yang menulisnya**: cadangan pangkal lewat
+koneksi Django sendiri, cadangan AMPHOREUS lewat profil hub. Itu bukan kerapian: berkas `.bak`
+hanya terbaca oleh instans yang membuatnya, jadi memverifikasi cadangan pangkal lewat instans
+AMPHOREUS akan melaporkan cadangan yang sehat sebagai rusak. `VERIFYONLY` tidak memulihkan apa
+pun dan tidak menyentuh database mana pun, tapi ia **butuh izin setingkat `CREATE DATABASE`**
+pada instansnya; kalau akunnya tak punya, hasilnya tampil sebagai gagal dengan pesan
+pyodbc-nya, bukan diam. Checksum halaman
 baru bisa diperiksa karena backup kini ditulis `WITH INIT, CHECKSUM` — tanpa itu
 `VERIFYONLY` hanya memeriksa header dan akan bilang "ok" pada berkas yang halamannya rusak.
 
@@ -280,11 +327,9 @@ Teks lengkapnya ada di **satu tempat**, `apps/core/cadangan.RUNBOOK`, dan tampil
 Cadangan & Pemulihan dengan tombol Salin. Ringkasnya:
 
 1. **Kunci dulu, baru database.** `POS_FERNET_KEY` tidak ada di cadangan mana pun.
-2. **Pangkal SQLite** — hentikan waitress, sisihkan `db.sqlite3` lama, **hapus sisa `-wal`
-   dan `-shm`** (berkas itu milik database lama; membiarkannya membuat sqlite menggabungkan
-   dua database berbeda), salin berkas cadangan, `manage.py migrate --check`.
-3. **Pangkal MS SQL** — `RESTORE ... WITH REPLACE, RECOVERY` di SSMS, waitress berhenti dulu.
-4. **AMPHOREUS** — restore, lalu `manage.py pull_hub --mode segar --hari 30`. Tarik arsip tak
+2. **Pangkal** — hentikan waitress dulu (RESTORE menolak berjalan selama masih ada koneksi),
+   `RESTORE ... WITH REPLACE, RECOVERY` di SSMS, lalu `manage.py migrate --check`.
+3. **AMPHOREUS** — restore, lalu `manage.py pull_hub --mode segar --hari 30`. Tarik arsip tak
    perlu diulang selama `HubPullState` ikut pulih bersama pangkal — penanda `arsip_sampai` ada
    di sana, bukan di AMPHOREUS.
 
@@ -295,7 +340,8 @@ berarti profil `AMPHOREUS` atau `kode_sumber` cabang belum ikut pulih.
 ## Performance (scaling to 200–500 req/s)
 
 - **GZipMiddleware**: Reports ~5MB → ~500KB (5–8 ms overhead).
-- **SQLite WAL**: Readers don't block writers; concurrent SELECTs work.
+- **READ UNCOMMITTED untuk laporan** (`core/mssql.report_cursor`): kueri berat tak mengambil
+  shared lock yang memblok kasir menulis.
 - **SESSION_SAVE_EVERY_REQUEST = False**: Writes only on session change, not every request.
 - **Deferred props**: Heavy data fetched async post-render (spinner shown to user).
 - **Master data cache (10 min TTL)**: 54k product rows fetched once per process, reused.
@@ -307,12 +353,15 @@ berarti profil `AMPHOREUS` atau `kode_sumber` cabang belum ikut pulih.
 Get-NetTCPConnection -LocalPort 8000 -ErrorAction Stop | Where-Object {$_.State -eq 'Listen'} | Foreach-Object {Stop-Process -Id $_.OwningProcess -Force}
 ```
 
-**SQLite "database is locked"** (hanya berlaku selama `POS_APP_DB_ENGINE=sqlite`):
-Rare (WAL + SESSION_SAVE_EVERY_REQUEST=False mitigate). Restart layanannya. **Jangan menghapus
-`db.sqlite3-wal` / `db.sqlite3-shm`** — pada mode WAL kedua berkas itu memuat transaksi yang
-sudah ter-commit tapi belum ter-checkpoint, jadi menghapusnya membuang data yang sudah
-tersimpan (akun, tautan user, log) tanpa satu pun peringatan. Kalau memang perlu memaksa
-checkpoint: `python manage.py dbshell` lalu `PRAGMA wal_checkpoint(TRUNCATE);`.
+**"Login failed for user" / "Cannot open database" saat boot**: aplikasi menolak start tanpa
+pangkal, dan itu disengaja — tak ada mode darurat yang diam-diam jatuh ke berkas lokal. Periksa
+`POS_APP_DB_*` di `.env`, lalu layanan SQL Server-nya. Selama server pangkal mati, tak ada yang
+bisa login sama sekali.
+
+**`manage.py test` gagal membuat/menghapus database test**: teardown menjalankan
+`ALTER DATABASE test_... SET SINGLE_USER WITH ROLLBACK IMMEDIATE` lalu `DROP DATABASE`. Satu
+jendela SSMS yang sedang membuka database itu cukup membuatnya gagal, dan run berikutnya mulai
+dari database kotor. Tutup jendelanya, atau pakai `--keepdb` kalau memang sengaja dipertahankan.
 
 **Vite manifest.json not found**:
 Ran `npm run build`? Static files collected? Check `frontend/dist/` and `staticfiles/` exist.

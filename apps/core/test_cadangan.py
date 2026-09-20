@@ -10,8 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.db import connection
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase
 
 from apps.bisnis.siapkan import Ditolak
 from apps.connections.models import ServerProfile
@@ -20,53 +19,78 @@ from apps.core.management.commands import backup_db
 from apps.core.models import CadanganBerkas, SyncLog
 
 
-class VerifikasiSqlite(TransactionTestCase):
-    """TransactionTestCase, bukan TestCase: `VACUUM INTO` ditolak SQLite kalau
-    dijalankan di dalam transaksi, dan TestCase membungkus tiap test dalam satu."""
+class VerifikasiDiInstansYangMenulisnya(TestCase):
+    """Cadangan pangkal diverifikasi lewat koneksi Django, AMPHOREUS lewat hub.
 
-    def _baris(self, berkas: Path) -> CadanganBerkas:
+    Ini bukan rapi-rapi: berkas `.bak` hanya bisa dibaca oleh instans yang
+    menulisnya. Pangkal ada di mesin aplikasi, AMPHOREUS di SERVER-RETAIL.
+    Versi lama mengirim SEMUA verifikasi ke cursor AMPHOREUS, jadi cadangan
+    pangkal yang sehat akan dilaporkan rusak — persis keyakinan palsu yang
+    modul ini ada untuk mencegahnya, hanya terbalik arahnya.
+    """
+
+    def _baris(self, jenis, profile=None) -> CadanganBerkas:
         return CadanganBerkas.objects.create(
-            jenis=cad.PANGKAL, nama_berkas=berkas.name, path=str(berkas),
-            ukuran_byte=berkas.stat().st_size if berkas.exists() else 0,
+            jenis=jenis, profile=profile, nama_berkas="db-uji.bak",
+            path="D:/backup/db-uji.bak",
         )
 
-    def test_berkas_rusak_terdeteksi(self):
-        """Ini test inti. Kalau ia hijau pada berkas sampah, verifikasinya bohong."""
-        import tempfile
+    def test_jenis_menentukan_instansnya(self):
+        """Perutean, bukan SQL-nya: PANGKAL ke koneksi sendiri, AMPHOREUS ke hub."""
+        profil = ServerProfile.objects.create(
+            name="AMPHOREUS", host="SERVER-RETAIL", db_name="AMPHOREUS", username="sa")
+        with patch.object(cad, "_cek_pangkal", return_value=(True, "jalur-pangkal")), \
+             patch.object(cad, "_cek_mssql", return_value=(True, "jalur-hub")):
+            pangkal = cad.verifikasi(self._baris(cad.PANGKAL).pk)
+            hub = cad.verifikasi(self._baris(cad.AMPHOREUS, profil).pk)
+        self.assertEqual(pangkal.verifikasi_pesan, "jalur-pangkal")
+        self.assertEqual(hub.verifikasi_pesan, "jalur-hub")
 
-        with tempfile.TemporaryDirectory() as d:
-            berkas = Path(d) / "db-rusak.sqlite3"
-            berkas.write_bytes(b"ini jelas bukan berkas sqlite")
-            hasil = cad.verifikasi(self._baris(berkas).pk)
+    def test_sql_pangkal_memakai_cursor_django(self):
+        dieksekusi = []
+
+        class Kursor:
+            def execute(self, sql, params=None):
+                dieksekusi.append((sql, params))
+
+            def nextset(self):
+                return False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        class Koneksi:
+            def cursor(self):
+                return Kursor()
+
+        baris = self._baris(cad.PANGKAL)
+        with patch.object(cad, "connection", Koneksi()), \
+             patch.object(cad, "_hub", side_effect=AssertionError("jalur pangkal tak boleh memanggil _hub()")):
+            ok, pesan = cad._cek_pangkal(baris)
+        self.assertTrue(ok)
+        sql, params = dieksekusi[0]
+        self.assertIn("RESTORE VERIFYONLY", sql)
+        self.assertIn("WITH CHECKSUM", sql)
+        # `%s`, bukan `?`: ini cursor Django, bukan pyodbc mentah.
+        self.assertIn("FROM DISK = %s", sql)
+        self.assertEqual(params, [baris.path])
+
+    def test_kegagalan_instans_bukan_ok(self):
+        """Verifikasi yang selalu menjawab "ok" lebih berbahaya daripada tak ada
+        verifikasi."""
+        import pyodbc
+
+        def meledak(*a, **k):
+            raise pyodbc.Error("42000", "[42000] RESTORE VERIFYONLY gagal")
+
+        with patch.object(cad, "_cek_pangkal", side_effect=meledak):
+            hasil = cad.verifikasi(self._baris(cad.PANGKAL).pk)
         self.assertIs(hasil.verifikasi_ok, False)
-        self.assertTrue(hasil.verifikasi_pesan)
         self.assertNotEqual(hasil.verifikasi_pesan, "ok")
         self.assertIsNotNone(hasil.verifikasi_at)
-
-    def test_berkas_sehat_lulus(self):
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as d:
-            berkas = backup_db.backup_sqlite(connection, Path(d))
-            hasil = cad.verifikasi(self._baris(berkas).pk)
-        self.assertIs(hasil.verifikasi_ok, True)
-        self.assertEqual(hasil.verifikasi_pesan, "ok")
-
-    def test_berkas_hilang_bukan_ok(self):
-        hasil = cad.verifikasi(self._baris(Path("Z:/tidak/ada/db-x.sqlite3")).pk)
-        self.assertIs(hasil.verifikasi_ok, False)
-
-    def test_verifikasi_tidak_menulis_wal_di_folder_cadangan(self):
-        """`mode=ro` lewat URI. Tanpa itu sqlite bisa membuat -wal/-shm di
-        sebelah berkas cadangan — menulis ke folder cadangan justru saat sedang
-        memeriksanya."""
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as d:
-            berkas = backup_db.backup_sqlite(connection, Path(d))
-            cad.verifikasi(self._baris(berkas).pk)
-            sisa = sorted(p.name for p in Path(d).iterdir())
-        self.assertEqual(sisa, [berkas.name])
 
 
 class PenjagaLegacy(TestCase):
@@ -147,33 +171,54 @@ class TidakAdaJalurRestore(TestCase):
         )
 
 
+class _KursorPalsu:
+    """Cursor palsu yang menghitung `nextset()` — lihat KeluaranBackupDihabiskan."""
+
+    def __init__(self, sisa_result_set: int = 2):
+        self.dieksekusi = []
+        self.sisa = sisa_result_set
+        self.nextset_dipanggil = 0
+
+    def execute(self, sql, params=None):
+        self.dieksekusi.append((sql, params))
+
+    def nextset(self):
+        self.nextset_dipanggil += 1
+        self.sisa -= 1
+        return self.sisa > 0
+
+
 class JalurMssqlCadangan(TestCase):
     def test_checksum_wajib_ada(self):
         """Tanpa CHECKSUM saat backup, RESTORE VERIFYONLY hanya memeriksa header
         dan akan bilang "ok" untuk berkas yang halamannya rusak."""
-        dieksekusi = []
-
-        class Kursor:
-            def execute(self, sql, params=None):
-                dieksekusi.append(sql)
-
-        backup_db.backup_mssql(Kursor(), "AMPHOREUS", Path("D:/b"))
-        self.assertIn("WITH INIT, CHECKSUM", dieksekusi[0])
+        kur = _KursorPalsu()
+        backup_db.backup_mssql(kur, "AMPHOREUS", Path("D:/b"))
+        self.assertIn("WITH INIT, CHECKSUM", kur.dieksekusi[0][0])
 
     def test_placeholder_mengikuti_gaya_cursor(self):
         """pyodbc memakai `?`, cursor Django `%s`. Menebaknya dari bentuk objek
         akan diam-diam salah di salah satu jalur, dan baru terlihat saat
         cadangan dijalankan sungguhan."""
-        dieksekusi = []
+        a, b = _KursorPalsu(), _KursorPalsu()
+        backup_db.backup_mssql(a, "A", Path("D:/b"))
+        backup_db.backup_mssql(b, "A", Path("D:/b"), ph="?")
+        self.assertIn("TO DISK = %s", a.dieksekusi[0][0])
+        self.assertIn("TO DISK = ?", b.dieksekusi[0][0])
 
-        class Kursor:
-            def execute(self, sql, params=None):
-                dieksekusi.append(sql)
+    def test_keluaran_backup_dihabiskan(self):
+        """`BACKUP` mengirim pesan progresnya sebagai result set, dan baru selesai
+        setelah semuanya dihabiskan.
 
-        backup_db.backup_mssql(Kursor(), "A", Path("D:/b"))
-        backup_db.backup_mssql(Kursor(), "A", Path("D:/b"), ph="?")
-        self.assertIn("TO DISK = %s", dieksekusi[0])
-        self.assertIn("TO DISK = ?", dieksekusi[1])
+        Tanpa `nextset()`, menutup cursor MEMBATALKAN statement-nya: tak ada
+        berkas, tak ada baris di `msdb.dbo.backupset`, dan **tak ada galat sama
+        sekali** — layar Cadangan menampilkan baris baru untuk berkas yang tidak
+        pernah ada. Terukur di mesin ini: berkas 0 byte tanpa ini, 238 MB
+        dengannya.
+        """
+        kur = _KursorPalsu(sisa_result_set=3)
+        backup_db.backup_mssql(kur, "A", Path("D:/b"))
+        self.assertEqual(kur.nextset_dipanggil, 3, "result set BACKUP tidak dihabiskan")
 
     def test_nama_database_nakal_ditolak(self):
         from django.core.management.base import CommandError
@@ -182,9 +227,7 @@ class JalurMssqlCadangan(TestCase):
             backup_db.backup_mssql(None, "A]; DROP DATABASE B--", Path("D:/b"))
 
 
-class CatatIdempoten(TransactionTestCase):
-    """TransactionTestCase — alasan yang sama: memanggil `backup_sqlite` sungguhan."""
-
+class CatatIdempoten(TestCase):
     def test_cadangan_ulang_memperbarui_baris_bukan_menambah(self):
         """Cadangan harian menimpa berkas bertanggal sama. Baris kedua akan
         menunjuk berkas yang isinya sudah berganti — dan membawa serta hasil
@@ -192,9 +235,11 @@ class CatatIdempoten(TransactionTestCase):
         import tempfile
 
         with tempfile.TemporaryDirectory() as d:
-            berkas = backup_db.backup_sqlite(connection, Path(d))
+            berkas = Path(d) / "db-uji.bak"
+            berkas.write_bytes(b"x")
             a = cad.catat(cad.PANGKAL, None, berkas, "sa")
-            cad.verifikasi(a.pk)
+            with patch.object(cad, "_cek_pangkal", return_value=(True, "ok")):
+                cad.verifikasi(a.pk)
             b = cad.catat(cad.PANGKAL, None, berkas, "sa")
         self.assertEqual(CadanganBerkas.objects.count(), 1)
         self.assertEqual(a.pk, b.pk)
@@ -215,6 +260,48 @@ class RuteCadangan(TestCase):
             self.assertNotEqual(resp.status_code, 302)
         self.assertEqual(CadanganBerkas.objects.count(), 0)
 
+    def test_tombol_layar_mengirim_json(self):
+        """Layar memakai Inertia `useForm.post`, yang mengirim **body JSON** —
+        dan untuk body JSON `request.POST` selalu kosong.
+
+        Test lain di berkas ini mengirim form-encoded seperti `Client.post`
+        bawaan, jadi semuanya hijau sementara tombolnya di layar selalu dijawab
+        "Jenis cadangan tidak dikenal". Ditemukan dengan mengklik tombolnya
+        sungguhan, bukan oleh test.
+        """
+        import json
+        import tempfile
+
+        def palsu(cur, nama_db, tujuan, ph="%s"):
+            tujuan.mkdir(parents=True, exist_ok=True)
+            berkas = tujuan / "db-uji.bak"
+            berkas.write_bytes(b"x")
+            return berkas
+
+        self.client.force_login(self.sa)
+        with tempfile.TemporaryDirectory() as d, \
+             patch.dict("os.environ", {"BACKUP_DIR": d}), \
+             patch.object(backup_db, "backup_mssql", side_effect=palsu):
+            resp = self.client.post(
+                "/admin-panel/pengaturan/cadangan/jalankan",
+                data=json.dumps({"jenis": "pangkal"}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 302)
+        self.assertNotIn("flash_error", self.client.session)
+        self.assertEqual(CadanganBerkas.objects.count(), 1)
+
+        baris = CadanganBerkas.objects.get()
+        with patch.object(cad, "_cek_pangkal", return_value=(True, "ok")):
+            resp = self.client.post(
+                "/admin-panel/pengaturan/cadangan/verifikasi",
+                data=json.dumps({"id": baris.pk}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 302)
+        baris.refresh_from_db()
+        self.assertIs(baris.verifikasi_ok, True)
+
     def test_jenis_tak_dikenal_jadi_flash_bukan_500(self):
         self.client.force_login(self.sa)
         resp = self.client.post("/admin-panel/pengaturan/cadangan/jalankan", {"jenis": "legacy"})
@@ -223,20 +310,20 @@ class RuteCadangan(TestCase):
         self.assertEqual(CadanganBerkas.objects.count(), 0)
 
     def test_cadangan_pangkal_lewat_web_mencatat_riwayat(self):
-        # VACUUM INTO tak bisa jalan di dalam transaksi TestCase, jadi jalur
-        # cadangannya dipalsukan; yang diuji di sini RUTE-nya, bukan VACUUM.
+        # `BACKUP DATABASE` sungguhan menulis berkas ratusan MB di mesin SQL
+        # Server; yang diuji di sini RUTE-nya, bukan backup-nya.
         import tempfile
 
-        def palsu(conn, tujuan):
+        def palsu(cur, nama_db, tujuan, ph="%s"):
             tujuan.mkdir(parents=True, exist_ok=True)
-            berkas = tujuan / "db-uji.sqlite3"
+            berkas = tujuan / "db-uji.bak"
             berkas.write_bytes(b"x")
             return berkas
 
         self.client.force_login(self.sa)
         with tempfile.TemporaryDirectory() as d, \
              patch.dict("os.environ", {"BACKUP_DIR": d}), \
-             patch.object(backup_db, "backup_sqlite", side_effect=palsu):
+             patch.object(backup_db, "backup_mssql", side_effect=palsu):
             resp = self.client.post("/admin-panel/pengaturan/cadangan/jalankan", {"jenis": "pangkal"})
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(CadanganBerkas.objects.count(), 1)
