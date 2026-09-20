@@ -206,7 +206,7 @@ kalau ada yang gagal. Di PowerShell:
 Start-Transcript -Path D:\backup\arunika\cutover-$(Get-Date -f yyyyMMdd-HHmm).log
 ```
 
-…kerjakan langkah 1–7 di bawah…
+…kerjakan langkah 1–9 di bawah…
 
 ```powershell
 Stop-Transcript
@@ -241,12 +241,18 @@ benih IDENTITY di-reseed supaya insert pertama tidak menabrak pk lama.
 3. Di SQL Server: `CREATE DATABASE [the_nameless];` tanpa klausa `COLLATE`, lalu
    `ALTER DATABASE [the_nameless] SET RECOVERY SIMPLE;` Sekalian beri akun layanan
    SQL Server (`NT SERVICE\MSSQLSERVER`) hak tulis ke folder cadangan sekarang, jangan
-   nanti di langkah 8 — itu satu-satunya cara mengetahuinya sebelum titik tak bisa
-   kembali, dan kegagalannya tak berbunyi apa-apa (lihat langkah 8).
+   nanti di langkah 9 — itu satu-satunya cara mengetahuinya sebelum titik tak bisa
+   kembali, dan kegagalannya tak berbunyi apa-apa (lihat langkah 9).
 4. Isi `POS_APP_DB_*` di `.env`, hapus baris `POS_APP_DB_ENGINE`, dan pastikan `BACKUP_DIR_HUB`
    menunjuk folder yang BERBEDA dari `BACKUP_DIR` (lihat catatan di bagian Cadangan).
-5. `python manage.py migrate`, lalu `python manage.py migrate --check` harus diam.
-6. Praperiksa dulu, baru pindahkan:
+5. **Baru sekarang tarik kode barunya** (`git pull`), lalu di venv-nya:
+   `pip install -r requirements.txt`. Langkah 2 sengaja dikerjakan dengan kode lama —
+   kode baru menolak start tanpa `POS_APP_DB_*`, jadi menariknya lebih awal membuat
+   `backup_db` yang jadi artefak rollback Anda tak bisa dijalankan sama sekali.
+   Pastikan juga **ODBC Driver 17 for SQL Server** terpasang di mesin itu; tanpa dia
+   `mssql-django` gagal connect dengan pesan yang menyalahkan servernya, bukan drivernya.
+6. `python manage.py migrate`, lalu `python manage.py migrate --check` harus diam.
+7. Praperiksa dulu, baru pindahkan:
 
 ```bash
 python manage.py pindah_pangkal --sumber D:\backup\arunika\db-20260918.sqlite3 --periksa-saja
@@ -281,15 +287,15 @@ didekripsi dengan `POS_FERNET_KEY` yang aktif. `TautanUser` yang paling mahal: k
 jumlahnya berkurang, tujuh layar kasir yang menulis akan menolak jalan, dan barisnya tidak
 bisa dibuat ulang dari server mana pun.
 
-7. Nyalakan waitress. Login, lalu periksa Kelola Tautan User, ganti koneksi di navbar, Log
+8. Nyalakan waitress. Login, lalu periksa Kelola Tautan User, ganti koneksi di navbar, Log
    Aktivitas, Riwayat Operasi, dan Kesehatan Sync. Terakhir buka Cadangan & Pemulihan →
    **Cadangkan pangkal** → **Verifikasi** baris yang baru dibuat: itu satu-satunya bukti
    ujung-ke-ujung bahwa cadangan pangkal di jalur MS SQL benar-benar bisa dibaca kembali.
-8. Tugas Task Scheduler `backup_db` sekarang menulis berkasnya lewat **akun layanan SQL
+9. Tugas Task Scheduler `backup_db` sekarang menulis berkasnya lewat **akun layanan SQL
    Server**, bukan akun yang menjalankan perintah. Folder tujuannya harus bisa ditulis akun
    itu — kalau tidak, foldernya tinggal kosong dan tak ada yang memberi tahu.
 
-**Rollback** kapan pun sebelum langkah 7 selesai: hentikan waitress, kembalikan `.env` lama,
+**Rollback** kapan pun sebelum langkah 8 selesai: hentikan waitress, kembalikan `.env` lama,
 pakai lagi `db.sqlite3` bersama kode versi sebelumnya. Berkas SQLite tak pernah ditulis
 sepanjang proses ini.
 
