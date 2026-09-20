@@ -159,6 +159,35 @@ def kolom_hilang(model, using: str) -> list[str]:
     return [f.column for f in model._meta.concrete_fields if f.column not in ada]
 
 
+LEWAT_ARUNIKA = "skema Arunika, bukan milik pangkal"
+
+
+def keputusan_model(model, ada: bool, baris: int, kurang: list[str]) -> tuple[str, str]:
+    """(tindakan, alasan) untuk satu model: salin / lewati / tolak_arunika / tolak_skema.
+
+    Murni — seluruh fakta database sudah di tangan pemanggil. Dipisah dari `handle()`
+    bukan demi kerapian: mengujinya lewat perintah utuh menuntut berkas SQLite palsu
+    plus alias runtime, dan kerangka test Django memblokir alias yang tak disebut di
+    muka. Aturannya sendiri hanyalah urutan keempat syarat ini.
+    """
+    if not ada:
+        return "lewati", "tabelnya tak ada di sumber"
+    if model._meta.app_label == "bisnis":
+        # Skema Arunika milik database cabang, dan sejak `apps/core/db_router.py`
+        # tabelnya tak lagi dibuat di pangkal — di target tak ada tujuan untuk
+        # menyalinnya. Kosong = memang begitu seharusnya. Berisi = ada sesuatu yang
+        # tak kita mengerti, dan menyalinnya diam-diam ke tempat yang salah lebih
+        # buruk daripada berhenti.
+        return ("tolak_arunika", "") if baris else ("lewati", LEWAT_ARUNIKA)
+    if kurang:
+        # Skema sumber lebih tua. Kosong = tak ada yang hilang kalau dilewati;
+        # berisi = penyalinannya TIDAK boleh diteruskan diam-diam.
+        if baris:
+            return "tolak_skema", ", ".join(kurang)
+        return "lewati", "kolom " + ", ".join(kurang) + " belum ada, tabelnya kosong"
+    return "salin", ""
+
+
 def _jumlah_mentah(model, using: str) -> int:
     """COUNT(*) lewat SQL mentah — ORM tak bisa dipakai kalau kolomnya kurang."""
     with connections[using].cursor() as cur:
@@ -187,20 +216,20 @@ class Command(BaseCommand):
         self._praperiksa_target()
         daftarkan_sumber(berkas)
         try:
-            model, dilewati, berisi = [], [], []
+            model, dilewati, berisi, arunika = [], [], [], []
             for m in model_disalin():
-                if not _tabel_ada(m, ALIAS):
-                    dilewati.append((m, "tabelnya tak ada di sumber"))
-                elif (kurang := kolom_hilang(m, ALIAS)):
-                    # Skema sumber lebih tua. Kosong = tak ada yang hilang kalau
-                    # dilewati; berisi = penyalinannya TIDAK boleh diteruskan
-                    # diam-diam.
-                    if _jumlah_mentah(m, ALIAS):
-                        berisi.append((m, kurang))
-                    else:
-                        dilewati.append((m, "kolom " + ", ".join(kurang) + " belum ada, tabelnya kosong"))
-                else:
+                ada = _tabel_ada(m, ALIAS)
+                baris = _jumlah_mentah(m, ALIAS) if ada else 0
+                kurang = kolom_hilang(m, ALIAS) if ada else []
+                tindakan, alasan = keputusan_model(m, ada, baris, kurang)
+                if tindakan == "salin":
                     model.append(m)
+                elif tindakan == "lewati":
+                    dilewati.append((m, alasan))
+                elif tindakan == "tolak_arunika":
+                    arunika.append((m, baris))
+                else:
+                    berisi.append((m, kurang))
             for m, alasan in dilewati:
                 self.stdout.write(self.style.WARNING(f"  lewati {m._meta.db_table}: {alasan}"))
             if berisi:
@@ -211,6 +240,17 @@ class Command(BaseCommand):
                 raise CommandError(
                     "Skema sumber lebih tua daripada kode DAN tabelnya berisi. Jalankan "
                     "migrasi pada pemasangan lama dulu, buat cadangan baru, lalu ulangi."
+                )
+            if arunika:
+                for m, baris in arunika:
+                    self.stdout.write(self.style.ERROR(
+                        f"  {m._meta.db_table}: {baris} baris skema Arunika di pangkal "
+                        "SQLite lama"))
+                raise CommandError(
+                    "Tabel skema Arunika berisi data di pangkal lama. Tempatnya bukan di "
+                    "pangkal (lihat apps/core/db_router.py), jadi perintah ini tak punya "
+                    "tujuan yang benar untuk menyalinnya. Pindahkan dulu ke database "
+                    "Arunika cabang yang bersangkutan, kosongkan di sumber, lalu ulangi."
                 )
             self._praperiksa_target_kosong(model, o["periksa_saja"])
             cacat = self._praperiksa_data(model, o["perbaiki"])

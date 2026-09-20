@@ -7,12 +7,15 @@ jenis kerusakan yang paling mahal: ia baru ketahuan berbulan-bulan kemudian,
 saat seseorang bertanya "kapan ini terjadi" dan jawabannya sudah hilang.
 """
 import datetime as dt
+from types import SimpleNamespace
 
 from django.db import models
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
-from apps.core.management.commands.pindah_pangkal import _bekukan_waktu, model_disalin
+from apps.core.management.commands.pindah_pangkal import (
+    LEWAT_ARUNIKA, _bekukan_waktu, keputusan_model, model_disalin,
+)
 from apps.core.models import ActivityLog, log_activity
 
 
@@ -101,3 +104,48 @@ class DetailDipotongSaatDitulis(TestCase):
     def test_detail_panjang_tidak_meledak(self):
         log_activity(None, "menu", "x" * 600)
         self.assertEqual(len(ActivityLog.objects.get().detail), 255)
+
+
+class SkemaArunikaTakIkutPindah(SimpleTestCase):
+    """Tabel `apps.bisnis` milik database cabang, bukan pangkal.
+
+    Sejak `apps/core/db_router.py` tabelnya tak lagi dibuat di pangkal baru, jadi
+    menyalinnya ke sana akan gagal dengan "Invalid object name" di tengah jalan --
+    sesudah tabel lain terlanjur masuk. Yang kosong dilewati; yang berisi
+    menghentikan perintahnya, karena tak ada tujuan yang benar untuk isinya di
+    database ini.
+
+    Nama tabelnya polos (`merek`, `kategori`, `warna`) -- itu sendiri alasan tambahan
+    kenapa tempatnya bukan di pangkal.
+    """
+
+    @staticmethod
+    def _model(app_label: str):
+        return SimpleNamespace(_meta=SimpleNamespace(app_label=app_label, db_table="merek"))
+
+    def test_kosong_dilewati(self):
+        tindakan, alasan = keputusan_model(self._model("bisnis"), ada=True, baris=0, kurang=[])
+        self.assertEqual(tindakan, "lewati")
+        self.assertEqual(alasan, LEWAT_ARUNIKA)
+
+    def test_berisi_ditolak(self):
+        tindakan, _ = keputusan_model(self._model("bisnis"), ada=True, baris=3, kurang=[])
+        self.assertEqual(tindakan, "tolak_arunika")
+
+    def test_app_pangkal_tetap_disalin(self):
+        tindakan, _ = keputusan_model(self._model("core"), ada=True, baris=3, kurang=[])
+        self.assertEqual(tindakan, "salin")
+
+    def test_urutan_syarat_tak_berubah(self):
+        """Tabel yang tak ada di sumber dilewati lebih dulu, apa pun app-nya --
+        termasuk `bisnis`, yang di pemasangan baru memang tak akan punya tabelnya."""
+        for app in ("bisnis", "core"):
+            with self.subTest(app=app):
+                tindakan, alasan = keputusan_model(self._model(app), ada=False, baris=0, kurang=[])
+                self.assertEqual(tindakan, "lewati")
+                self.assertIn("tak ada di sumber", alasan)
+
+    def test_skema_lebih_tua_tetap_dibedakan(self):
+        m = self._model("core")
+        self.assertEqual(keputusan_model(m, True, 0, ["profile_id"])[0], "lewati")
+        self.assertEqual(keputusan_model(m, True, 5, ["profile_id"])[0], "tolak_skema")

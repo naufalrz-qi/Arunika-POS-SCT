@@ -3,12 +3,13 @@ Django settings for the POS Multi-Server app (admin panel).
 
 Django + Inertia + Vite over a legacy MS SQL Server dataset. App-local state
 (auth, sessions, logs, connection profiles) lives in the "pangkal" database
-configured from .env — SQLite by default, MS SQL in production (see DATABASES
-below). All business data is read from MS SQL via raw pyodbc in each app's
-services.py.
+configured from .env — MS SQL, always, including `manage.py test` (see DATABASES
+below; SQLite is gone). All business data is read from MS SQL via raw pyodbc in
+each app's services.py.
 """
 import ipaddress
 import os
+import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -180,6 +181,12 @@ DATABASES = {
         },
     }
 }
+
+# Skema Arunika (`apps.bisnis`) milik database cabang, bukan pangkal — dan sebaliknya,
+# auth/sesi/log Django tak boleh tumpah ke database cabang. Lihat apps/core/db_router.py,
+# termasuk kenapa TESTING dikecualikan di sana.
+TESTING = "test" in sys.argv
+DATABASE_ROUTERS = ["apps.core.db_router.PangkalRouter"]
 
 # --- Auth (PRD §4, §8.1) ---------------------------------------------------
 AUTH_USER_MODEL = "auth_app.User"

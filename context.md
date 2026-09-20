@@ -6,7 +6,7 @@ Ringkasan arsitektur + status untuk planning lanjutan. Django + Inertia.js + Vue
 
 - Backend: Django 5 (`config/settings.py`), Inertia-Django 1.2 (`defer`/`optional` tersedia), pyodbc → MS SQL "ODBC Driver 17".
 - Frontend: Vue 3.5 + `@inertiajs/vue3` 2.0 (punya komponen `<Deferred>`), Pinia, Tailwind 4, Vite 6. Build: `npm run build` → `frontend/dist/`.
-- DB Django (auth/config/log/session): pangkal MS SQL dari `POS_APP_DB_*` (`the_nameless`).
+- DB Django (auth/config/log/session): pangkal MS SQL dari `POS_APP_DB_*` (`the_nameless`). Lihat "Kenapa login user di MS SQL, bukan SQLite" di bawah.
 - 1 koneksi MS SQL aktif global (bukan per-tipe), switcher di navbar. `core/mssql.get_active_profile()`.
 - Opsional: tiap `ServerProfile` bisa punya `report_source` (server replica untuk laporan, disinkron via CDC — lihat bagian "Reporting replica" di bawah). `core/mssql.get_report_source(profile)`.
 
@@ -14,6 +14,32 @@ Ringkasan arsitektur + status untuk planning lanjutan. Django + Inertia.js + Vue
 - **Dev/HMR (lokal saja)**: `.env` `DJANGO_VITE_DEV=1`, jalankan `npm run dev` + runserver, akses `localhost:8000`. Vite hardcode `localhost:5173` → TIDAK bisa dari device lain.
 - **Prod-asset (lintas device/Tailscale)**: `.env` `DJANGO_VITE_DEV=0` + `npm run build`, Django serve aset dari origin sendiri (`:8000/static/assets/...`). Akses dari device manapun yang bisa jangkau `:8000`. **Setelah tiap edit frontend wajib `npm run build`.**
 - Produksi Windows: `waitress-serve --threads=32 --listen=0.0.0.0:8000 config.wsgi:application` (1 proses → cache per-proses konsisten). Lihat `PRODUCTION.md`.
+
+## Kenapa login user di MS SQL, bukan SQLite (keputusan 2026-09-21)
+
+Pertanyaan ini wajar diulang — pangkal cuma menyimpan user, sesi, log, dan profil
+koneksi, dan SQLite sudah cukup untuk itu bertahun-tahun. Jawabannya bukan
+keseragaman:
+
+- **SQLite tidak menegakkan dua hal yang kita andalkan.** Dua NULL dianggap berbeda di
+  `UNIQUE`, dan panjang kolom tak diperiksa sama sekali. Keduanya menyembunyikan cacat
+  nyata di data yang sudah berjalan: satu `ActivityLog.detail` 505 karakter di kolom
+  255, dan tiga pasang baris snapshot dengan `profile` NULL. Tak ada test yang bisa
+  menangkapnya selama test-nya sendiri jalan di SQLite — itu argumen yang menentukan.
+- **Biayanya terukur dan kecil.** `SELECT` satu baris per PK, rata-rata 200 kali:
+  SQLite 0,1048 ms lawan MS SQL `localhost` 0,2737 ms. Selisih 0,17 ms per query, di
+  halaman yang mengukur ratusan milidetik. Sisi tulis justru membaik: SQLite satu
+  penulis terkunci, MS SQL mengunci per baris.
+- **Cadangannya jadi satu rezim** dengan sisanya (`BACKUP DATABASE` + layar verifikasi),
+  bukan menyalin berkas.
+
+**Harga yang dibayar, dan ini nyata:** pangkal mati = aplikasi mati, termasuk halaman
+login, karena sesi ada di DB. Dengan SQLite, login tetap jalan selama server legacy
+hidup. Yang meredamnya: `POS_APP_DB_HOST` adalah `localhost`, jadi ini layanan di mesin
+yang sama, bukan ketergantungan jaringan baru — dan kalau tetap mati, layarnya
+menjelaskan apa yang mati alih-alih 500 mentah (`apps/core/kesalahan.py`, dipasang
+sebagai `handler500`; middleware tak bisa menangkapnya — alasannya di docstring berkas
+itu).
 
 ## Peta menu → sumber data
 

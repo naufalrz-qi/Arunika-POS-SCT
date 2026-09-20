@@ -287,7 +287,9 @@ diduga lambat, pengukuran membantahnya, jadi tak ada perubahan di sana.
 
 ## Cakupan pengujian
 
-**798 test, 55 berkas, semuanya lolos.** Tanpa CI, tanpa test runner JavaScript.
+**Semuanya lolos** (`python manage.py test` — jumlahnya sengaja tak ditulis di sini;
+angka yang harus dirawat tangan sudah dua kali basi di paragraf ini sendiri). Tanpa CI,
+tanpa test runner JavaScript.
 
 > Angka sebelumnya di sini "51 test, 7 berkas" — sudah lama tidak benar, dan daftar "belum
 > diuji"-nya ikut usang. Diperiksa ulang per berkas, bukan diperbarui angkanya saja.
@@ -302,7 +304,7 @@ kembaran Arunika, klasifikasi pelanggan, laba rugi), `apps/core/reporting.py` (4
   dan replikanya memang belum diaktifkan.
 - Semua komponen Vue — tak ada test runner JavaScript sama sekali.
 
-**Sifat cakupannya, dan ini yang lebih penting dari jumlahnya.** Hampir seluruh 798 test
+**Sifat cakupannya, dan ini yang lebih penting dari jumlahnya.** Hampir seluruh test
 memeriksa **bentuk SQL dan kontrak**, bukan menjalankannya terhadap data. Kebenaran angka
 laporan tidak dibuktikan oleh suite ini melainkan oleh perbandingan baris-per-baris legacy vs
 Arunika di dua server, yang dijalankan tangan tiap kali sebuah laporan pindah dan hasilnya

@@ -216,7 +216,10 @@ benih IDENTITY di-reseed supaya insert pertama tidak menabrak pk lama.
    punya `-wal` dan tak bisa dibuka read-only. Salin berkas itu **dan `.env`**
    (`POS_FERNET_KEY`!) ke luar mesin.
 3. Di SQL Server: `CREATE DATABASE [the_nameless];` tanpa klausa `COLLATE`, lalu
-   `ALTER DATABASE [the_nameless] SET RECOVERY SIMPLE;`
+   `ALTER DATABASE [the_nameless] SET RECOVERY SIMPLE;` Sekalian beri akun layanan
+   SQL Server (`NT SERVICE\MSSQLSERVER`) hak tulis ke folder cadangan sekarang, jangan
+   nanti di langkah 8 — itu satu-satunya cara mengetahuinya sebelum titik tak bisa
+   kembali, dan kegagalannya tak berbunyi apa-apa (lihat langkah 8).
 4. Isi `POS_APP_DB_*` di `.env`, hapus baris `POS_APP_DB_ENGINE`, dan pastikan `BACKUP_DIR_HUB`
    menunjuk folder yang BERBEDA dari `BACKUP_DIR` (lihat catatan di bagian Cadangan).
 5. `python manage.py migrate`, lalu `python manage.py migrate --check` harus diam.
@@ -233,6 +236,11 @@ python manage.py pindah_pangkal --sumber D:\backup\arunika\db-20260918.sqlite3 -
 `--perbaiki` hanya memotong nilai yang melebihi `max_length`, dan melaporkan tiap
 pemotongannya. Ia tidak pernah menghapus baris: kunci unik yang kembar harus dibereskan di
 sumbernya (migrasi `core.0017` sudah melakukannya untuk ketiga tabel snapshot).
+
+Tabel skema Arunika (`merek`, `kategori`, `warna`, … — `apps/bisnis`) **tidak ikut
+pindah**: tempatnya di database cabang, dan sejak `apps/core/db_router.py` tabelnya tak
+lagi dibuat di pangkal sama sekali. Yang kosong dilewati sambil disebut namanya; yang
+berisi menghentikan perintah, karena tak ada tujuan yang benar untuk isinya di sini.
 
 Perintahnya berhenti dan menolak menyalin kalau targetnya sudah berisi — tak ada mode
 lanjut-separuh. Kalau gagal di tengah: `DROP DATABASE`, buat ulang, `migrate`, ulangi.

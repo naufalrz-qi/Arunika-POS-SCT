@@ -7,3 +7,6 @@ urlpatterns = [
     path("admin-panel/", include("apps.monitoring.urls")),
     path("admin-panel/", include("apps.connections.urls")),
 ]
+
+# Pangkal mati = seluruh aplikasi mati, termasuk login. Lihat apps/core/kesalahan.py.
+handler500 = "apps.core.kesalahan.server_error"
