@@ -6,7 +6,7 @@ Ringkasan arsitektur + status untuk planning lanjutan. Django + Inertia.js + Vue
 
 - Backend: Django 5 (`config/settings.py`), Inertia-Django 1.2 (`defer`/`optional` tersedia), pyodbc → MS SQL "ODBC Driver 17".
 - Frontend: Vue 3.5 + `@inertiajs/vue3` 2.0 (punya komponen `<Deferred>`), Pinia, Tailwind 4, Vite 6. Build: `npm run build` → `frontend/dist/`.
-- DB Django (auth/config/log/session): SQLite `db.sqlite3` (WAL aktif).
+- DB Django (auth/config/log/session): pangkal MS SQL dari `POS_APP_DB_*` (`the_nameless`). Lihat "Kenapa login user di MS SQL, bukan SQLite" di bawah.
 - 1 koneksi MS SQL aktif global (bukan per-tipe), switcher di navbar. `core/mssql.get_active_profile()`.
 - Opsional: tiap `ServerProfile` bisa punya `report_source` (server replica untuk laporan, disinkron via CDC — lihat bagian "Reporting replica" di bawah). `core/mssql.get_report_source(profile)`.
 
@@ -14,6 +14,32 @@ Ringkasan arsitektur + status untuk planning lanjutan. Django + Inertia.js + Vue
 - **Dev/HMR (lokal saja)**: `.env` `DJANGO_VITE_DEV=1`, jalankan `npm run dev` + runserver, akses `localhost:8000`. Vite hardcode `localhost:5173` → TIDAK bisa dari device lain.
 - **Prod-asset (lintas device/Tailscale)**: `.env` `DJANGO_VITE_DEV=0` + `npm run build`, Django serve aset dari origin sendiri (`:8000/static/assets/...`). Akses dari device manapun yang bisa jangkau `:8000`. **Setelah tiap edit frontend wajib `npm run build`.**
 - Produksi Windows: `waitress-serve --threads=32 --listen=0.0.0.0:8000 config.wsgi:application` (1 proses → cache per-proses konsisten). Lihat `PRODUCTION.md`.
+
+## Kenapa login user di MS SQL, bukan SQLite (keputusan 2026-09-21)
+
+Pertanyaan ini wajar diulang — pangkal cuma menyimpan user, sesi, log, dan profil
+koneksi, dan SQLite sudah cukup untuk itu bertahun-tahun. Jawabannya bukan
+keseragaman:
+
+- **SQLite tidak menegakkan dua hal yang kita andalkan.** Dua NULL dianggap berbeda di
+  `UNIQUE`, dan panjang kolom tak diperiksa sama sekali. Keduanya menyembunyikan cacat
+  nyata di data yang sudah berjalan: satu `ActivityLog.detail` 505 karakter di kolom
+  255, dan tiga pasang baris snapshot dengan `profile` NULL. Tak ada test yang bisa
+  menangkapnya selama test-nya sendiri jalan di SQLite — itu argumen yang menentukan.
+- **Biayanya terukur dan kecil.** `SELECT` satu baris per PK, rata-rata 200 kali:
+  SQLite 0,1048 ms lawan MS SQL `localhost` 0,2737 ms. Selisih 0,17 ms per query, di
+  halaman yang mengukur ratusan milidetik. Sisi tulis justru membaik: SQLite satu
+  penulis terkunci, MS SQL mengunci per baris.
+- **Cadangannya jadi satu rezim** dengan sisanya (`BACKUP DATABASE` + layar verifikasi),
+  bukan menyalin berkas.
+
+**Harga yang dibayar, dan ini nyata:** pangkal mati = aplikasi mati, termasuk halaman
+login, karena sesi ada di DB. Dengan SQLite, login tetap jalan selama server legacy
+hidup. Yang meredamnya: `POS_APP_DB_HOST` adalah `localhost`, jadi ini layanan di mesin
+yang sama, bukan ketergantungan jaringan baru — dan kalau tetap mati, layarnya
+menjelaskan apa yang mati alih-alih 500 mentah (`apps/core/kesalahan.py`, dipasang
+sebagai `handler500`; middleware tak bisa menangkapnya — alasannya di docstring berkas
+itu).
 
 ## Peta menu → sumber data
 
@@ -141,6 +167,7 @@ Aturan yang masing-masing dibayar pengukuran:
 - **Rentang memakai `tanggal` OR `tanggal_server`.** 13 dari 927 baris GUDANG dan 13 dari 8.742 baris PUSAT punya `tanggal_server` beda HARI dari `tanggal` — nota bertanggal mundur yang diinput belakangan. Menyaring `tanggal` saja melewatkannya tanpa suara.
 - **Batas jendela dari `GETDATE()` server, tidak pernah dari `MAX(tanggal)`.** ANDARIA punya nota bertanggal **7252-01-09**. Baris semacam itu dipagari `TANGGAL_MAKS` dan **dilaporkan** sebagai `anomali_tanggal` (ANDARIA 1, PAGESANGAN 3), tidak ditelan diam-diam.
 - **Nota yang lenyap di cabang ikut dihapus di pusat** — yang tidak pernah bisa dilakukan feed (`__insert`/`__update` saja). Sapuan pertama menemukan **7 nota hantu di PRAYA dan 1 di PUSAT**.
+- **`bind_varchar()` hanya untuk daftar parameter SERAGAM.** Ia menyetel seluruh posisi jadi VARCHAR. Untuk daftar CAMPURAN (datetime + string) — seperti kueri pergerakan stok, 38 parameter dengan 22 `datetime` — pakai `core/mssql.execute_varchar()`, yang mengikat per posisi. Memaksa datetime lewat VARCHAR menyerahkan penafsiran tanggal ke setelan bahasa server: terukur lolos di `us_english`, **`DataError 22007` di `british` dan `deutsch`**. Lolosnya di mesin pengembang hanya kebetulan bahasa sesinya. Dipakai di `_fetch_movements`/`_movement_sums` (0,1368 → 0,0064 dtk, **21,3×**) dan di keempat titik eksekusi `apps/core/reporting.py`, yang menutup SELURUH laporan spec-driven + export sekaligus (COUNT 2,7×, halaman 1,5× — lebih kecil karena pencarian laporan memakai `LIKE '%…%'` yang memang tak pernah seek). Baris identik di semua kasus; `check_stock_agg` tetap `OK: 35307 key identik`. String non-ASCII sengaja dibiarkan NVARCHAR — kata kunci pengguna yang dipaksa lewat VARCHAR dikonversi codepage server dan bisa menghasilkan kecocokan SALAH tanpa galat.
 - **`bind_varchar()` wajib sebelum daftar `IN` panjang** (`hub_sync.bind_varchar`, dipakai `_ambil_ulang_detail` dan jalur hapus). pyodbc mengikat `str` sebagai NVARCHAR, kolom kunci legacy `varchar`; konversi implisit membatalkan index seek dan SQL Server memindai tabel sekali untuk TIAP nilai. Terukur ANDARIA (`t_penjualan_detail`, 1,46 juta baris, indeks ADA): IN(50) **6,23 dtk → 0,01 dtk**, IN(500) **timeout 60 dtk → 0,18 dtk**. Ongkos yang linear terhadap jumlah parameter adalah tandanya. Wajib direset `setinputsizes(None)` sesudahnya.
 - **Master ikut GUDANG saja** (`hub_master.py`). Kolom `kd_sumber` tetap ada di PK master, yang berubah hanya siapa yang mengisinya. Master tidak punya penanda perubahan apa pun, jadi dibandingkan penuh. `pull_master --purge-lain` membersihkan baris cabang lain, default dry-run dan menuntut `--hapus-beneran` terpisah.
 - **Arsip dipotong per BULAN dan punya titik lanjut** (`HubPullState.arsip_sampai`, ditulis sesudah tiap potongan di-commit). Keduanya dibayar oleh run pertama: satu tahun PUSAT = ~90rb header + ~600rb detail dalam satu transaksi lewat WAN, dan jaringan putus di potongan **32 dari 48** sehingga **285.809 header** harus disalin ulang dari nol. Hasilnya tetap benar tanpa titik lanjut (semuanya idempoten) — yang hilang jam kerjanya, dan itu yang mahal. Titik lanjut dibaca lewat `timezone.localtime()` dulu: nilainya tersimpan UTC sementara batas potongan naif jam lokal, dan selisih 8 jam bisa membuat potongan yang belum selesai terbaca sudah lalu dilewati diam-diam.
@@ -152,7 +179,7 @@ Aturan yang masing-masing dibayar pengukuran:
 
 ## Perubahan harga harian (snapshot diff-only)
 
-Harga bisa diubah langsung di POS/server tanpa lewat aplikasi ini (`BarangUpdateLog` cuma menangkap perubahan lewat aplikasi). Untuk memantau semua perubahan harga per hari: `manage.py snapshot_harga [--profile ID] [--prune-days N]` membaca `m_barang_satuan` server (reuse `master._harga_map`) dan membandingkannya dengan baseline tersimpan di SQLite.
+Harga bisa diubah langsung di POS/server tanpa lewat aplikasi ini (`BarangUpdateLog` cuma menangkap perubahan lewat aplikasi). Untuk memantau semua perubahan harga per hari: `manage.py snapshot_harga [--profile ID] [--prune-days N]` membaca `m_barang_satuan` server (reuse `master._harga_map`) dan membandingkannya dengan baseline tersimpan di pangkal.
 
 - Diff-only, bukan snapshot penuh: `apps/core/models.BarangHargaState` menyimpan harga terkini per SKU (di-update di tempat, ukuran tetap ~jumlah SKU × server), `BarangHargaChange` hanya diisi saat harga beda (append-only, tumbuh ∝ jumlah perubahan). Menghindari ledakan baris kalau full-snapshot 54rb produk × hari.
 - Idempotent: run kedua di hari sama tanpa perubahan → 0 baris. SKU baru → seed state tanpa log.
@@ -261,7 +288,7 @@ Tiga jalur tulis baru, semuanya diukur di server sebelum ditulis.
 
 **Tidak ada `DELETE`, dan itu bukan kehati-hatian berlebih.** `m_merk`/`m_kategori`/`m_model`/`m_warna`/`m_jenis_bahan` punya FK `ON DELETE CASCADE` ke `m_barang`, sedangkan `m_barang` → `m_barang_satuan` justru `NO_ACTION`. Menghapus satu merk MENGHAPUS barang-barang "kosong" di bawahnya lalu gagal begitu ketemu barang bersatuan — penghapusan separuh jadi. Pembatalan memakai kolom `status`.
 
-**Arti `status` dibaca dari data.** 0 = nonaktif di mana-mana, tapi "aktif" tidak selalu 1: seluruh 38 baris `m_biaya` bernilai **2**. Karena itu opsinya ada di spec (`pilihan`), bukan di-hardcode. Efek sampingnya memperbaiki bug lama: isian kosong dulu jatuh ke 0, jadi **setiap pelanggan baru lahir nonaktif** — ikut bucket 286 baris `m_customer` berstatus 0.
+**Arti `status` dibaca dari data — dan sekali itu tidak cukup.** 0 = nonaktif di hampir semua tabel, dan opsinya ada di spec (`pilihan`) bukan di-hardcode justru karena itu. `m_biaya` adalah pengecualiannya, dan lebih dalam dari yang dikira semula: di sana `status` **bukan bendera aktif sama sekali**, melainkan JENIS BIAYA (1 = Operasional (Penjualan), 2 = Operasional (Adm. dan Umum), 3–4 produksi). Yang membuktikannya view legacy: `mon_m_biaya` menamai hasil CASE-nya `Jenis`, dan dua view laba rugi menyaring `status = 1` dan `status = 2` sebagai dua bagian biaya. Catatan lama di sini berbunyi "aktif = 2 karena seluruh 38 baris bernilai 2" — benar tentang testGUdang, salah tentang artinya, dan grosirPusat membantahnya (6 baris bernilai 1). Akibat yang sempat nyata: layar ini menawarkan Aktif/Nonaktif, sehingga memilih "Nonaktif" menulis `status = 0` dan diam-diam mengeluarkan kategori itu dari kedua bagian laba rugi. Efek sampingnya memperbaiki bug lama: isian kosong dulu jatuh ke 0, jadi **setiap pelanggan baru lahir nonaktif** — ikut bucket 286 baris `m_customer` berstatus 0.
 
 **`m_supplier` tak punya kolom `status` sama sekali** (13 kolom). Jadi supplier tak bisa dinonaktifkan, dan karena DELETE tak boleh, ia memang tak bisa dibatalkan. Jangan "perbaiki" dengan menambah kolom — skema ini dipakai bersama aplikasi POS lama.
 
@@ -342,7 +369,7 @@ Layar tulis pertama yang tabelnya **tidak punya satu pun baris lama untuk ditiru
 Satu blok `<pre>` monospace 40 kolom untuk Epson LX-310, `@page 241mm x 140mm`. Tabel/border/warna memaksa driver Windows masuk mode grafis — lambat, buram, boros pita — jadi seluruh tata letaknya spasi, bukan CSS.
 
 - **Kasir dari `m_userx`, pegawai dari `m_pegawai`, dan keduanya orang yang berbeda.** `kd_user` dan `kd_pegawai` ruang kode terpisah (`apps/auth_app/models.TautanUser`): terukur di server Testing, `LEFT JOIN m_pegawai ON kd_pegawai = h.kd_user` memulangkan **NULL di setiap nota**. Versi pertama menambal NULL itu dengan `kd_pegawai` baris detail PERTAMA, jadi struk mencetak nama SPG di bawah label "Kasir" — salah orang, tanpa satu pun galat. Kasir = `m_userx` (sama seperti `reports.py:286, 353, 430, 682`), Pegawai = `m_pegawai` lewat `t_penjualan_detail.kd_pegawai`.
-- **Identitas perusahaan pindah ke tabel Arunika sendiri** (`core.InfoPerusahaan`, SQLite, satu baris per KONEKSI). `g_info_profile` cuma DIBACA sebagai cadangan, tak pernah ditulis lagi. Alasannya di bawah.
+- **Identitas perusahaan pindah ke tabel Arunika sendiri** (`core.InfoPerusahaan`, di pangkal, satu baris per KONEKSI). `g_info_profile` cuma DIBACA sebagai cadangan, tak pernah ditulis lagi. Alasannya di bawah.
 - **Tiga kertas, dipilih saat cetak.** Toko memakai ketiganya bergantian: thermal 76 mm (TM-U220, 40 kolom), nota 12 x 14 cm (LX-310, 48 kolom), dan 1/2 A4 potrait 14,8 x 21 cm (LX-310, 64 kolom). Lebar kolomnya diturunkan dari lebar cetak, bukan ditebak: Courier lebarnya 0,6 x ukuran font, jadi `kolom x 0,6 x pt x 0,3528mm` harus muat di kertas dikurangi margin — angka `pt` tiap preset sudah dicocokkan begitu. **Ketiga ukuran itu dari keterangan operator, belum diukur langsung**; kalau hasil cetak membungkus, yang diubah cuma `kolom`/`pt` di dict `KERTAS`.
 - **`@page size` ikut berganti**, dan itu wajib: tanpa itu struk thermal dicetak pada bidang A4 dan tiap struk memakan satu lembar penuh. Karena nilainya berubah-ubah, ia dikelola lewat satu elemen `<style>` buatan sendiri — CSS scoped tak bisa memuat `@page` yang dinamis.
 - **Di bawah 60 kolom tata letaknya menurun jadi satu kolom.** Dua kolom berdampingan pada 40-48 kolom membuat label dan angkanya bertabrakan; yang sempit mendapat metadata berlabel pendek (`Tgl`/`No`) dan blok uang di atas keterangan, bukan di sebelahnya.
@@ -447,7 +474,7 @@ Nol perubahan skema, nol risiko ke legacy, dan seluruh bahaya cascade di atas ma
 
 ## Scalability (Fase 0 SUDAH dikerjakan)
 
-Target 200–500 request. Sudah: `waitress`+`whitenoise` (requirements), env-driven DEBUG/SECRET_KEY/ALLOWED_HOSTS, `GZipMiddleware` (payload 5MB→~500KB), `SESSION_SAVE_EVERY_REQUEST=False` (killer #1 SQLite), SQLite WAL (`connection_created` signal), `conn.timeout=60` di `core/mssql.py`. `pyodbc.pooling=True` sudah ada.
+Target 200–500 request. Sudah: `waitress`+`whitenoise` (requirements), env-driven DEBUG/SECRET_KEY/ALLOWED_HOSTS, `GZipMiddleware` (payload 5MB→~500KB), `SESSION_SAVE_EVERY_REQUEST=False`, `conn.timeout=60` di `core/mssql.py`. `pyodbc.pooling=True` sudah ada.
 Sisa (di luar scope sekarang): Redis/multi-proses, pagination server-side ReportView, HTTPS/reverse proxy.
 
 ## Pola deferred (shell dulu, data menyusul) — SUDAH TERBUKTI

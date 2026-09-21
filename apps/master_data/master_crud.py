@@ -41,12 +41,16 @@ from apps.transactions.penomoran import (
     urut_berikutnya,
 )
 from core import mssql
+from core.cache import invalidate_master_cache
 
 from apps.core.reporting import clean_rows as _bersih, dictify as _dictify
 
 
 def _st(value) -> str:
     return str(value).strip() if value is not None else ""
+
+
+from apps.transactions.reports import JENIS_BIAYA
 
 
 def _aktif_nonaktif(aktif=1) -> list[dict]:
@@ -152,11 +156,26 @@ _MASTER = {
         wajib=["nama", "kd_negara"],
         kolom_tabel=["kd_telp"],
     ),
-    # Aktif = 2 di sini, bukan 1: seluruh 38 baris yang ada bernilai 2.
+    # `status` DI SINI BUKAN BENDERA AKTIF. Ia jenis biaya, dan yang
+    # membuktikannya view legacy: `mon_m_biaya` menamai kolomnya `Jenis`,
+    # `mon_rl_biaya_penjualan` menyaring `status = 1`, `mon_rl_biaya_adm_dan_umum`
+    # menyaring `status = 2` -- dua bagian biaya di laporan laba rugi.
+    #
+    # Sebelum ini layar ini menawarkan Aktif/Nonaktif, jadi memilih "Nonaktif"
+    # menulis `status = 0` dan diam-diam MENGELUARKAN kategori itu dari KEDUA
+    # bagian laba rugi. Yang menyamarkannya: testGUdang punya 38 baris dan
+    # semuanya bernilai 2, sehingga "aktif = 2" tampak benar. grosirPusat tidak:
+    # 6 baris bernilai 1 dan 26 bernilai 2 -- keenamnya akan terbaca "Nonaktif".
+    #
+    # `m_biaya` memang tak punya kolom aktif sama sekali (5 kolom), seperti
+    # `m_supplier`.
     "biaya": _referensi(
         "m_biaya", "kd_biaya", "B", "Jenis Biaya",
         teks=["nama", "keterangan", "kd_index"],
-        pilihan={"status": _aktif_nonaktif(aktif=2)},
+        # Urutannya bukan selera: `_bersihkan` memakai opsi PERTAMA sebagai
+        # nilai bawaan baris baru. "Adm. dan Umum" didahulukan karena ia ember
+        # umum -- dan memang mayoritas di data nyata (26 dari 32 di grosirPusat).
+        pilihan={"status": [{"value": k, "label": JENIS_BIAYA[k][1]} for k in (2, 1, 3, 4)]},
         kolom_tabel=["keterangan", "kd_index"],
     ),
     "voucher": _referensi(
@@ -213,6 +232,28 @@ def spec(entitas: str) -> dict:
 def _kolom_nama(s) -> str:
     """Kolom nama manusiawi. `m_kas` tak punya `nama`, ia memakai `cabang`."""
     return s.get("kolom_nama", "nama")
+
+
+def _batas(entitas: str, k: str) -> int:
+    """Panjang maksimum satu kolom teks. Satu rumus, dipakai `_bersihkan` DAN layar."""
+    if k == "keterangan":
+        return _PANJANG_KETERANGAN.get(entitas, _PANJANG_KETERANGAN_BAWAAN)
+    return _PANJANG.get(k, 50)
+
+
+def panjang(entitas: str) -> dict:
+    """Batas panjang tiap kolom teks, untuk `maxlength` di layar.
+
+    `_bersihkan` MEMOTONG isian yang kepanjangan (`[:batas]`) alih-alih menolak —
+    itu pilihan yang benar di server, sebab galat ODBC "String or binary data
+    would be truncated" tak menyebut kolom mana yang salah. Tapi tanpa batas yang
+    sama di layar, operator mengetik alamat 60 huruf, menekan Simpan, melihat
+    "tersimpan", dan sepuluh huruf terakhirnya hilang tanpa sepatah kata pun.
+    Angkanya diambil dari sini, bukan disalin ke Vue, supaya tak ada dua daftar
+    yang pelan-pelan berbeda.
+    """
+    s = spec(entitas)
+    return {k: _batas(entitas, k) for k in s["teks"]}
 
 
 def list_master(profile, entitas: str, cari: str = "", limit: int = 200) -> list[dict]:
@@ -287,9 +328,7 @@ def _bersihkan(entitas: str, data) -> dict:
     s = spec(entitas)
     keluar: dict = {}
     for k in [*s["teks"], *s["lookup"]]:
-        batas = (_PANJANG_KETERANGAN.get(entitas, _PANJANG_KETERANGAN_BAWAAN)
-                 if k == "keterangan" else _PANJANG.get(k, 50))
-        keluar[k] = _st(data.get(k))[:batas]
+        keluar[k] = _st(data.get(k))[:_batas(entitas, k)]
     for k in s["angka"]:
         nilai = data.get(k)
         # Kolom berpilihan (status) jatuh ke opsi PERTAMA saat kosong, bukan ke
@@ -309,6 +348,18 @@ def _bersihkan(entitas: str, data) -> dict:
     return keluar
 
 
+def _buang_cache(profile) -> None:
+    """Buang cache master milik profil ini sesudah tulis berhasil.
+
+    Lewat `pk`, dan diam kalau tak ada: sebagian pemanggil (tes bentuk SQL)
+    mengoper profil tiruan yang tak pernah tersimpan — profil tanpa pk tak
+    mungkin punya entri cache, sedangkan `invalidate_master_cache(None)`
+    membuang cache SELURUH profil.
+    """
+    if pk := getattr(profile, "pk", None):
+        invalidate_master_cache(pk)
+
+
 def _kode_baru(cur, entitas: str) -> str:
     """Kode baru menurut skema entitasnya — bertanggal, atau keluarga berblok."""
     s = spec(entitas)
@@ -325,6 +376,11 @@ def simpan_master(profile, entitas: str, data) -> dict:
     Kode hanya dibuat untuk baris BARU. Mengubah kode baris yang sudah ada akan
     memutus setiap nota yang menunjuk ke situ, jadi kuncinya tak pernah diikutkan
     sebagai field yang bisa disunting.
+
+    `invalidate_master_cache` sesudah tiap commit, sama seperti jalur tulis di
+    services.py. Tanpa itu voucher/kas/pegawai yang baru dibuat di sini tak
+    muncul di dropdown layar kasir selama TTL cache (`penjualan.opsi_nota`) —
+    tabel yang disentuh mesin ini persis tabel yang dicache di sana.
     """
     s = spec(entitas)
     nilai = _bersihkan(entitas, data)
@@ -344,6 +400,7 @@ def simpan_master(profile, entitas: str, data) -> dict:
                 f"UPDATE {s['tabel']} SET {set_sql} WHERE {s['kunci']} = ?",
                 [nilai[k] for k in kolom] + [kode])
             cur.connection.commit()
+            _buang_cache(profile)
             return {"kode": kode, "baru": False}
 
         # SELURUH kolom NOT NULL di skema ini, jadi semuanya disebut — yang tak
@@ -358,4 +415,5 @@ def simpan_master(profile, entitas: str, data) -> dict:
 
         kode = simpan_dengan_nomor(cur, lambda: _kode_baru(cur, entitas), tulis)
         cur.connection.commit()
+        _buang_cache(profile)
         return {"kode": kode, "baru": True}

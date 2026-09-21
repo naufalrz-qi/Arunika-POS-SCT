@@ -77,6 +77,7 @@ class Command(BaseCommand):
         for target in targets:
             hasil = feed_sync.sync_pair(
                 source, target, limit=opts["limit"], dry_run=opts["dry_run"], from_id=opts["from_id"],
+                username="(cli)",
             )
             status = hasil["status"]
             if status == "failed":

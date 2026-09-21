@@ -76,7 +76,7 @@ import time
 import pyodbc
 from django.utils import timezone
 
-from apps.core.models import HubPullState
+from apps.core.models import HubPullState, log_sync
 from apps.inventory.services import _closing_date, _k
 from apps.transactions.feed_sync import _kolom_tujuan
 from apps.transactions.hub_schema import KOL_SUMBER
@@ -779,9 +779,50 @@ def _simpan_state(source, hub, hasil: dict, mode: str) -> None:
     row.save()
 
 
+def _catat_riwayat(source, hub, hasil: dict, mode: str, mulai: float, username: str) -> None:
+    """Satu baris `SyncLog` per run — TAPI hanya kalau ada isinya atau gagal.
+
+    `HubPullState` menimpa satu baris per cabang, jadi run yang gagal tadi malam
+    lalu berhasil pagi ini tidak meninggalkan jejak apa pun bahwa ia sempat
+    gagal. Baris di sini yang menyimpannya.
+
+    Aturan sunyi: tingkat `segar` berjalan tiap tick scheduler, dan di luar jam
+    buka hampir semuanya menyalin 0 baris. Mencatat semuanya berarti puluhan
+    baris kosong per hari per cabang yang menenggelamkan yang benar-benar
+    terjadi. Run sehat tanpa isi sengaja TIDAK tercatat; pertanyaan "job-nya
+    masih hidup?" dijawab `scheduler.status()`, bukan tabel ini.
+    """
+    baris = hasil["header"] + hasil["detail"] + hasil["dihapus"]
+    gagal = hasil["status"] == "failed"
+    if not baris and not gagal:
+        return
+    rincian = [{"teks": f"{k}: {v}"} for k, v in (
+        ("Header", hasil["header"]), ("Detail", hasil["detail"]),
+        ("Dihapus", hasil["dihapus"]), ("Hari beda", hasil["hari_beda"]),
+        ("Anomali tanggal", hasil["anomali_tanggal"]),
+        ("Potongan dilewati", hasil["dilewati_potongan"]),
+    ) if v]
+    log_sync(
+        None, feature="hub_pull", mode=mode, src=source, dst=hub,
+        compared=hasil["hari_beda"], applied=baris,
+        status="failed" if gagal else "ok", items=rincian,
+        error=hasil["error"][:255], username=username,
+        duration_ms=int((time.monotonic() - mulai) * 1000),
+    )
+
+
 def pull_source(source, hub, mode: str = "segar", hari: int = JENDELA_SEGAR_HARI,
-                dry_run: bool = False, lapor=None, coba: int = COBA_ULANG) -> dict:
-    """Satu cabang, satu tingkat. Menyimpan `HubPullState` kecuali dry run."""
+                dry_run: bool = False, lapor=None, coba: int = COBA_ULANG,
+                username: str = "", catat: bool = True) -> dict:
+    """Satu cabang, satu tingkat. Menyimpan `HubPullState` kecuali dry run.
+
+    `catat=False` mematikan penulisan `SyncLog` di sini. Dipakai oleh runner
+    tugas latar (`apps.monitoring.tugas`), yang sudah memegang barisnya sendiri
+    sejak sebelum job dimulai — barisnya itu yang jadi progres DAN riwayatnya.
+    Tanpa saklar ini, satu klik "Tarik arsip" meninggalkan dua baris yang
+    menceritakan run yang sama.
+    """
+    mulai = time.monotonic()
     for percobaan in range(1, max(1, coba) + 1):
         if mode == "arsip":
             hasil = pull_arsip(source, hub, dry_run=dry_run, lapor=lapor)
@@ -802,11 +843,13 @@ def pull_source(source, hub, mode: str = "segar", hari: int = JENDELA_SEGAR_HARI
         time.sleep(JEDA_ULANG)
     if not dry_run:
         _simpan_state(source, hub, hasil, mode)
+        if catat:
+            _catat_riwayat(source, hub, hasil, mode, mulai, username)
     return hasil
 
 
 def pull_all(hub, sources=None, mode: str = "segar", hari: int = JENDELA_SEGAR_HARI,
-             dry_run: bool = False, lapor=None) -> list[dict]:
+             dry_run: bool = False, lapor=None, username: str = "") -> list[dict]:
     """Semua cabang, berurutan dan saling terisolasi.
 
     Satu cabang mati tidak boleh menahan delapan yang sehat — pelajaran yang sama
@@ -814,6 +857,6 @@ def pull_all(hub, sources=None, mode: str = "segar", hari: int = JENDELA_SEGAR_H
     dihubungi menjatuhkan seluruh run.
     """
     return [
-        pull_source(s, hub, mode=mode, hari=hari, dry_run=dry_run, lapor=lapor)
+        pull_source(s, hub, mode=mode, hari=hari, dry_run=dry_run, lapor=lapor, username=username)
         for s in (sources if sources is not None else sumber_profiles())
     ]

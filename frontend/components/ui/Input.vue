@@ -20,6 +20,13 @@ defineProps({
   // tetap step=1 — kotak pajak lalu MENOLAK 0,05 tanpa memberi tahu kenapa.
   step: { type: [String, Number], default: undefined },
   min: { type: [String, Number], default: undefined },
+  max: { type: [String, Number], default: undefined },
+  // Papan ketik ponsel. Alasan yang sama seperti `step`/`min` di atas, dan
+  // paling sering terlupa: sebagian besar kotak angka di aplikasi ini SENGAJA
+  // type="text" (server menerima "250.000" ala Indonesia, input[type=number]
+  // menolaknya diam-diam), jadi `inputmode` adalah satu-satunya yang tersisa
+  // untuk memunculkan papan angka di tablet kasir.
+  inputmode: { type: String, default: undefined },
 });
 defineEmits(["update:modelValue"]);
 </script>
@@ -40,6 +47,8 @@ defineEmits(["update:modelValue"]);
       :maxlength="maxlength"
       :step="step"
       :min="min"
+      :max="max"
+      :inputmode="inputmode"
       :aria-invalid="error ? 'true' : undefined"
       @input="$emit('update:modelValue', $event.target.value)"
       :class="[

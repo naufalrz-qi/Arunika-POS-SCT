@@ -8,14 +8,14 @@
 /* ---------------------------------------------------------------------------
    Design tokens (Tailwind v4 CSS-first config).
 
-   Arah: tenang dan padat. Layar ini dipandangi kasir dan gudang delapan jam
-   sehari, isinya tabel dari ujung ke ujung. Yang dituju: tabel yang terbaca
-   cepat, dan antarmuka di sekelilingnya yang tidak menarik perhatian.
+   Arah: mono + biru. Layar ini dipandangi kasir dan gudang delapan jam sehari,
+   isinya tabel dari ujung ke ujung. Semua abu-abu netral murni (chroma 0) —
+   tanpa semburat warna — dan biru satu-satunya aksen: tombol utama, menu
+   aktif, cincin fokus, kolom yang sedang mengurut. Status (berhasil/awas/
+   bahaya) tetap berwarna karena warnanya membawa arti.
 
-   Warna hanya muncul di dua tempat — menu yang sedang aktif dan kolom yang
-   sedang mengurut. Selebihnya netral. Status (berhasil/awas/bahaya) tetap
-   berwarna karena warnanya membawa arti, tapi chroma-nya diturunkan supaya
-   satu badge merah tidak mendominasi seluruh halaman.
+   Ruang lega ditambahkan di SEKITAR tabel (navigasi, kartu, panel filter),
+   bukan di dalamnya: kerapatan baris tabel sengaja tidak disentuh.
    --------------------------------------------------------------------------- */
 @theme {
   /* Satu keluarga huruf. Sebelumnya Poppins (display) dipasangkan dengan Inter,
@@ -28,18 +28,19 @@
     Roboto, Helvetica, Arial, sans-serif;
   --font-heading: var(--font-sans);
 
-  /* Brand: biru batu tua, chroma ditahan di 0.09. Cukup untuk menandai "ini
-     yang aktif", tidak cukup untuk bersaing dengan angka di tabel. */
-  --color-brand-50: oklch(0.97 0.010 250);
-  --color-brand-100: oklch(0.94 0.020 250);
-  --color-brand-200: oklch(0.88 0.035 250);
-  --color-brand-300: oklch(0.79 0.050 250);
-  --color-brand-400: oklch(0.68 0.070 250);
-  --color-brand-500: oklch(0.58 0.085 250);
-  --color-brand-600: oklch(0.50 0.090 250);
-  --color-brand-700: oklch(0.43 0.082 250);
-  --color-brand-800: oklch(0.36 0.068 250);
-  --color-brand-900: oklch(0.30 0.052 250);
+  /* Brand: biru jernih. Karena semua yang lain mono, biru ini boleh pekat —
+     ia satu-satunya warna non-status di layar, jadi tak ada yang disainginya.
+     Teks putih di atas brand-600: 5.26:1. */
+  --color-brand-50: oklch(0.970 0.014 255);
+  --color-brand-100: oklch(0.932 0.032 255);
+  --color-brand-200: oklch(0.882 0.059 254);
+  --color-brand-300: oklch(0.809 0.105 251);
+  --color-brand-400: oklch(0.707 0.165 254);
+  --color-brand-500: oklch(0.623 0.214 259);
+  --color-brand-600: oklch(0.546 0.245 263);
+  --color-brand-700: oklch(0.488 0.243 264);
+  --color-brand-800: oklch(0.424 0.199 265);
+  --color-brand-900: oklch(0.379 0.146 265);
 
   /* Status. Chroma diturunkan dari palet sebelumnya (0.16–0.24 → 0.10–0.15).
      `danger` sengaja disisakan paling pekat: itu satu-satunya warna yang harus
@@ -59,16 +60,12 @@
   --color-danger-600: oklch(0.53 0.150 27);
   --color-danger-700: oklch(0.46 0.130 27);
 
-  /* Dua radius, itu saja.
-
-     Sebelumnya bentuk sudut diurus oleh `panel-cut`: clip-path segi delapan di
-     setiap permukaan. clip-path memakan border dan box-shadow elemen yang
-     diclip, jadi tiap kartu, tabel, modal, dan panel filter butuh satu <div>
-     pembungkus tambahan (`panel-cut-frame`) yang tugasnya cuma melukis border
-     lewat ::after. Satu hiasan sudut, dua elemen per permukaan, di seluruh
-     aplikasi. Radius biasa mengerjakan hal yang sama tanpa pembungkus. */
-  --radius-control: 0.25rem;
-  --radius-card: 0.375rem;
+  /* Dua radius, itu saja. Kontrol (tombol, input, item menu) dan permukaan
+     (kartu, tabel, modal, panel filter). Jangan pakai clip-path untuk bentuk
+     sudut: ia memakan border dan box-shadow, sehingga tiap permukaan butuh
+     pembungkus tambahan — pernah terjadi di sini (`panel-cut`). */
+  --radius-control: 0.5rem;
+  --radius-card: 0.75rem;
 }
 
 /* ---------------------------------------------------------------------------
@@ -79,65 +76,65 @@
    Diukur: 4.28:1 pada latar terang dan 3.89:1 pada latar gelap — dua-duanya di
    bawah ambang WCAG AA 4.5:1 untuk teks biasa.
 
-   Menaikkannya sampai lolos butuh L 0.537 (terang) / 0.654 (gelap), yang tinggal
-   berjarak 0.04 dari `--ink-muted`. Tiga tingkat teks memang tidak muat di dalam
-   rentang yang masih lolos AA di atas permukaan seterang ini, jadi tingkat
-   ketiganya dibuang: `--ink-subtle` sekarang alias `--ink-muted`. Aliasnya
-   dipertahankan supaya ~20 pemakaian `text-ink-subtle` tak perlu disentuh, dan
-   supaya niatnya ("ini teks paling lemah") tetap terbaca di markup.
-
-   Placeholder tetap terbedakan dari nilai yang sudah diisi: nilai memakai `ink`
-   (L 0.28), placeholder `ink-muted` (L 0.50) — jaraknya jauh lebih lebar
-   daripada jarak ke tingkat ketiga yang dibuang tadi.
+   Tiga tingkat teks tidak muat di dalam rentang yang masih lolos AA di atas
+   permukaan seterang ini, jadi tingkat ketiganya dibuang: `--ink-subtle`
+   sekarang alias `--ink-muted`. Aliasnya dipertahankan supaya ~20 pemakaian
+   `text-ink-subtle` tak perlu disentuh, dan supaya niatnya ("ini teks paling
+   lemah") tetap terbaca di markup.
 
    BATAS GARIS TEPI. `--border-strong` (tepi input, select, dan garis bawah
-   thead) dinaikkan dari L 0.84 → 0.65 supaya mencapai 3.0:1, ambang WCAG 1.4.11
-   untuk batas komponen antarmuka. Ini wajib di sini karena input berlatar sama
-   dengan kartu yang memuatnya — garis tepinya satu-satunya penanda "ini kolom
-   isian". `--border` (pemisah kartu dan baris tabel) sengaja DIBIARKAN lembut:
-   itu hiasan pemisah, bukan batas kontrol, jadi 1.4.11 tak berlaku.
+   thead) wajib ≥ 3.0:1, ambang WCAG 1.4.11 untuk batas komponen antarmuka:
+   input berlatar sama dengan kartu yang memuatnya, jadi garis tepinya
+   satu-satunya penanda "ini kolom isian". `--border` (pemisah kartu dan baris
+   tabel) sengaja lembut: itu hiasan pemisah, bukan batas kontrol.
+
+   Terukur (palet mono + biru), terang / gelap:
+     ink-muted   di surface 5.28 / 7.09, di surface-2 5.06 / 7.73, di surface-3 4.80 / 6.24
+     border-strong di surface 3.36 / 3.39, di surface-2 3.22 / 3.70
+     brand-fg    di brand-bg 5.91 / 7.61
+   Ubah satu nilai L di bawah → ukur ulang pasangan ini.
    --------------------------------------------------------------------------- */
 
 /* Light mode (default) */
 :root {
   --surface: oklch(1 0 0);
   --surface-solid: oklch(1 0 0);
-  --surface-2: oklch(0.975 0.003 250);
-  --surface-3: oklch(0.955 0.004 250);
-  --ink: oklch(0.28 0.012 250);
-  --ink-muted: oklch(0.50 0.010 250);
+  --surface-2: oklch(0.985 0 0);
+  --surface-3: oklch(0.967 0 0);
+  --ink: oklch(0.21 0 0);
+  --ink-muted: oklch(0.53 0 0);
   --ink-subtle: var(--ink-muted);
-  --border: oklch(0.915 0.005 250);
-  --border-strong: oklch(0.65 0.007 250);
+  --border: oklch(0.925 0 0);
+  --border-strong: oklch(0.64 0 0);
   --success-bg: oklch(0.96 0.025 155);
   --success-fg: oklch(0.44 0.088 155);
   --warning-bg: oklch(0.96 0.035 80);
   --warning-fg: oklch(0.48 0.090 68);
   --danger-bg: oklch(0.96 0.022 27);
   --danger-fg: oklch(0.46 0.130 27);
-  --brand-bg: oklch(0.95 0.018 250);
-  --brand-fg: oklch(0.44 0.085 250);
+  --brand-bg: oklch(0.965 0.020 255);
+  --brand-fg: oklch(0.49 0.200 262);
 }
 
 /* Dark mode */
 .dark {
-  --surface: oklch(0.235 0.006 250);
-  --surface-solid: oklch(0.235 0.006 250);
-  --surface-2: oklch(0.185 0.006 250);
-  --surface-3: oklch(0.285 0.007 250);
-  --ink: oklch(0.93 0.004 250);
-  --ink-muted: oklch(0.70 0.006 250);
+  --surface: oklch(0.205 0 0);
+  --surface-solid: oklch(0.205 0 0);
+  --surface-2: oklch(0.155 0 0);
+  --surface-3: oklch(0.255 0 0);
+  --ink: oklch(0.965 0 0);
+  --ink-muted: oklch(0.715 0 0);
   --ink-subtle: var(--ink-muted);
-  --border: oklch(0.32 0.007 250);
-  --border-strong: oklch(0.54 0.009 250);
+  --border: oklch(0.285 0 0);
+  --border-strong: oklch(0.53 0 0);
   --success-bg: oklch(0.30 0.040 155);
   --success-fg: oklch(0.78 0.095 155);
   --warning-bg: oklch(0.31 0.045 75);
   --warning-fg: oklch(0.81 0.100 80);
   --danger-bg: oklch(0.31 0.055 27);
   --danger-fg: oklch(0.79 0.115 27);
-  --brand-bg: oklch(0.31 0.045 250);
-  --brand-fg: oklch(0.80 0.070 250);
+  --brand-bg: oklch(0.30 0.075 262);
+  --brand-fg: oklch(0.81 0.100 255);
 }
 
 /* Semantic tokens → Tailwind utilities */
@@ -190,10 +187,10 @@ body {
   background-color: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px -4px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 4px 16px -8px rgba(0, 0, 0, 0.06);
 }
 .dark .surface-raised {
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 8px -4px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px -8px rgba(0, 0, 0, 0.4);
 }
 
 /* Masuk halaman: cukup untuk menandai "isinya berganti", tak cukup untuk

@@ -9,18 +9,25 @@
  * Superadmin-only lewat menus.py — penegakannya di server (middleware), bukan di
  * sini. Tidak ada apa pun di halaman ini yang boleh jadi satu-satunya penjaga.
  */
-import { computed } from "vue";
-import { Deferred, router } from "@inertiajs/vue3";
+import { computed, ref, watch, onBeforeUnmount } from "vue";
+import { Deferred, router, useForm } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
 import Badge from "@/components/ui/Badge.vue";
 import Banner from "@/components/ui/Banner.vue";
 import DataTable from "@/components/ui/DataTable.vue";
+import { tanggal as fmtTanggal } from "@/utils/tanggal";
 import LoadingCard from "@/components/ui/LoadingCard.vue";
+import CollapsibleSection from "@/components/ui/CollapsibleSection.vue";
+import Select from "@/components/ui/Select.vue";
 
 const props = defineProps({
   health: { type: Object, default: null },
+  // Prop TERPISAH dari `health`, dan bukan tanpa alasan: `health` menyapu
+  // sebelas server lewat WAN. Polling progres tiap 3 detik lewat prop itu
+  // berarti menyapu sebelas server tiap tiga detik. Ini murni SQLite.
+  progres: { type: Object, default: () => ({}) },
 });
 
 const data = computed(() => props.health || {});
@@ -65,6 +72,80 @@ const hubColumns = [
   { key: "tutup_buku", label: "Tutup buku", sortable: true },
 ];
 
+const deadColumns = [
+  { key: "waktu", label: "Waktu" },
+  { key: "sumber", label: "Sumber" },
+  { key: "tujuan", label: "Tujuan" },
+  { key: "feed_id", label: "Feed id", align: "right" },
+  { key: "table_aksi", label: "Tabel/aksi" },
+  { key: "reason", label: "Alasan" },
+  { key: "data", label: "Isi baris" },
+];
+
+const trenColumns = [
+  { key: "profile", label: "Server", sortable: true },
+  { key: "sekarang", label: "Antre kini", sortable: true, align: "right" },
+  { key: "min_antre", label: "Terendah 7h", sortable: true, align: "right" },
+  { key: "max_antre", label: "Tertinggi 7h", sortable: true, align: "right" },
+  { key: "mati", label: "Sampel mati", sortable: true, align: "right" },
+  { key: "arah", label: "Arah", sortable: true },
+];
+
+const jobColumns = [
+  { key: "nama", label: "Job" },
+  { key: "terakhir", label: "Terakhir jalan" },
+  { key: "durasi_ms", label: "Durasi", align: "right" },
+  { key: "status", label: "Status" },
+];
+
+const ARAH_VARIAN = { naik: "danger", turun: "success", datar: "neutral" };
+
+// --- Tugas latar ---------------------------------------------------------
+const penjadwal = computed(() => data.value.penjadwal || {});
+const flagList = computed(() =>
+  Object.entries(penjadwal.value.flag || {}).map(([nama, on]) => ({ nama, on })),
+);
+const daftarTugas = computed(() => props.progres?.daftar_tugas || []);
+const aktif = computed(() => props.progres?.aktif || null);
+const berjalan = computed(() => !!aktif.value);
+
+const form = useForm({ tugas: "segar", profil: "" });
+const tugasTerpilih = computed(() => daftarTugas.value.find((t) => t.nama === form.tugas));
+const butuhCabang = computed(() => !!tugasTerpilih.value?.butuh_cabang);
+const cabangOptions = computed(() => [
+  { value: "", label: "— pilih cabang —" },
+  ...(data.value.hub_cabang || []).map((c) => ({ value: String(c.id), label: c.nama })),
+]);
+const tugasOptions = computed(() =>
+  daftarTugas.value.map((t) => ({ value: t.nama, label: t.label })),
+);
+const bisaJalan = computed(
+  () => !berjalan.value && !form.processing && (!butuhCabang.value || !!form.profil),
+);
+
+function jalankan() {
+  form.post("/admin-panel/master/sync-health/jalankan", { preserveScroll: true });
+}
+
+// Polling hanya selama ada tugas berjalan, dan hanya prop `progres`.
+//
+// TANPA `immediate`: watcher yang menyala saat mount akan memuat ulang `health`
+// di SETIAP kali halaman dibuka, dan `health` menyapu sebelas server lewat WAN.
+// Yang dicari di sini adalah PERPINDAHAN berjalan -> selesai.
+let timer = null;
+watch(berjalan, (on, sebelumnya) => {
+  clearInterval(timer);
+  timer = null;
+  if (on) {
+    timer = setInterval(() => router.reload({ only: ["progres"] }), 3000);
+  } else if (sebelumnya) {
+    // Sekali, saat tugas baru saja selesai: angka di `health` (tarik terakhir,
+    // hari beda, arsip sampai) baru berubah sesudah tugasnya beres.
+    router.reload({ only: ["health"] });
+  }
+});
+onBeforeUnmount(() => clearInterval(timer));
+
 /**
  * Umur dalam menit -> teks yang bisa dibaca sekilas.
  *
@@ -85,10 +166,14 @@ function umur(menit) {
 
 const angka = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString("id-ID"));
 
+// Detak job selalu hari ini (hilang saat restart), jadi jam saja sudah cukup.
+const jam = (v) =>
+  !v ? "—" : new Date(v).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
 // Tanggal saja, tanpa jam: tutup buku selalu jatuh di 23:59:59 dan menampilkan
-// jamnya cuma menambah tujuh karakter yang sama di setiap baris.
-const tanggal = (v) =>
-  !v ? "—" : new Date(v).toLocaleDateString("id-ID", { year: "numeric", month: "short", day: "numeric" });
+// jamnya cuma menambah tujuh karakter yang sama di setiap baris. Bentuknya dari
+// helper bersama, supaya layar ini tak jadi bentuk tanggal ketiga di aplikasi.
+const tanggal = (v) => (!v ? "—" : fmtTanggal(v));
 
 const ringkas = computed(() => {
   const total = data.value.total || 0;
@@ -117,6 +202,44 @@ function muatUlang() {
         </p>
         <Button variant="secondary" @click="muatUlang">Muat ulang</Button>
       </div>
+
+      <!-- Panel tugas di LUAR <Deferred>: tombolnya harus bisa dipakai sebelum
+           sapuan sebelas server selesai, dan progresnya datang dari prop lain. -->
+      <Card>
+        <div class="flex flex-wrap items-end gap-3">
+          <div class="min-w-[200px]">
+            <Select v-model="form.tugas" label="Jalankan tugas" :options="tugasOptions" />
+          </div>
+          <div v-if="butuhCabang" class="min-w-[200px]">
+            <Select v-model="form.profil" label="Cabang" :options="cabangOptions" />
+          </div>
+          <Button :disabled="!bisaJalan" @click="jalankan">
+            {{ berjalan ? "Ada tugas berjalan…" : "Jalankan" }}
+          </Button>
+        </div>
+        <p class="mt-2 text-xs text-ink-muted">
+          Tugas berjalan di latar; halaman boleh ditutup. Satu tugas dalam satu waktu.
+          <b>Tarik arsip</b> bisa berjam-jam, tapi bisa dilanjutkan: potongan yang
+          sudah selesai tidak diulang. Semua tugas ini hanya <em>membaca</em> server
+          legacy — yang ditulis cuma AMPHOREUS dan toko tujuan, sama persis dengan
+          yang dikerjakan penjadwal sendiri.
+        </p>
+
+        <div v-if="aktif" class="mt-3 rounded border border-border-default p-3">
+          <div class="flex items-center gap-2">
+            <Badge variant="warning">berjalan</Badge>
+            <span class="text-sm font-medium">{{ aktif.label }}</span>
+            <span class="text-sm text-ink-muted">{{ aktif.cabang }}</span>
+            <span class="text-xs text-ink-muted">mulai {{ aktif.mulai }}</span>
+          </div>
+          <div v-if="aktif.baris.length" class="mt-2 max-h-56 overflow-auto font-mono text-xs">
+            <div v-for="(b, i) in aktif.baris" :key="i" class="whitespace-pre-wrap">
+              <span class="text-ink-muted">{{ b.waktu }}</span> {{ b.teks }}
+            </div>
+          </div>
+          <p v-else class="mt-2 text-xs text-ink-muted">Menunggu laporan pertama…</p>
+        </div>
+      </Card>
 
       <Deferred data="health">
         <template #fallback>
@@ -222,15 +345,117 @@ function muatUlang() {
                   {{ angka(row.hari_beda) }}
                 </span>
               </template>
+              <!-- "belum" sendirian tak bisa membedakan run yang belum pernah
+                   dimulai dari run yang sudah tiga jam berjalan di potongan
+                   ke-32. `arsip_sampai` yang membedakannya. Tanpa persen:
+                   tanggal data tertua tak pernah disimpan, jadi tak ada titik
+                   nol untuk membaginya. -->
               <template #cell-arsip_selesai="{ row }">
                 <Badge :variant="row.arsip_selesai ? 'success' : 'neutral'">
                   {{ row.arsip_selesai ? "selesai" : "belum" }}
                 </Badge>
+                <span v-if="!row.arsip_selesai && row.arsip_sampai" class="ml-2 text-xs text-ink-muted">
+                  s/d {{ tanggal(row.arsip_sampai) }}
+                </span>
               </template>
               <template #cell-tutup_buku="{ row }">{{ tanggal(row.tutup_buku) }}</template>
             </DataTable>
           </Card>
         </template>
+
+        <!-- Penjadwal. Dibaca dari PROSES YANG SEDANG BERJALAN, bukan dari
+             .env — flag yang sudah diedit tapi belum direstart adalah persis
+             kebingungan yang panel ini hapus. -->
+        <div class="flex items-center justify-between gap-3 pt-2">
+          <h2 class="text-sm font-semibold">Penjadwal</h2>
+          <div class="flex gap-2">
+            <Badge :variant="penjadwal.utama_hidup ? 'success' : 'danger'">
+              tick utama {{ penjadwal.utama_hidup ? "hidup" : "mati" }} ({{ penjadwal.interval }}s)
+            </Badge>
+            <Badge :variant="penjadwal.harga_hidup ? 'success' : 'neutral'">
+              sebar harga {{ penjadwal.harga_hidup ? "hidup" : "mati" }} ({{ penjadwal.interval_harga }}s)
+            </Badge>
+          </div>
+        </div>
+        <Card>
+          <div class="grid gap-4 md:grid-cols-2">
+            <div>
+              <h3 class="mb-2 text-xs font-semibold text-ink-muted">Flag aktif</h3>
+              <div class="flex flex-wrap gap-1.5">
+                <Badge v-for="f in flagList" :key="f.nama" :variant="f.on ? 'success' : 'neutral'">
+                  {{ f.nama }}={{ f.on ? 1 : 0 }}
+                </Badge>
+              </div>
+            </div>
+            <div>
+              <h3 class="mb-2 text-xs font-semibold text-ink-muted">Detak job</h3>
+              <DataTable
+                :columns="jobColumns"
+                :rows="penjadwal.job || []"
+                row-key="nama"
+                :per-page="25"
+                empty-message="Belum ada job yang jalan di proses ini. Wajar sesudah restart — tick pertama menunggu 60 detik."
+              >
+                <template #cell-terakhir="{ row }">{{ jam(row.terakhir) }}</template>
+                <template #cell-durasi_ms="{ row }">{{ angka(row.durasi_ms) }} ms</template>
+                <template #cell-status="{ row }">
+                  <Badge :variant="row.status === 'ok' ? 'success' : 'danger'">{{ row.status }}</Badge>
+                  <span v-if="row.error" class="ml-2 text-xs text-ink-muted">{{ row.error }}</span>
+                </template>
+              </DataTable>
+              <p class="mt-1 text-xs text-ink-muted">
+                Job yang flag-nya mati tidak muncul di sini — lihat daftar flag di samping.
+                Detak hilang saat server restart; ia menjawab “hidup sekarang”, bukan riwayat.
+              </p>
+            </div>
+          </div>
+        </Card>
+
+        <!-- Tren antrean. Tabel SyncHealthSample sudah ditulis tiap tick sejak
+             lama dan sampai sekarang tak pernah dibaca satu layar pun. -->
+        <template v-if="data.tren && data.tren.length">
+          <h2 class="pt-2 text-sm font-semibold">Tren antrean 7 hari</h2>
+          <Card>
+            <DataTable :columns="trenColumns" :rows="data.tren" row-key="profile" :per-page="25">
+              <template #cell-sekarang="{ row }">{{ angka(row.sekarang) }}</template>
+              <template #cell-min_antre="{ row }">{{ angka(row.min_antre) }}</template>
+              <template #cell-max_antre="{ row }">{{ angka(row.max_antre) }}</template>
+              <template #cell-arah="{ row }">
+                <Badge :variant="ARAH_VARIAN[row.arah] || 'neutral'">{{ row.arah }}</Badge>
+              </template>
+            </DataTable>
+            <p class="mt-1 text-xs text-ink-muted">
+              “Naik” berarti antrean sekarang berada di puncak rentang seminggu terakhir —
+              satu angka besar itu wajar, yang perlu ditindak adalah yang bertahan naik.
+            </p>
+          </Card>
+        </template>
+
+        <!-- Dead-letter: isinya, bukan cuma jumlahnya. Tabel ini idealnya
+             kosong, jadi ia menumpang halaman ini alih-alih punya rute sendiri. -->
+        <CollapsibleSection
+          v-if="data.dead"
+          :title="`Baris yang tak bisa diterapkan (${angka(data.dead.total)})`"
+          :default-open="data.dead.total > 0"
+          class="pt-2"
+        >
+          <Card>
+            <DataTable
+              :columns="deadColumns"
+              :rows="data.dead.rows"
+              row-key="id"
+              :per-page="25"
+              empty-message="Tidak ada — ini keadaan yang benar."
+            >
+              <template #cell-data="{ row }">
+                <pre class="max-w-md whitespace-pre-wrap break-all text-xs">{{ row.data }}</pre>
+              </template>
+            </DataTable>
+            <p v-if="data.dead.total > data.dead.rows.length" class="mt-1 text-xs text-ink-muted">
+              Menampilkan {{ data.dead.rows.length }} terbaru dari {{ angka(data.dead.total) }}.
+            </p>
+          </Card>
+        </CollapsibleSection>
 
         <Card>
           <h2 class="mb-2 text-sm font-semibold">Cara membaca</h2>

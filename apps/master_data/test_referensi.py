@@ -130,9 +130,20 @@ class StatusTests(SimpleTestCase):
         nilai = mc._bersihkan("merk", {"nama": "PENDEKAR"})
         self.assertEqual(nilai["status"], 1)
 
-    def test_biaya_aktif_bernilai_dua(self):
-        """Seluruh 38 baris m_biaya bernilai 2. Menulis 1 membuat baris asing."""
+    def test_biaya_status_adalah_jenis_bukan_aktif(self):
+        """Layar ini pernah menawarkan Aktif/Nonaktif untuk kolom yang sebenarnya
+        JENIS BIAYA, sehingga memilih "Nonaktif" menulis `status = 0` dan
+        mengeluarkan kategori itu dari KEDUA bagian biaya laba rugi.
+
+        Bawaannya 2 (Adm. dan Umum) -- ember umum, dan mayoritas di data nyata.
+        """
         self.assertEqual(mc._bersihkan("biaya", {"nama": "LISTRIK"})["status"], 2)
+        opsi = mc._MASTER["biaya"]["pilihan"]["status"]
+        label = [o["label"] for o in opsi]
+        self.assertNotIn("Aktif", label)
+        self.assertNotIn("Nonaktif", label)
+        self.assertNotIn(0, [o["value"] for o in opsi])
+        self.assertEqual(label[0], "Operasional (Adm. dan Umum)")
 
     def test_nonaktif_bisa_disimpan(self):
         self.assertEqual(mc._bersihkan("merk", {"nama": "X", "status": 0})["status"], 0)

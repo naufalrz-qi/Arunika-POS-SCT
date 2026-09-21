@@ -42,7 +42,7 @@ function onReset() {
 }
 
 const columns = [
-  { key: "tanggal", label: "Tanggal" },
+  { key: "tanggal", label: "Tanggal", format: "datetime" },
   { key: "transaksi", label: "Jenis" },
   { key: "no_transaksi", label: "No. Transaksi" },
   { key: "divisi", label: "Divisi" },

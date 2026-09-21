@@ -42,7 +42,8 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 // bukan agregat per user seperti sebelumnya.
 const columns = [
   { key: "no_transaksi", label: "No. Transaksi" },
-  { key: "tanggal", label: "Tanggal", format: "date" },
+  { key: "tanggal", label: "Tanggal", format: "datetime" },
+  { key: "tanggal_server", label: "Tanggal Server", format: "datetime" },
   { key: "divisi", label: "Divisi" },
   { key: "status", label: "Status Transaksi" },
   { key: "customer", label: "Customer" },

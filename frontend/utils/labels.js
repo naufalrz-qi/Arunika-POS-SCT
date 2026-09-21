@@ -37,6 +37,7 @@ export const ACTION_LABELS = {
   profil: "Ubah profil",
   konfigurasi: "Konfigurasi server",
   kode_nota: "Ubah kode nota",
+  transfer_arunika: "Transfer ke Arunika",
   tautan_user: "Tautan user legacy",
   koreksi_stok: "Koreksi stok",
   penjualan: "Nota penjualan",
@@ -56,6 +57,13 @@ export const DB_TYPE_LABELS = {
   gudang: "Gudang",
   grosir: "Grosir",
   retail: "Toko Retail",
+};
+
+// Produksi vs salinan uji coba. Sampai ada kolom ini, bedanya hanya diketahui
+// dari nama profilnya — dan nama bisa diganti.
+export const LINGKUNGAN_LABELS = {
+  produksi: "Produksi",
+  uji: "Uji coba",
 };
 
 /** Label untuk sebuah slug, atau slug-nya sendiri kalau belum dipetakan. */

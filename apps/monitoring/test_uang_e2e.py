@@ -31,6 +31,8 @@ BOCOR_DULU = {
     "/admin-panel/laporan/penjualan-nota": ("total_kotor", "potongan", "total_bersih"),
     "/admin-panel/laporan/penjualan-customer": ("total",),
     "/admin-panel/laporan/penjualan-user": ("nominal",),
+    "/admin-panel/laporan/rekap-kasir": ("total_kotor", "total", "total_tunai",
+                                         "total_kredit", "rata_nota"),
     "/admin-panel/laporan/penjualan-periode": ("total_kotor", "total"),
     "/admin-panel/laporan/pembelian-supplier": ("total",),
     "/admin-panel/laporan/pembelian-periode": ("total_kotor", "total"),
@@ -110,7 +112,8 @@ class UangTakIkutTerkirim(TestCase):
         _, spec = _spec("/admin-panel/laporan/piutang")
         sisa = {c["key"] for c in v._kolom_tanpa_uang(self.req, spec)}
         self.assertEqual(
-            sisa, {"no_transaksi", "tanggal", "customer", "jatuh_tempo", "hari_terlambat"})
+            sisa, {"no_transaksi", "tanggal", "tanggal_server", "customer",
+                   "jatuh_tempo", "hari_terlambat"})
 
     def test_opname_tak_kehilangan_kuantitasnya(self):
         """`total_masuk`/`koreksi_masuk` di Opname Stok adalah JUMLAH BARANG.
@@ -180,7 +183,7 @@ class UangBespoke(TestCase):
              (v.mssql, "cursor", _cursor()),
              (v.reporting, "run_paged", lambda *a, **k: ([dict(self.KAS_BARIS)], 1)),
              (v.reporting, "one_row", lambda cur: dict(self.KAS_RINGKAS)),
-             (v, "_opt_kas", lambda p: [])])
+             (v, "_opt_kas", lambda p, arunika=False: [])])
 
     def _fmi(self):
         return self._props(

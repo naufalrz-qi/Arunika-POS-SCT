@@ -432,6 +432,7 @@ function simpan() {
                     :class="KELAS_SEL"
                     @input="hitungDariFisik(b)"
                     @change="ikutiTanda(b)"
+                    @blur="b.fisik = angka(b.fisik)"
                   />
                 </td>
                 <td class="px-2 py-1">
@@ -443,6 +444,7 @@ function simpan() {
                              : angka(b.selisih) < 0 ? 'text-danger-fg' : '']"
                     @input="hitungDariSelisih(b)"
                     @change="ikutiTanda(b)"
+                    @blur="b.selisih = angka(b.selisih)"
                   />
                 </td>
                 <td class="px-2 py-1">

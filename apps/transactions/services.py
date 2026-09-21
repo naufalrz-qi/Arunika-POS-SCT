@@ -26,12 +26,22 @@ def _f(value) -> float:
 
 def dashboard_summary(profile, day: dt.date | None = None) -> dict:
     """Today's sales KPIs + hourly histogram. One indexed JOIN aggregate + one
-    grouped query — sub-second with the report indexes in place."""
+    grouped query — sub-second with the report indexes in place.
+
+    `report_cursor`, BUKAN `cursor`: ini baca-saja, dan READ UNCOMMITTED-nya
+    membuat agregat di atas t_penjualan_detail tak mengambil shared lock yang
+    memblok kasir yang sedang menyimpan nota. Dulu ia satu-satunya pembaca
+    berat yang masih lewat jalur biasa, dan itu tak terasa selama dashboard-nya
+    cuma dibuka admin — sekarang supervisor ikut dapat menunya.
+
+    Angka dashboard memang boleh dirty-read: ia ringkasan hari berjalan yang
+    berubah tiap menit, bukan dasar pembukuan.
+    """
     day = day or dt.date.today()
     start = dt.datetime.combine(day, dt.time.min)
     end = start + dt.timedelta(days=1)
 
-    with mssql.cursor(profile) as cur:
+    with mssql.report_cursor(profile) as cur:
         cur.execute(
             "SELECT COUNT(DISTINCT h.no_transaksi) AS tx, "
             "SUM(d.qty) AS items, SUM(d.total) AS revenue "
@@ -108,7 +118,7 @@ KLASIFIKASI_COLS = [
 ]
 
 
-def klasifikasi_kolumnar(profile, f) -> dict:
+def klasifikasi_kolumnar(profile, f, arunika: bool = False) -> dict:
     """Seluruh baris klasifikasi pelanggan dalam bentuk kolom-mayor.
 
     Halaman ini mengirim SATU payload berisi semua pelanggan supaya pencarian
@@ -120,12 +130,22 @@ def klasifikasi_kolumnar(profile, f) -> dict:
     Ambang segmen TIDAK bisa dihitung ulang di klien: ia bagian dari SQL, dan
     menduplikasinya ke JavaScript berarti dua definisi yang bisa menyimpang —
     termasuk menyimpang dari file Excel, yang tetap dibuat server.
+
+    `arunika` diputuskan pemanggil, bukan di sini: gerbangnya (saklar env +
+    profil punya database Arunika) hidup di `monitoring.views`, dan modul
+    layanan tidak boleh mengimpor balik dari view. Bentuk Arunika dibaca dari
+    database pendamping, jadi ia tak punya replica untuk di-fallback-i.
     """
     from apps.inventory.services import _kolumnar  # kamus + tipe kolom, satu definisi
     from apps.transactions import reports as rpt
 
-    inner, params = rpt.klasifikasi_pelanggan(f)
-    with mssql.report_cursor(profile) as cur:
+    if arunika:
+        inner, params = rpt.klasifikasi_pelanggan_arunika(f)
+        buka = mssql.arunika_cursor
+    else:
+        inner, params = rpt.klasifikasi_pelanggan(f)
+        buka = mssql.report_cursor
+    with buka(profile) as cur:
         cur.execute(f"SELECT * FROM ({inner}) AS q ORDER BY q.segmen_urut, q.customer", params)
         rows = _dictify(cur)
 

@@ -26,6 +26,11 @@ const props = defineProps({
   angka: { type: Array, default: () => [] },
   lookup_fields: { type: Array, default: () => [] },
   wajib: { type: Array, default: () => [] },
+  // field → panjang maksimum, dari master_crud._PANJANG. Wajib dipasang sebagai
+  // `maxlength`: server MEMOTONG isian yang kepanjangan tanpa berkata apa-apa,
+  // jadi tanpa ini alamat 60 huruf tersimpan jadi 50 dan layar tetap bilang
+  // "tersimpan".
+  panjang: { type: Object, default: () => ({}) },
   // Kolom tambahan di tabel daftar, di luar Kode + nama. Tanpa ini layar Merk
   // merender Alamat/Telepon/HP yang tabelnya memang tak punya.
   kolom_tabel: { type: Array, default: () => [] },
@@ -54,6 +59,21 @@ const LABEL = {
   saldo_awal: "Saldo Awal", nominal: "Nominal",
 };
 const labelKolom = (k) => LABEL[k] || k;
+
+// Tipe kotak isian per kolom. Semuanya `varchar` di legacy — nomor telepon di
+// sana memuat "021-555 123" dan npwp memuat titik, jadi TIDAK ada yang boleh
+// jadi type="number": itu akan menolak tanda hubung dan spasi yang sudah
+// terlanjur ada di puluhan ribu baris. Yang bisa diberikan cuma papan ketik
+// yang tepat, dan validasi bentuk untuk email.
+const TIPE = { email: "email" };
+const MODE = {
+  telepon: "tel", hp: "tel", fax: "tel", kd_telp: "tel",
+  email: "email",
+  rekening: "numeric", no_rekening: "numeric",
+  npwp_no: "numeric", nppkp_no: "numeric",
+};
+const tipeKolom = (k) => TIPE[k] || "text";
+const modeKolom = (k) => MODE[k];
 
 const columns = computed(() => [
   { key: props.kunci, label: "Kode", sortable: true },
@@ -185,6 +205,9 @@ function simpan() {
           v-for="k in teks"
           :key="k"
           v-model="form[k]"
+          :type="tipeKolom(k)"
+          :inputmode="modeKolom(k)"
+          :maxlength="panjang[k]"
           :label="labelKolom(k) + wajibkan(k)"
           :error="form.errors[k]"
           :class="k === 'alamat' || k.startsWith('npwp') ? 'sm:col-span-2' : ''"
@@ -203,7 +226,10 @@ function simpan() {
           :key="k"
           v-model="form[k]"
           type="number"
-          :label="labelKolom(k)"
+          inputmode="decimal"
+          min="0"
+          :max="k === 'disc' ? 100 : undefined"
+          :label="labelKolom(k) + (k === 'disc' ? ' (%)' : '')"
           :error="form.errors[k]"
         />
         <!-- Status: Select, bukan kotak angka. Tak ada tombol Hapus di layar ini

@@ -72,7 +72,10 @@ ALL_MENUS = [
     # penjualan yang tabelnya tanpa trigger sama sekali.
     {"key": "kasir_pembelian_order", "label": "Order Pembelian", "icon": "list", "href": "/kasir/pembelian-order", "section": "pos_beli", "roles": ("supervisor",), "butuh_tautan": True},
     {"key": "kasir_retur_pembelian", "label": "Retur Pembelian", "icon": "refund", "href": "/kasir/pembelian-retur", "section": "pos_beli", "roles": ("supervisor",), "butuh_tautan": True},
-    {"key": "dashboard", "label": "Dashboard", "icon": "dashboard", "href": "/admin-panel/dashboard", "section": "ringkasan"},
+    # Supervisor dapat bawaan: KPI-nya memang se-toko, dan mengawasi toko itu
+    # pekerjaannya. Kartu Aktivitas di dalamnya tetap baris sendiri saja
+    # (`log_untuk`), dan kolom uang tetap tunduk pada `hidden_data_keys`.
+    {"key": "dashboard", "label": "Dashboard", "icon": "dashboard", "href": "/admin-panel/dashboard", "section": "ringkasan", "roles": ("supervisor",)},
     # "always": tak bisa dicabut lewat Kelola Menu. Bantuan yang bisa hilang dari
     # sidebar justru menghilang tepat saat pengguna paling butuh.
     {"key": "bantuan", "label": "Bantuan & Istilah", "icon": "help", "href": "/admin-panel/bantuan", "section": "ringkasan", "always": True},
@@ -84,6 +87,10 @@ ALL_MENUS = [
     {"key": "penjualan_nota", "label": "Penjualan per Nota", "icon": "list", "href": "/admin-panel/laporan/penjualan-nota", "section": "penjualan", "roles": ("kasir", "supervisor")},
     {"key": "penjualan_customer", "label": "Penjualan per Customer", "icon": "user", "href": "/admin-panel/laporan/penjualan-customer", "section": "penjualan"},
     {"key": "penjualan_user", "label": "Penjualan per User", "icon": "users", "href": "/admin-panel/laporan/penjualan-user", "section": "penjualan"},
+    # Agregat per kasir. Ke supervisor secara bawaan: ia yang mengawasi laci,
+    # dan Penjualan per User di atasnya per-NOTA — menjawab pertanyaan yang sama
+    # di sana berarti menjumlahkan ratusan baris dengan mata.
+    {"key": "rekap_kasir", "label": "Rekap Kasir", "icon": "users", "href": "/admin-panel/laporan/rekap-kasir", "section": "penjualan", "roles": ("supervisor",)},
     {"key": "penjualan_periode", "label": "Penjualan per Periode", "icon": "calendar", "href": "/admin-panel/laporan/penjualan-periode", "section": "penjualan"},
     {"key": "retur_penjualan", "label": "Retur Penjualan", "icon": "refund", "href": "/admin-panel/laporan/retur-penjualan", "section": "penjualan", "roles": ("supervisor",)},
     {"key": "piutang", "label": "Piutang Pelanggan", "icon": "cash", "href": "/admin-panel/laporan/piutang", "section": "penjualan"},
@@ -121,6 +128,10 @@ ALL_MENUS = [
     # /detail, dan /save mewarisi menu key ini lewat pencocokan prefix di
     # menu_key_for_path — termasuk penjagaannya.
     # Analitik (FMI)
+    # Menyebut NAMA PENGINPUT tiap dokumen, jadi setara `opname` yang juga
+    # admin_only. Bukan superadmin_only: ini pekerjaan yang mengelola toko,
+    # bukan yang memegang seluruh jaringan.
+    {"key": "nota_mundur", "label": "Nota Tanggal Mundur", "icon": "calendar", "href": "/admin-panel/analitik/nota-mundur", "section": "analitik", "admin_only": True},
     {"key": "fmi_penjualan", "label": "FMI Penjualan", "icon": "trending", "href": "/admin-panel/analitik/fmi-penjualan", "section": "analitik"},
     {"key": "fmi_stok", "label": "FMI Stok", "icon": "chart", "href": "/admin-panel/analitik/fmi-stok", "section": "analitik"},
     {"key": "klasifikasi_pelanggan", "label": "Klasifikasi Pelanggan", "icon": "user", "href": "/admin-panel/analitik/klasifikasi-pelanggan", "section": "analitik"},
@@ -177,7 +188,13 @@ ALL_MENUS = [
     # Master Data — sub-grup 3: sinkronisasi antar-server
     {"key": "sync_harga", "label": "Sinkronisasi Harga", "icon": "refresh", "href": "/admin-panel/master/sync-harga", "section": "master_sync"},
     {"key": "sync_master", "label": "Sinkronisasi Master Data", "icon": "refresh", "href": "/admin-panel/master/sync-master", "section": "master_sync"},
-    {"key": "sync_history", "label": "Riwayat Sinkronisasi", "icon": "list", "href": "/admin-panel/master/sync-history", "section": "master_sync"},
+    # Label berubah jadi "Riwayat Operasi" karena isinya bukan lagi cuma sync
+    # harga/master: hub_pull, feed_sync, harga_sync, transfer, dan cadangan
+    # menulis ke tabel yang sama. `key` dan `href` sengaja TIDAK ikut berubah —
+    # "sync_history" tersimpan di `allowed_menu_keys` tiap akun yang haknya
+    # diatur satu per satu, dan menggantinya mencabut menu itu diam-diam dari
+    # mereka semua.
+    {"key": "sync_history", "label": "Riwayat Operasi", "icon": "list", "href": "/admin-panel/master/sync-history", "section": "master_sync"},
     # Superadmin-only: memperlihatkan kondisi seluruh armada server sekaligus
     # (antrean menumpuk, sync yang mati), bukan data satu koneksi yang sedang
     # dipakai. Itu urusan yang memegang seluruh jaringan toko, bukan per-admin.
@@ -186,6 +203,12 @@ ALL_MENUS = [
     # dibuat sesudahnya, dan salah isi berarti nota tercatat atas nama cabang
     # lain — sekali tertulis, tak bisa ditarik.
     {"key": "kode_nota", "label": "Kelola Kode Nota", "icon": "key", "href": "/admin-panel/master/kode-nota", "section": "master_sync", "superadmin_only": True},
+    # Membuat profil + database baru di instans lokal dan membaca server mana pun.
+    {"key": "transfer_arunika", "label": "Transfer ke Arunika", "icon": "refresh", "href": "/admin-panel/master/transfer-arunika", "section": "master_sync", "superadmin_only": True},
+    # Superadmin-only: tombolnya menjalankan BACKUP DATABASE di instans SQL
+    # Server, dan layar ini memuat path cadangan seluruh armada. Tidak ada
+    # tombol restore di sini — lihat docstring apps/core/cadangan.py.
+    {"key": "cadangan", "label": "Cadangan & Pemulihan", "icon": "server", "href": "/admin-panel/pengaturan/cadangan", "section": "master_sync", "superadmin_only": True},
     # Administrasi
     {"key": "users", "label": "Manajemen User", "icon": "users", "href": "/admin-panel/users", "section": "admin"},
     {"key": "connections", "label": "Koneksi Server", "icon": "server", "href": "/admin-panel/connections", "section": "admin"},

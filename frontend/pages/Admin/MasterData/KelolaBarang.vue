@@ -239,6 +239,12 @@ function simpan() {
 
     <!-- Tab 1: Identitas -->
     <Card v-show="tab === 'identitas'" class="mb-4">
+      <!-- Kotak angka di layar ini type="text" + inputmode, BUKAN type="number".
+           `barang._angka` membaca titik sebagai pemisah ribuan Indonesia, jadi ia
+           membuangnya: "1.500" jadi 1500 — dan itu memang yang dimaksud operator.
+           input[type=number] memulangkan desimalnya sudah dinormalkan ke titik,
+           sehingga "1,5" yang diketik sampai ke server sebagai "1.5" lalu dibaca
+           15. Sepuluh kali lipat, tanpa satu pun galat. Koma tetap jalan. -->
       <div class="grid gap-3 sm:grid-cols-2">
         <Input
           v-model="form.kd_barang"
@@ -256,7 +262,7 @@ function simpan() {
           :options="opsi[l.name] || []"
           placeholder="Pilih…"
         />
-        <Input v-model="form.ukuran" label="Ukuran" placeholder="mis. 1" />
+        <Input v-model="form.ukuran" label="Ukuran" placeholder="mis. 1" inputmode="decimal" />
         <Input
           v-model="form.keterangan"
           label="Keterangan"
@@ -287,7 +293,7 @@ function simpan() {
           placeholder="Pilih…"
           :disabled="s.ada"
         />
-        <Input v-model="s.jumlah" label="Isi" placeholder="1" />
+        <Input v-model="s.jumlah" label="Isi" placeholder="1" inputmode="decimal" />
         <!-- Harga baris LAMA hanya dibaca. Menulisnya dari sini melewati
              services.update_harga — validasi harga bulat, hitung ulang margin,
              batalkan cache, catat riwayat, sebar ke 8 toko. Kelimanya hilang
@@ -298,7 +304,7 @@ function simpan() {
             {{ rupiah(s.harga_jual) }}
           </div>
         </div>
-        <Input v-else v-model="s.harga_jual" label="Harga Jual" placeholder="0" />
+        <Input v-else v-model="s.harga_jual" label="Harga Jual" placeholder="0" inputmode="decimal" />
         <Select v-model="s.status" label="Status" :options="STATUS" />
         <div class="flex items-end">
           <Button
@@ -335,9 +341,9 @@ function simpan() {
           placeholder="Pilih…"
           :disabled="d.ada"
         />
-        <Input v-model="d.stok_awal" label="Stok Awal" />
-        <Input v-model="d.harga_beli_awal" label="Harga Beli Awal" />
-        <Input v-model="d.stok_min" label="Stok Min" />
+        <Input v-model="d.stok_awal" label="Stok Awal" inputmode="decimal" />
+        <Input v-model="d.harga_beli_awal" label="Harga Beli Awal" inputmode="decimal" />
+        <Input v-model="d.stok_min" label="Stok Min" inputmode="decimal" />
         <Select v-model="d.status" label="Status" :options="STATUS" />
         <div class="flex items-end">
           <Button

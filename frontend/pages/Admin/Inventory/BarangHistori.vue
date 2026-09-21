@@ -107,7 +107,7 @@ const SEMUA_KOLOM = [
   { key: "kd_divisi", label: "Kode Div." },
   { key: "divisi", label: "Divisi", sortable: true },
   { key: "kepala_nota", label: "Kepala Nota" },
-  { key: "tanggal", label: "Tanggal", sortable: true },
+  { key: "tanggal", label: "Tanggal", sortable: true, format: "datetime" },
   { key: "transaksi", label: "Transaksi" },
   { key: "no_transaksi", label: "No. Transaksi" },
   { key: "kd_barang", label: "Kode Barang", sortable: true },

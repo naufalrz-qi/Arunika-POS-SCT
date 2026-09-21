@@ -487,6 +487,16 @@ def hub_pull_health_all(hub, sources) -> list[dict]:
             "kode_sumber": src.kode_sumber,
             "tutup_buku": s.tutup_buku if s else None,
             "arsip_selesai": bool(s and s.arsip_selesai_at),
+            # Titik lanjut arsip, ditulis per potongan bulanan SESUDAH commit
+            # (`hub_pull._catat_lanjut`). Tanpa ini, run arsip yang berjalan tiga
+            # jam di potongan ke-32 dari 48 terbaca persis sama dengan run yang
+            # belum pernah dimulai — dan satu-satunya cara tahu bedanya adalah
+            # menonton stdout CLI-nya.
+            #
+            # Sengaja tanpa persentase: tanggal data TERTUA tidak pernah
+            # disimpan, jadi tak ada titik nol untuk membagi. Angka persen di
+            # sini akan jadi tebakan yang tampak presisi.
+            "arsip_sampai": s.arsip_sampai if s else None,
             "cocok_terakhir_at": s.cocok_terakhir_at if s else None,
             "hari_beda": s.hari_beda if s else 0,
             "segar_terakhir_at": s.segar_terakhir_at if s else None,
@@ -511,6 +521,101 @@ def hub_pull_health_all(hub, sources) -> list[dict]:
         baris.append(r)
     baris.sort(key=lambda x: (-_PERINGKAT[x["status"]], x["profile"]))
     return baris
+
+
+DEAD_TAMPIL = 50
+DEAD_POTONG = 2000
+TREN_HARI = 7
+
+
+def dead_letter_terakhir() -> dict:
+    """Isi dead-letter, bukan cuma jumlahnya.
+
+    Sampai sekarang tabel ini hanya pernah tampil sebagai angka COUNT 24 jam.
+    Angka itu memberi tahu bahwa ADA yang tak sampai, tapi tidak pernah apa —
+    dan `table_aksi`/`reason`/`formatted_data`-nya tak bisa dibaca dari mana pun
+    kecuali `manage.py shell`. Baris yang tak bisa diperiksa sama saja dengan
+    baris yang tak dicatat.
+
+    `formatted_data` dipotong: satu baris feed penuh bisa panjang, dan 50 baris
+    penuh adalah payload besar untuk sesuatu yang biasanya kosong.
+    """
+    from apps.core.models import SyncDeadLetter
+
+    qs = SyncDeadLetter.objects.select_related("source_profile", "target_profile")
+    return {
+        "total": SyncDeadLetter.objects.count(),
+        "rows": [
+            {
+                "id": d.pk,
+                "waktu": timezone.localtime(d.created_at).strftime("%d/%m %H:%M"),
+                "sumber": d.source_profile.name if d.source_profile else "—",
+                "tujuan": d.target_profile.name if d.target_profile else "—",
+                "feed_id": d.feed_id,
+                "table_aksi": d.table_aksi,
+                "reason": d.reason,
+                "data": (d.formatted_data or "")[:DEAD_POTONG],
+            }
+            for d in qs[:DEAD_TAMPIL]
+        ],
+    }
+
+
+def tren_antre(rows: list[dict]) -> list[dict]:
+    """Arah antrean tiap server selama `TREN_HARI` terakhir.
+
+    `SyncHealthSample` ditulis tiap tick sejak lama dan sampai sekarang tak ada
+    satu pun layar yang membacanya — 228rb baris/tahun yang hanya pernah dipakai
+    `_stuck()` untuk mengambil SATU sampel terakhir.
+
+    Yang dikembalikan tiga angka + arah, bukan deret untuk grafik: tidak ada
+    komponen chart di repo ini, dan menambah dependensi demi satu panel yang
+    menjawab "naik atau turun" bukan pertukaran yang sepadan.
+
+    Angka "sekarang" diambil dari `rows` (hasil sapuan live yang SUDAH ada di
+    halaman), jadi fungsi ini nol round-trip ke MS SQL dan satu kueri agregat
+    ke SQLite.
+    """
+    import datetime as dt
+
+    from django.db.models import Count, Max, Min, Q
+
+    from apps.core.models import SyncHealthSample
+
+    sejak = timezone.now() - dt.timedelta(days=TREN_HARI)
+    agg = {
+        a["profile_id"]: a
+        for a in SyncHealthSample.objects.filter(created_at__gte=sejak)
+        .values("profile_id")
+        .annotate(min_antre=Min("antre"), max_antre=Max("antre"),
+                  n=Count("id"), mati=Count("id", filter=Q(status="mati")))
+    }
+    keluar = []
+    for r in rows:
+        a = agg.get(r.get("profile_id"))
+        if not a or not a["n"]:
+            continue
+        sekarang = r.get("antre") or 0
+        # Ambang 10%: antrean berdenyut sepanjang hari, jadi selisih kecil bukan
+        # arah. Yang dicari pola yang bertahan seminggu, bukan riak satu tick.
+        rentang = max(1, a["max_antre"] - a["min_antre"])
+        if sekarang >= a["max_antre"] - rentang * 0.1:
+            arah = "naik"
+        elif sekarang <= a["min_antre"] + rentang * 0.1:
+            arah = "turun"
+        else:
+            arah = "datar"
+        keluar.append({
+            "profile": r.get("profile") or r.get("profile_name") or "—",
+            "sekarang": sekarang,
+            "min_antre": a["min_antre"],
+            "max_antre": a["max_antre"],
+            "sampel": a["n"],
+            "mati": a["mati"],
+            "arah": arah,
+        })
+    keluar.sort(key=lambda x: (-x["mati"], -x["sekarang"]))
+    return keluar
 
 
 def fanout_health_all(source, targets) -> list[dict]:

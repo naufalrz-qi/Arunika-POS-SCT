@@ -50,7 +50,7 @@ function formatNilai(field, v) {
 }
 
 const columns = [
-  { key: "created_at", label: "Waktu", sortable: true },
+  { key: "created_at", label: "Waktu", sortable: true, format: "datetime" },
   { key: "kd_barang", label: "Kode Barang", sortable: true },
   { key: "nama_barang", label: "Nama Barang", sortable: true },
   { key: "field", label: "Jenis Perubahan" },

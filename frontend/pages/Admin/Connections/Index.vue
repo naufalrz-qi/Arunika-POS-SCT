@@ -5,7 +5,7 @@ import { storeToRefs } from "pinia";
 import axios from "axios";
 import { useConnectionStore } from "@/stores/connection";
 import AdminLayout from "@/layouts/AdminLayout.vue";
-import { DB_TYPE_LABELS } from "@/utils/labels";
+import { DB_TYPE_LABELS, LINGKUNGAN_LABELS } from "@/utils/labels";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
 import Input from "@/components/ui/Input.vue";
@@ -18,6 +18,7 @@ import Icon from "@/components/nav/Icon.vue";
 const props = defineProps({
   connections: { type: Array, default: () => [] },
   db_types: { type: Array, default: () => ["gudang", "grosir", "retail"] },
+  lingkungan_pilihan: { type: Array, default: () => [] },
 });
 
 // Koneksi aktif SESI user ini (per-user, dari shared prop active_connection).
@@ -46,6 +47,7 @@ const reportSourceOptions = computed(() =>
 const columns = [
   { key: "name", label: "Nama", sortable: true },
   { key: "db_type", label: "Tipe", sortable: true, align: "center" },
+  { key: "lingkungan", label: "Lingkungan", sortable: true, align: "center" },
   { key: "host", label: "Host : Port" },
   { key: "db_name", label: "Database", sortable: true },
   { key: "username", label: "User" },
@@ -96,7 +98,7 @@ function useConnection(conn) {
 
 // --- Create / edit ---
 const showForm = ref(false);
-const form = useForm({ id: null, name: "", db_type: "grosir", host: "", port: 1433, db_name: "", username: "", password: "", cost_source: null, report_source: null });
+const form = useForm({ id: null, name: "", db_type: "grosir", lingkungan: "produksi", host: "", port: 1433, db_name: "", username: "", password: "", cost_source: null, report_source: null });
 
 function openCreate() {
   // Not form.reset(): Inertia v2 rewrites the form's defaults to the last-submitted
@@ -105,6 +107,7 @@ function openCreate() {
   form.id = null;
   form.name = "";
   form.db_type = "grosir";
+  form.lingkungan = "produksi";
   form.host = "";
   form.port = 1433;
   form.db_name = "";
@@ -119,6 +122,7 @@ function openEdit(c) {
   form.id = c.id;
   form.name = c.name;
   form.db_type = c.db_type;
+  form.lingkungan = c.lingkungan || "produksi";
   form.host = c.host;
   form.port = c.port;
   form.db_name = c.db_name;
@@ -152,6 +156,12 @@ function confirmDelete() {
 
         <template #cell-db_type="{ value }">
           <Badge :variant="typeVariant[value] || 'neutral'">{{ DB_TYPE_LABELS[value] || value }}</Badge>
+        </template>
+
+        <template #cell-lingkungan="{ value }">
+          <Badge :variant="value === 'uji' ? 'warning' : 'neutral'">
+            {{ LINGKUNGAN_LABELS[value] || value }}
+          </Badge>
         </template>
 
         <template #cell-is_default="{ row }">
@@ -228,14 +238,18 @@ function confirmDelete() {
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Input v-model="form.name" label="Nama Profil" :error="form.errors.name" required />
         <Select v-model="form.db_type" label="Tipe Database" :options="typeOptions" />
+        <Select v-model="form.lingkungan" label="Lingkungan" :options="props.lingkungan_pilihan" />
         <Input v-model="form.db_name" label="Database" :error="form.errors.db_name" required />
         <Input v-model="form.host" label="Host / IP" :error="form.errors.host" required />
-        <Input v-model="form.port" label="Port" type="number" :error="form.errors.port" />
+        <Input v-model="form.port" label="Port" type="number" inputmode="numeric" min="1" max="65535" :error="form.errors.port" />
         <Input v-model="form.username" label="Username" :error="form.errors.username" required />
+        <!-- Sandi SERVER, bukan sandi orang: `new-password` menahan pengelola
+             kata sandi browser mengisikan sandi login Arunika ke sini. -->
         <Input
           v-model="form.password"
           label="Password"
           type="password"
+          autocomplete="new-password"
           :placeholder="form.id ? 'Kosongkan jika tidak diubah' : ''"
           :error="form.errors.password"
         />

@@ -148,11 +148,18 @@ const semua = computed(() => {
   L.push("Item & Desc");
   L.push(garis("-", w));
 
-  // 3. Detail barang. Kode barang TIDAK dicetak: ini struk untuk pelanggan, dan
-  //    kode seperti `TY-001333` cuma berarti bagi orang dalam toko.
+  // 3. Detail barang, diawali kode barangnya. Kode dan nama diumpankan sebagai
+  //    SATU teks ke `bungkus()` yang sama, bukan sebagai baris sendiri: dengan
+  //    begitu ia cuma memakan baris tambahan kalau gabungannya memang tak muat,
+  //    dan di nota 48 kolom maupun 1/2 A4 64 kolom hampir selalu tetap satu
+  //    baris. Di thermal 40 kolom nama panjang turun satu baris — itu harga
+  //    yang disengaja: kasir dan gudang mencocokkan barang lewat kodenya, dan
+  //    dua nama yang mirip ("... BESAR" vs "... KECIL") tak bisa dibedakan dari
+  //    struk tanpa kode.
   const jorok = duaKolomMuat.value ? "          " : "  ";
   for (const b of n.baris || []) {
-    for (const t of bungkus(b.nama, w)) L.push(t);
+    const judul = b.kd_barang ? `${b.kd_barang} ${b.nama}` : b.nama;
+    for (const t of bungkus(judul, w)) L.push(t);
     L.push(kiriKanan(`${jorok}${rp(b.qty)} ${b.satuan} x ${rp(b.harga)}`, rp(b.bruto), w));
     // Tanpa baris ini, "4 PCS x 5.600" di atas tidak akan menjumlah ke Sub
     // Total pada 49.181 baris legacy yang memang berdiskon.

@@ -47,6 +47,9 @@ from apps.transactions.penjualan import satuan_banyak as _satuan_banyak
 from apps.master_data import services as master
 from apps.transactions import services as tx
 from apps.core import reporting
+from apps.core import scheduler
+from apps.bisnis.siapkan import Ditolak
+from apps.monitoring import tugas
 from apps.transactions import reports as rpt
 from core import mssql
 
@@ -106,6 +109,9 @@ _UANG_LAPORAN = {
     "potongan", "voucher", "total_setelah_voucher", "pajak", "pajak2",
     # Voucher
     "nilai_dipakai", "total_nominal", "total_nilai_dipakai",
+    # Rekap Kasir — dan panel "Rekap Saya" di layar kasir, yang sengaja memakai
+    # nama kolom yang sama persis supaya satu pendaftaran menutup keduanya.
+    "total_tunai", "total_kredit",
     # harga satuan yang namanya tak menyebut sisi mana — lihat catatan di atas
     "harga",
     # Kolom diskon per baris & per nota. Nilainya dual-mode (persen ATAU rupiah
@@ -522,10 +528,33 @@ def suppliers_index(request):
     )
 
 
+_RIWAYAT_HARI = 30
+_RIWAYAT_BATAS = 200
+
+
 def sync_history_index(request):
+    """Riwayat Operasi — satu garis waktu untuk SEMUA pekerjaan latar.
+
+    Dulu hanya memuat sync harga/master yang dipicu manusia. Sekarang
+    `hub_pull`, `feed_sync`, `harga_sync`, dan `transfer` ikut menulis ke tabel
+    yang sama, jadi daftarnya perlu disaring di server: 200 baris terakhir tanpa
+    filter akan habis dipakai satu cabang yang sibuk semalam.
+    """
+    fitur = (request.GET.get("feature") or "").strip()
+    status = (request.GET.get("status") or "").strip()
+    try:
+        hari = max(1, min(365, int(request.GET.get("hari") or _RIWAYAT_HARI)))
+    except ValueError:
+        hari = _RIWAYAT_HARI
+
     def load_sync():
         # SQLite-only (SyncLog), no MS SQL involved — conn_error stays None,
         # kept in the payload shape only because SyncHistory.vue expects the key.
+        qs = SyncLog.objects.filter(created_at__gte=timezone.now() - dt.timedelta(days=hari))
+        if fitur:
+            qs = qs.filter(feature=fitur)
+        if status:
+            qs = qs.filter(status=status)
         syncs = [
             {
                 "id": s.id,
@@ -535,18 +564,32 @@ def sync_history_index(request):
                 "mode": s.mode,
                 "src": s.src_name or "—",
                 "dst": s.dst_name or "—",
+                "compared": s.compared_count,
                 "total_items": s.applied_count,
+                "durasi_detik": round(s.duration_ms / 1000, 1) if s.duration_ms else 0,
                 "status": s.status,
+                "error": s.error_message,
                 "detail": {"items": s.items()},
             }
-            for s in SyncLog.objects.all()[:200]
+            for s in qs[:_RIWAYAT_BATAS]
         ]
-        return {"rows": syncs, "conn_error": None}
+        return {
+            "rows": syncs,
+            # Daftar isi apa adanya, bukan konstanta yang ikut basi tiap kali
+            # sebuah fitur baru mulai mencatat. Tak perlu didaftarkan di mana pun.
+            "fitur_tersedia": sorted(
+                f for f in SyncLog.objects.values_list("feature", flat=True).distinct() if f
+            ),
+            "conn_error": None,
+        }
 
     return render(
         request,
         "Admin/MasterData/SyncHistory",
-        props={"data": defer(load_sync)},
+        props={
+            "data": defer(load_sync),
+            "filters": {"feature": fitur, "status": status, "hari": hari},
+        },
     )
 
 
@@ -1333,6 +1376,10 @@ def sync_health_index(request):
             "hub_rows": hub_rows,
             "hub_nama": hub.name if hub else "",
             "hub_bermasalah": len([r for r in hub_rows if r["status"] != services_sync.STATUS_OK]),
+            "hub_cabang": [{"id": p.pk, "nama": p.name} for p in sumber],
+            "penjadwal": scheduler.status(),
+            "dead": services_sync.dead_letter_terakhir(),
+            "tren": services_sync.tren_antre(rows),
             "ambang": {
                 "antre_ok": services_sync.ANTRE_OK_MENIT,
                 "antre_lambat": services_sync.ANTRE_LAMBAT_MENIT,
@@ -1342,7 +1389,129 @@ def sync_health_index(request):
             "conn_error": "",
         }
 
-    return render(request, "Admin/Monitoring/SyncHealth", props={"health": defer(load_health)})
+    # `progres` dipisah dari `health` dan SENGAJA tidak deferred. Layar
+    # mem-polling-nya tiap 3 detik selama ada tugas berjalan, dan `health`
+    # menyapu sebelas server lewat WAN — menumpangkan progres di sana berarti
+    # menyapu sebelas server tiap tiga detik. Ini murni SQLite.
+    return render(request, "Admin/Monitoring/SyncHealth", props={
+        "health": defer(load_health),
+        "progres": lambda: {"aktif": tugas.aktif(), "daftar_tugas": [
+            {"nama": n, "label": v[0], "butuh_cabang": v[3]} for n, v in tugas.TUGAS.items()
+        ]},
+    })
+
+
+# --- Cadangan & Pemulihan --------------------------------------------------
+#
+# TIDAK ADA RUTE RESTORE di sini, dan tidak akan pernah ada. Alasannya ada di
+# docstring `apps/core/cadangan.py`; `test_cadangan.py` menjaganya dengan
+# memindai seluruh kode untuk `RESTORE DATABASE` dan menolak kecuali di RUNBOOK.
+
+def cadangan_index(request):
+    tolak = _deny_non_superadmin(request)
+    if tolak:
+        return tolak
+    from apps.core import cadangan as cad
+
+    return render(request, "Admin/Pengaturan/Cadangan", props={
+        "data": defer(lambda: {
+            "rows": cad.daftar(),
+            "runbook": cad.RUNBOOK,
+            "folder_pangkal": str(cad._folder()),
+            "folder_hub": str(cad._folder("BACKUP_DIR_HUB")),
+            "hub_nama": os.environ.get("HUB_NAME", "AMPHOREUS"),
+        }),
+    })
+
+
+@require_POST
+def cadangan_jalankan(request):
+    """Cadangkan pangkal atau AMPHOREUS.
+
+    Tidak ada pemilih server: `jenis` hanya boleh salah satu dari dua nilai
+    tetap, dan sasaran AMPHOREUS ditentukan `HUB_NAME`, bukan input. Form yang
+    dipalsukan pun tak bisa mengarahkannya ke salah satu dari 14 profil legacy.
+    """
+    tolak = _deny_non_superadmin(request)
+    if tolak:
+        return tolak
+    from apps.core import cadangan as cad
+
+    # `get_data`, BUKAN `request.POST`: Inertia mengirim body JSON, dan untuk
+    # body JSON `request.POST` selalu kosong — tombolnya lalu selalu dijawab
+    # "Jenis cadangan tidak dikenal" sementara jalur CLI/test client (yang
+    # mengirim form-encoded) tetap hijau. 18 view lain di berkas ini sudah
+    # memakai helper yang sama.
+    jenis = (get_data(request).get("jenis") or "").strip()
+    try:
+        if jenis == cad.PANGKAL:
+            baris = cad.jalankan_pangkal(request.user.username)
+        elif jenis == cad.AMPHOREUS:
+            baris = cad.jalankan_hub(request.user.username)
+        else:
+            raise Ditolak("Jenis cadangan tidak dikenal.")
+    except (Ditolak, pyodbc.Error) as exc:
+        pesan = str(exc) if isinstance(exc, Ditolak) else mssql.friendly_error(exc, "Gagal mencadangkan")
+        request.session["flash_error"] = pesan
+        return redirect("/admin-panel/pengaturan/cadangan")
+    cad.catat_riwayat(baris, request.user.username)
+    log_activity(request, "cadangan", f"Cadangan {jenis}: {baris.nama_berkas}")
+    request.session["flash_success"] = (
+        f"Cadangan {jenis} selesai: {baris.nama_berkas}. Verifikasi untuk memastikan berkasnya terbaca."
+    )
+    return redirect("/admin-panel/pengaturan/cadangan")
+
+
+@require_POST
+def cadangan_verifikasi(request):
+    tolak = _deny_non_superadmin(request)
+    if tolak:
+        return tolak
+    from apps.core import cadangan as cad
+    from apps.core.models import CadanganBerkas
+
+    # Alasan yang sama dengan `cadangan_jalankan`: body-nya JSON.
+    kirim = get_data(request)
+    if not CadanganBerkas.objects.filter(pk=kirim.get("id") or 0).exists():
+        request.session["flash_error"] = "Baris cadangan tidak ditemukan."
+        return redirect("/admin-panel/pengaturan/cadangan")
+    baris = cad.verifikasi(int(kirim["id"]))
+    if baris.verifikasi_ok:
+        request.session["flash_success"] = f"{baris.nama_berkas}: terbaca utuh."
+    else:
+        request.session["flash_error"] = f"{baris.nama_berkas}: {baris.verifikasi_pesan}"
+    return redirect("/admin-panel/pengaturan/cadangan")
+
+
+@require_POST
+def sync_health_jalankan(request):
+    """Picu satu tugas latar dari layar Kesehatan Sync.
+
+    `_deny_non_superadmin` dipanggil eksplisit walau menu `sync_health` sudah
+    `superadmin_only` dan `admin_network_guard` mencocokkan prefix: sebuah rute
+    yang MENULIS tidak boleh bergantung pada penjagaan tak langsung yang bisa
+    ikut berubah saat orang lain menata ulang menu.
+    """
+    tolak = _deny_non_superadmin(request)
+    if tolak:
+        return tolak
+    from apps.connections.models import ServerProfile
+
+    # Alasan yang sama dengan `cadangan_jalankan`: body-nya JSON.
+    kirim = get_data(request)
+    nama = (kirim.get("tugas") or "").strip()
+    profil = ServerProfile.objects.filter(pk=kirim.get("profil") or 0).first()
+    try:
+        run = tugas.mulai(nama, profil, request.user.username)
+    except Ditolak as exc:
+        request.session["flash_error"] = str(exc)
+        return redirect("/admin-panel/master/sync-health")
+    label = tugas.TUGAS[nama][0]
+    log_activity(request, "sync_tugas", f"{label}{' — ' + profil.name if profil else ''} (run {run.pk})")
+    request.session["flash_success"] = (
+        f"{label} dijalankan di latar. Halaman ini boleh ditutup; progresnya tetap tercatat."
+    )
+    return redirect("/admin-panel/master/sync-health")
 
 
 # --- Stok Akhir (computed from movement card, dipaginasi di server) --------
@@ -1634,6 +1803,114 @@ def kode_nota_save(request):
     return redirect("/admin-panel/master/kode-nota")
 
 
+_TRANSFER_URL = "/admin-panel/master/transfer-arunika"
+
+
+def _transfer_dict(run, dengan_langkah=False) -> dict:
+    selesai = run.selesai_pada or timezone.now()
+    d = {
+        "id": run.pk, "nama": run.nama, "sumber": run.sumber_nama,
+        "dari": run.dari.isoformat(), "sampai": run.sampai.isoformat(),
+        "status": run.status, "status_label": run.get_status_display(),
+        "tahap": run.tahap, "pesan_galat": run.pesan_galat,
+        "total_baris": run.total_baris, "total_dilewati": run.total_dilewati,
+        "dibuat_oleh": run.dibuat_oleh, "mulai_pada": run.mulai_pada.isoformat(),
+        "selesai_pada": run.selesai_pada.isoformat() if run.selesai_pada else None,
+        "durasi_detik": int((selesai - run.mulai_pada).total_seconds()),
+        "profil_legacy": run.profil_legacy.name if run.profil_legacy else "",
+        "profil_arunika": run.profil_arunika.name if run.profil_arunika else "",
+        "tutup_buku": (timezone.localtime(run.tutup_buku).date().isoformat()
+                       if run.tutup_buku else None),
+        "stok_benar": run.stok_benar,
+    }
+    if dengan_langkah:
+        d["langkah"] = run.langkah
+    return d
+
+
+def transfer_arunika_index(request):
+    """Transfer ke Arunika: legacy -> salinan lokal -> database Arunika baru.
+
+    Pekerjaannya di thread latar (`apps/bisnis/transfer.py`); layar ini hanya
+    membaca baris `TransferArunika`, jadi murah dimuat ulang tiap beberapa detik
+    selama ada yang berjalan.
+    """
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+    from apps.bisnis import transfer
+    from apps.core.models import TransferArunika
+
+    def muat_transfer():
+        transfer.rapikan_yatim()
+        # 200, bukan 20. `_transfer_dict(dengan_langkah=False)` sekitar 20 field
+        # per baris, jadi 200 baris ~60 KB dan DataTable sudah memaginasinya di
+        # klien. Batas 20 membuat riwayat transfer menghilang diam-diam sesudah
+        # dua puluh percobaan — termasuk yang gagal, yang justru paling dicari.
+        riwayat = list(TransferArunika.objects.select_related(
+            "profil_legacy", "profil_arunika")[:200])
+        return {
+            "berjalan": any(r.status == TransferArunika.BERJALAN for r in riwayat),
+            "aktif": _transfer_dict(riwayat[0], dengan_langkah=True) if riwayat else None,
+            "riwayat": [_transfer_dict(r) for r in riwayat],
+        }
+
+    return render(request, "Admin/MasterData/TransferArunika", props={
+        "transfer": muat_transfer,
+        "sumber": [{"value": p.pk, "label": f"{p.name} — {p.host}/{p.db_name}",
+                    "lingkungan": p.lingkungan} for p in transfer.pilihan_sumber()],
+        "instans": [{"value": p.pk, "label": f"{p.host} (kredensial profil {p.name})"}
+                    for p in transfer.pilihan_instans()],
+    })
+
+
+def transfer_arunika_detail(request, pk: int):
+    """Rincian satu run transfer: daftar langkah per tabel.
+
+    Rute sendiri, bukan kolom tambahan di daftar riwayat. `langkah` bisa berisi
+    ratusan entri per run, dan mengirimkannya untuk 200 baris riwayat berarti
+    payload besar untuk data yang biasanya tak dilihat siapa pun.
+
+    Datanya sudah tersimpan sejak lama — `TransferArunika.langkah` diisi tiap
+    tabel selesai — tapi sampai sekarang hanya run TERBARU yang pernah
+    diserialkan. Run yang gagal minggu lalu menyimpan persis di tabel mana ia
+    berhenti, dan tak ada satu pun layar yang mau menunjukkannya.
+
+    Tanpa `defer`: satu baris SQLite.
+    """
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+    from apps.core.models import TransferArunika
+
+    run = get_object_or_404(
+        TransferArunika.objects.select_related("profil_legacy", "profil_arunika"), pk=pk)
+    return render(request, "Admin/MasterData/TransferArunikaDetail",
+                  props={"transfer": _transfer_dict(run, dengan_langkah=True)})
+
+
+@require_POST
+def transfer_arunika_mulai(request):
+    if (denied := _deny_non_superadmin(request)):
+        return denied
+    from apps.bisnis import transfer
+    from apps.bisnis.siapkan import Ditolak
+
+    data = get_data(request)
+    try:
+        v = transfer.validasi(data.get("nama"), data.get("sumber"), data.get("dari"),
+                              data.get("sampai"), data.get("instans"))
+        transfer.mulai(v, request.user.username)
+    except Ditolak as exc:
+        request.session["flash_error"] = str(exc)
+        return redirect(_TRANSFER_URL)
+    log_activity(request, "transfer_arunika",
+                 f"Mulai transfer '{v['nama']}' dari {v['sumber'].name} "
+                 f"{v['dari']}..{v['sampai']}")
+    request.session["flash_success"] = (
+        f"Transfer '{v['nama']}' dimulai. Halaman ini boleh ditutup; progresnya tetap tercatat."
+    )
+    return redirect(_TRANSFER_URL)
+
+
 def informasi_perusahaan(request):
     """Layar & handler simpan kelola informasi perusahaan."""
     profile = _active()
@@ -1844,8 +2121,8 @@ def _opt_divisi(profile):
     return reporting.opt(inv.list_divisi(profile), "kd_divisi", "nama")
 
 
-def _opt_master(profile, sql):
-    with mssql.cursor(profile) as cur:
+def _opt_master(profile, sql, buka=None):
+    with (buka or mssql.cursor)(profile) as cur:
         cur.execute(sql)
         cols = [c[0] for c in cur.description]
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
@@ -1860,24 +2137,37 @@ def _opt_supplier(profile):
     return _opt_master(profile, "SELECT TOP 1000 kd_supplier, nama FROM m_supplier ORDER BY nama")
 
 
-def _opt_kas(profile):
-    return _opt_master(profile, "SELECT kd_kas, keterangan FROM m_kas WHERE status <> 0 ORDER BY keterangan")
-
-
-_KATEGORI_BIAYA_LABEL = {
-    1: "Operasional (Penjualan)", 2: "Operasional (Adm. dan Umum)",
-    3: "Produksi (Biaya Langsung)", 4: "Produksi (Biaya Tak Langsung)",
-}
+def _opt_kas(profile, arunika=False):
+    if arunika:
+        return _opt_master(profile, rpt.opsi_kas_arunika(), buka=mssql.arunika_cursor)
+    # Label = kode, sama seperti kolom Kas yang dilayaninya (`rpt._KAS_NAMA`):
+    # `m_kas.keterangan` bernilai `'-'` di 11 database, jadi memakainya sebagai
+    # label memberi dua pilihan berbunyi `-` dan mengurutkannya bukan urutan.
+    # Alias `label` wajib: `_opt_master` mem-`zip` nama kolom jadi dict, jadi dua
+    # kolom bernama sama runtuh jadi satu kunci.
+    return _opt_master(profile, "SELECT kd_kas, kd_kas AS label FROM m_kas WHERE status <> 0 ORDER BY kd_kas")
 
 
 def _opt_kategori_biaya(profile):
-    # Only status values actually assigned to a m_biaya row are offered — this
-    # business (retail/toys) only uses 1/2; 3/4 (produksi) exist in the label
-    # mapping but would otherwise be a dead filter option.
+    """Pilihan filter kategori biaya. NILAINYA tetap kode legacy di kedua jalur.
+
+    Hanya jenis yang benar-benar dipakai sebuah baris yang ditawarkan — usaha
+    ini (mainan/retail) cuma memakai 1/2; 3/4 (produksi) ada di peta label tapi
+    akan jadi opsi mati.
+
+    Labelnya datang dari `reports.JENIS_BIAYA`, satu-satunya peta yang boleh ada
+    — berkas ini sempat menyimpan salinan keempatnya sendiri.
+    """
+    if _arunika_siap(profile):
+        with mssql.arunika_cursor(profile) as cur:
+            cur.execute(f"SELECT DISTINCT jenis FROM {rpt.SRC}.kategori_biaya WHERE jenis <> ''")
+            token = {r[0] for r in cur.fetchall()}
+        return [{"value": str(k), "label": label}
+                for k, (tok, label) in rpt.JENIS_BIAYA.items() if tok in token]
     with mssql.cursor(profile) as cur:
         cur.execute("SELECT DISTINCT status FROM m_biaya WHERE status <> 0 ORDER BY status")
         statuses = [r[0] for r in cur.fetchall()]
-    return [{"value": str(s), "label": _KATEGORI_BIAYA_LABEL.get(s, str(s))} for s in statuses]
+    return [{"value": str(s), "label": rpt.JENIS_BIAYA.get(s, ("", str(s)))[1]} for s in statuses]
 
 
 def _spec_params(request, spec, export=False):
@@ -1923,6 +2213,36 @@ def _spec_filters(f, spec):
     return filters
 
 
+# Gerbang tunggal untuk memindahkan laporan ke bentuk Arunika.
+#
+# Default MATI, dan itu disengaja. Memindahkan jalur baca 26 laporan sekaligus
+# tanpa saklar berarti satu pemetaan yang salah langsung mengenai semua orang —
+# dan pemetaan yang salah TIDAK memunculkan galat, ia cuma mengubah angka.
+# Dengan saklar ini, jalur baru bisa dinyalakan per pemasangan, diukur dengan
+# `manage.py cek_arunika`, dan dimatikan lagi dalam satu langkah.
+LAPORAN_ARUNIKA = os.environ.get("ARUNIKA_LAPORAN", "0").lower() in ("1", "true", "yes", "on")
+
+
+def _arunika_siap(profile) -> bool:
+    """Dua syarat yang tak bergantung laporan: saklar env + profil punya
+    database Arunika.
+
+    Dipakai langsung oleh layar yang BUKAN `_report_view` — Klasifikasi
+    Pelanggan, yang kolumnar dengan export dua sheet dan panel detail sendiri,
+    jadi tak punya satu `inner` untuk diganti.
+    """
+    return bool(LAPORAN_ARUNIKA and mssql.punya_arunika(profile))
+
+
+def _pakai_bentuk_arunika(spec, profile) -> bool:
+    """Tiga syarat, semuanya harus benar; kalau tidak, jalur legacy apa adanya.
+
+    Spec yang belum punya `inner_arunika` otomatis tetap di jalur lama, jadi
+    pemindahan bisa dilakukan satu laporan per satu tanpa menyentuh sisanya.
+    """
+    return bool(spec.get("inner_arunika") and _arunika_siap(profile))
+
+
 def _report_view(spec):
     def view(request):
         f = _spec_params(request, spec)
@@ -1940,12 +2260,19 @@ def _report_view(spec):
                 # spec["inner"]/apply_column_filters dulu di luar try — bentuk
                 # filter yang aneh jadi 500, bukan banner.
                 try:
-                    inner, params = spec["inner"](f)
+                    lewat_arunika = _pakai_bentuk_arunika(spec, profile)
+                    bangun = spec["inner_arunika"] if lewat_arunika else spec["inner"]
+                    inner, params = bangun(f)
                     inner, params = reporting.apply_column_filters(inner, params, f)
-                    for read_profile in mssql.report_read_profiles(profile):
+                    # Bentuk Arunika tak punya replica: ia dibaca dari database
+                    # pendamping di instans yang sama, jadi tak ada yang bisa
+                    # di-fallback-i. Jalur legacy tetap memakai daftar replica.
+                    kandidat = [profile] if lewat_arunika else mssql.report_read_profiles(profile)
+                    buka = mssql.arunika_cursor if lewat_arunika else mssql.report_cursor
+                    for read_profile in kandidat:
                         rows, total, summary, options = [], 0, {}, {}  # reset per attempt
                         try:
-                            with mssql.report_cursor(read_profile) as cur:
+                            with buka(read_profile) as cur:
                                 if f["recent"]:
                                     rows, total, summary_sql = reporting.run_recent(cur, inner, params, f)
                                 else:
@@ -2006,7 +2333,15 @@ def _report_export(spec):
         if not profile:
             request.session["flash_error"] = CONN_ERROR
             return redirect(spec["url"])
-        inner, params = spec["inner"](f)
+        # Bentuknya HARUS sama dengan yang dipakai `_report_view` — lihat
+        # `_pakai_bentuk_arunika`. Sebelumnya baris ini `spec["inner"](f)` tanpa
+        # syarat, jadi dengan ARUNIKA_LAPORAN=1 layar membaca Arunika sementara
+        # tombol Excel di layar yang sama membaca legacy. Tidak ada galat, tidak
+        # ada tanda apa pun: dua angka berbeda untuk satu pertanyaan, dan yang
+        # dipercaya orang justru yang dicetak.
+        lewat_arunika = _pakai_bentuk_arunika(spec, profile)
+        bangun = spec["inner_arunika"] if lewat_arunika else spec["inner"]
+        inner, params = bangun(f)
         inner, params = reporting.apply_column_filters(inner, params, f)
 
         # Export = STREAMING XLSX: query di-execute lalu ditulis baris-per-baris
@@ -2020,10 +2355,15 @@ def _report_export(spec):
         # mudah terlewat saat menambah pembatasan — dan pembatasan yang terlewat
         # di sini membuat pembatasan di layar tak berarti apa-apa.
         columns = _kolom_tanpa_uang(request, spec)
+        # Bentuk Arunika tak punya replica: ia dibaca dari database pendamping di
+        # instans yang sama, jadi tak ada yang bisa di-fallback-i. Jalur legacy
+        # tetap memakai daftar replica. Sama persis dengan `_report_view`.
+        kandidat = [profile] if lewat_arunika else mssql.report_read_profiles(profile)
+        buka = mssql.arunika_cursor if lewat_arunika else mssql.report_cursor
         resp, last_exc = None, None
-        for read_profile in mssql.report_read_profiles(profile):
+        for read_profile in kandidat:
             try:
-                with mssql.report_cursor(read_profile) as cur:
+                with buka(read_profile) as cur:
                     cur.execute(order_sql, params)
                     resp = reporting.xlsx_stream_response(spec["filename"], columns, cur)
                 break
@@ -2067,6 +2407,7 @@ _MASTER_PRODUK = {
     "component": "Admin/MasterData/Products",
     "url": "/admin-panel/master/products",
     "inner": rpt.master_produk,
+    "inner_arunika": rpt.master_produk_arunika,
     "sorts": rpt.SORTS_MASTER_PRODUK,
     "default_sort": "nama",
     # Katalog dibaca A→Z. `desc` bawaan laporan cocok untuk tanggal, tidak untuk
@@ -2106,6 +2447,7 @@ _PENJUALAN_ALL = {
     "component": "Admin/Reports/PenjualanAll",
     "url": "/admin-panel/laporan/penjualan",
     "inner": rpt.penjualan_detail,
+    "inner_arunika": rpt.penjualan_detail_arunika,
     "sorts": rpt.SORTS_PENJUALAN_DETAIL,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_PENJUALAN_DETAIL,
@@ -2118,6 +2460,7 @@ _PENJUALAN_ALL = {
     "columns": [
         {"key": "no_transaksi", "label": "No. Transaksi"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "divisi", "label": "Divisi"},
         {"key": "customer", "label": "Customer"},
         {"key": "kota", "label": "Kota"},
@@ -2150,6 +2493,7 @@ _PENJUALAN_HPP = {
     "component": "Admin/Reports/PenjualanHpp",
     "url": "/admin-panel/laporan/penjualan-hpp",
     "inner": rpt.penjualan_hpp,
+    "inner_arunika": rpt.penjualan_hpp_arunika,
     "sorts": rpt.SORTS_PENJUALAN_HPP,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_PENJUALAN_HPP,
@@ -2162,11 +2506,13 @@ _PENJUALAN_HPP = {
     "columns": [
         {"key": "no_transaksi", "label": "No. Transaksi"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "divisi", "label": "Divisi"},
         {"key": "customer", "label": "Customer"},
         {"key": "kd_barang", "label": "Kode Barang"},
         {"key": "barang", "label": "Barang"},
         {"key": "kategori", "label": "Kategori"},
+        {"key": "petugas", "label": "Petugas"},
         {"key": "qty", "label": "Qty", "align": "right", "format": "number"},
         {"key": "satuan", "label": "Satuan"},
         {"key": "harga", "label": "Harga", "align": "right", "format": "rupiah"},
@@ -2184,6 +2530,7 @@ _PENJUALAN_NOTA = {
     "component": "Admin/Reports/PenjualanNota",
     "url": "/admin-panel/laporan/penjualan-nota",
     "inner": rpt.penjualan_nota,
+    "inner_arunika": rpt.penjualan_nota_arunika,
     "sorts": rpt.SORTS_PENJUALAN_NOTA,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_PENJUALAN_NOTA,
@@ -2196,6 +2543,7 @@ _PENJUALAN_NOTA = {
     "columns": [
         {"key": "no_transaksi", "label": "No. Nota"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "divisi", "label": "Divisi"},
         {"key": "customer", "label": "Customer"},
         {"key": "kota", "label": "Kota"},
@@ -2216,6 +2564,10 @@ _PENJUALAN_CUSTOMER = {
     "component": "Admin/Reports/PenjualanCustomer",
     "url": "/admin-panel/laporan/penjualan-customer",
     "inner": rpt.penjualan_customer,
+    # Laporan kedua yang membaca bentuk Arunika. Terverifikasi identik untuk
+    # rentang setahun DAN dengan kata kunci pencarian (yang di jalur lama
+    # pernah jadi bug "multi-part identifier could not be bound").
+    "inner_arunika": rpt.penjualan_customer_arunika,
     "sorts": rpt.SORTS_PENJUALAN_CUSTOMER,
     "default_sort": "total",
     "summary": rpt.SUMMARY_PENJUALAN_CUSTOMER,
@@ -2238,6 +2590,7 @@ _PENJUALAN_USER = {
     "component": "Admin/Reports/PenjualanUser",
     "url": "/admin-panel/laporan/penjualan-user",
     "inner": rpt.penjualan_user,
+    "inner_arunika": rpt.penjualan_user_arunika,
     "sorts": rpt.SORTS_PENJUALAN_USER,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_PENJUALAN_USER,
@@ -2250,6 +2603,7 @@ _PENJUALAN_USER = {
     "columns": [
         {"key": "no_transaksi", "label": "No. Transaksi"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "divisi", "label": "Divisi"},
         {"key": "status", "label": "Status Transaksi"},
         {"key": "customer", "label": "Customer"},
@@ -2260,10 +2614,51 @@ _PENJUALAN_USER = {
 penjualan_user = _report_view(_PENJUALAN_USER)
 penjualan_user_export = _report_export(_PENJUALAN_USER)
 
+# Agregat per kasir — pertanyaan "siapa menjual berapa", yang di Penjualan per
+# User cuma bisa dijawab dengan menjumlahkan ratusan baris sendiri.
+#
+# Tanpa `enable_recent`: "100 terbaru" tak punya arti pada agregat — ia akan
+# memulangkan 100 kasir dari rentang tanggal yang tak disebut siapa pun. Clamp
+# 92 hari sengaja dibiarkan: ini pertanyaan tentang satu periode, bukan riwayat.
+#
+# Belum punya `inner_arunika`. Kembarannya tinggal mengikuti
+# `penjualan_user_arunika`, tapi aturan rumah ini menuntut verifikasi baris demi
+# baris di KEDUA profil lebih dulu, dan itu bagian terbesar pekerjaannya.
+_REKAP_KASIR = {
+    "component": "Admin/Reports/RekapKasir",
+    "url": "/admin-panel/laporan/rekap-kasir",
+    "inner": rpt.rekap_kasir,
+    "sorts": rpt.SORTS_REKAP_KASIR,
+    "default_sort": "total",
+    "summary": rpt.SUMMARY_REKAP_KASIR,
+    "filter_keys": ["kd_divisi"],
+    "filters": rpt.FILTERS_REKAP_KASIR,
+    "options": lambda p: {"divisi": _opt_divisi(p)},
+    "filename": "rekap-kasir",
+    "columns": [
+        {"key": "kasir", "label": "Kasir"},
+        {"key": "kd_user", "label": "Kode User"},
+        {"key": "jml_nota", "label": "Jml Nota", "align": "right", "format": "number"},
+        {"key": "total_kotor", "label": "Total Kotor", "align": "right", "format": "rupiah"},
+        {"key": "total_diskon", "label": "Total Diskon", "align": "right", "format": "rupiah"},
+        {"key": "total", "label": "Total Bersih", "align": "right", "format": "rupiah"},
+        {"key": "total_tunai", "label": "Tunai", "align": "right", "format": "rupiah"},
+        {"key": "total_kredit", "label": "Kredit", "align": "right", "format": "rupiah"},
+        {"key": "rata_nota", "label": "Rata per Nota", "align": "right", "format": "rupiah"},
+    ],
+}
+rekap_kasir = _report_view(_REKAP_KASIR)
+rekap_kasir_export = _report_export(_REKAP_KASIR)
+
 _PENJUALAN_PERIODE = {
     "component": "Admin/Reports/PenjualanPeriode",
     "url": "/admin-panel/laporan/penjualan-periode",
     "inner": rpt.penjualan_periode,
+    # Laporan PERTAMA yang membaca bentuk Arunika. Aman dipasang sejak badan view
+    # `penjualan` dibangkitkan dari `_nota_net()`: angkanya IDENTIK dengan jalur
+    # lama (2025 setahun, 2024-2026, dan harian 365 baris), 1,0-1,3x ongkosnya.
+    # Tetap di balik ARUNIKA_LAPORAN=1 supaya bisa dinyalakan per pemasangan.
+    "inner_arunika": rpt.penjualan_periode_arunika,
     "sorts": rpt.SORTS_PENJUALAN_PERIODE,
     "default_sort": "periode",
     "summary": rpt.SUMMARY_PENJUALAN_PERIODE,
@@ -2288,6 +2683,7 @@ _RETUR_PENJUALAN = {
     "component": "Admin/Reports/ReturPenjualan",
     "url": "/admin-panel/laporan/retur-penjualan",
     "inner": rpt.retur_penjualan,
+    "inner_arunika": rpt.retur_penjualan_arunika,
     "sorts": rpt.SORTS_RETUR_PENJUALAN,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_RETUR_PENJUALAN,
@@ -2300,6 +2696,7 @@ _RETUR_PENJUALAN = {
     "columns": [
         {"key": "no_retur", "label": "No. Retur"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "no_bukti", "label": "No. Bukti"},
         {"key": "divisi", "label": "Divisi"},
         {"key": "keterangan_divisi", "label": "Keterangan Divisi"},
@@ -2335,6 +2732,7 @@ _PIUTANG = {
     "columns": [
         {"key": "no_transaksi", "label": "No. Nota"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "customer", "label": "Customer"},
         {"key": "jatuh_tempo", "label": "Jatuh Tempo"},
         {"key": "total_penjualan", "label": "Total Penjualan"},
@@ -2364,7 +2762,9 @@ _HUTANG = {
     "filename": "hutang",
     "columns": [
         {"key": "no_transaksi", "label": "No. Nota"},
+        {"key": "no_order", "label": "No. Order"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "supplier", "label": "Supplier"},
         {"key": "jatuh_tempo", "label": "Jatuh Tempo"},
         {"key": "total_pembelian", "label": "Total Pembelian"},
@@ -2381,6 +2781,7 @@ hutang_export = _report_export(_HUTANG)
 _KOLOM_ORDER = [
     {"key": "no_order", "label": "No. Order"},
     {"key": "tanggal", "label": "Tanggal"},
+    {"key": "tanggal_server", "label": "Tanggal Server"},
     {"key": "tanggal_terima", "label": "Tgl. Terima"},
     {"key": "divisi", "label": "Divisi"},
     {"key": "status", "label": "Status"},
@@ -2396,6 +2797,7 @@ _ORDER_PENJUALAN = {
     "component": "Admin/Reports/OrderPenjualan",
     "url": "/admin-panel/laporan/order-penjualan",
     "inner": rpt.order_penjualan,
+    "inner_arunika": rpt.order_penjualan_arunika,
     "sorts": rpt.SORTS_ORDER_PENJUALAN,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_ORDER,
@@ -2435,6 +2837,7 @@ _PEMBELIAN = {
     "component": "Admin/Reports/Pembelian",
     "url": "/admin-panel/laporan/pembelian",
     "inner": rpt.pembelian,
+    "inner_arunika": rpt.pembelian_arunika,
     "sorts": rpt.SORTS_PEMBELIAN,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_PEMBELIAN,
@@ -2448,7 +2851,11 @@ _PEMBELIAN = {
         {"key": "no_transaksi", "label": "No. Transaksi"},
         {"key": "no_order", "label": "No Order"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "supplier", "label": "Supplier"},
+        {"key": "divisi", "label": "Divisi"},
+        {"key": "pembayaran", "label": "Pembayaran"},
+        {"key": "jatuh_tempo", "label": "Jatuh Tempo", "format": "date"},
         {"key": "note", "label": "Note"},
         {"key": "barang", "label": "Barang"},
         {"key": "qty", "label": "Qty"},
@@ -2474,6 +2881,10 @@ _PEMBELIAN_SUPPLIER = {
     "component": "Admin/Reports/PembelianSupplier",
     "url": "/admin-panel/laporan/pembelian-supplier",
     "inner": rpt.pembelian_supplier,
+    # Laporan keenam. Dibuka oleh entitas `pembelian`, yang badannya
+    # dibangkitkan dari `_pembelian_nota()` -- teknik yang sama dengan
+    # penjualan, jadi formula uangnya tidak punya salinan kedua.
+    "inner_arunika": rpt.pembelian_supplier_arunika,
     "sorts": rpt.SORTS_PEMBELIAN_SUPPLIER,
     "default_sort": "total",
     "summary": rpt.SUMMARY_PEMBELIAN_SUPPLIER,
@@ -2496,6 +2907,7 @@ _PEMBELIAN_PERIODE = {
     "component": "Admin/Reports/PembelianPeriode",
     "url": "/admin-panel/laporan/pembelian-periode",
     "inner": rpt.pembelian_periode,
+    "inner_arunika": rpt.pembelian_periode_arunika,
     "sorts": rpt.SORTS_PEMBELIAN_PERIODE,
     "default_sort": "periode",
     "summary": rpt.SUMMARY_PEMBELIAN_PERIODE,
@@ -2520,6 +2932,7 @@ _RETUR_PEMBELIAN = {
     "component": "Admin/Reports/ReturPembelian",
     "url": "/admin-panel/laporan/retur-pembelian",
     "inner": rpt.retur_pembelian,
+    "inner_arunika": rpt.retur_pembelian_arunika,
     "sorts": rpt.SORTS_RETUR_PEMBELIAN,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_RETUR_PEMBELIAN,
@@ -2532,6 +2945,7 @@ _RETUR_PEMBELIAN = {
     "columns": [
         {"key": "no_retur", "label": "No. Retur"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "no_bukti", "label": "No. Bukti"},
         {"key": "divisi", "label": "Divisi"},
         {"key": "supplier", "label": "Supplier"},
@@ -2555,6 +2969,15 @@ def bantuan(request):
     # ponytail: isinya statis dan hidup di komponen Vue-nya. Tak ada query,
     # jadi tak perlu defer dan tak perlu prop.
     return render(request, "Admin/Bantuan", props={})
+
+
+def pengaturan(request):
+    # Halaman kartu untuk menu yang jarang dibuka (lipatan "pengaturan" di
+    # frontend/composables/useNav.js). Bukan menu tersendiri: path ini tak cocok
+    # dengan href menu mana pun, jadi penjaga memperlakukannya seperti
+    # /admin-panel/profile, dan daftarnya diambil dari prop bersama
+    # allowed_menus — isinya hanya menu yang memang boleh dibuka akun ini.
+    return render(request, "Admin/Pengaturan/Index", props={})
 
 
 def stok_divisi(request):
@@ -2837,6 +3260,7 @@ _OPNAME = {
     "component": "Admin/Inventory/Opname",
     "url": "/admin-panel/inventory/opname",
     "inner": rpt.opname,
+    "inner_arunika": rpt.opname_arunika,
     "sorts": rpt.SORTS_OPNAME,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_OPNAME,
@@ -2845,10 +3269,65 @@ _OPNAME = {
     "filename": "opname",
     # Layar ini murni laporan. Jalur tulisnya pindah ke halaman Koreksi Stok —
     # satu sesi balancing menyentuh ratusan baris dan tak muat di modal.
-    "columns": [{"key": "no_transaksi", "label": "No. Opname"}, {"key": "tanggal", "label": "Tanggal", "format": "date"}, {"key": "divisi", "label": "Divisi"}, {"key": "kd_barang", "label": "Kd. Barang"}, {"key": "barang", "label": "Barang"}, {"key": "koreksi_masuk", "label": "Koreksi Masuk", "format": "number"}, {"key": "koreksi_keluar", "label": "Koreksi Keluar", "format": "number"}, {"key": "diferensi", "label": "Diferensi", "format": "number"}],
+    "columns": [{"key": "no_transaksi", "label": "No. Opname"}, {"key": "tanggal", "label": "Tanggal", "format": "date"}, {"key": "tanggal_server", "label": "Tanggal Server", "format": "date"}, {"key": "divisi", "label": "Divisi"}, {"key": "kd_barang", "label": "Kd. Barang"}, {"key": "barang", "label": "Barang"}, {"key": "satuan", "label": "Satuan"}, {"key": "petugas", "label": "Petugas"}, {"key": "keterangan", "label": "Keterangan"}, {"key": "koreksi_masuk", "label": "Koreksi Masuk", "format": "number"}, {"key": "koreksi_keluar", "label": "Koreksi Keluar", "format": "number"}, {"key": "diferensi", "label": "Diferensi", "format": "number"}],
 }
 opname = _report_view(_OPNAME)
 opname_export = _report_export(_OPNAME)
+
+
+# --- Nota Tanggal Mundur ---------------------------------------------------
+#
+# Sengaja TANPA `inner_arunika`: bentuk Arunika belum menyimpan cap waktu server
+# asal sama sekali (`dibuat_pada` adalah waktu baris masuk Arunika, bukan jam
+# server legacy). Memberinya kembaran sekarang berarti memajang angka yang
+# terlihat benar dan tidak benar.
+_NOTA_MUNDUR = {
+    "component": "Admin/Analytics/NotaMundur",
+    "url": "/admin-panel/analitik/nota-mundur",
+    "inner": rpt.nota_mundur,
+    "sorts": rpt.SORTS_NOTA_MUNDUR,
+    "default_sort": "jarak_hari",
+    "summary": rpt.SUMMARY_NOTA_MUNDUR,
+    "filters": rpt.FILTERS_NOTA_MUNDUR,
+    # `jenis` dan `min_selisih` disaring DI DALAM inner, bukan sebagai filter
+    # kolom di luar: yang pertama membuang seluruh arm UNION, yang kedua
+    # memangkas tiap arm sebelum digabung. Keduanya mustahil dari luar.
+    "filter_keys": ["kd_divisi", "jenis", "min_selisih"],
+    # Tanpa ini kotak "min. selisih" tampil kosong sementara nilainya diam-diam
+    # berlaku — pelajaran dari Klasifikasi Pelanggan.
+    "filter_defaults": {"min_selisih": 1},
+    # Clamp 92 hari DILEPAS, dan ini pertanyaan sejarah bukan periode: temuan
+    # terbesar di data nyata adalah koreksi stok bertanggal Maret 2024 yang baru
+    # tersimpan Januari 2026 — 683 hari. Laporan yang hanya bisa melihat 92 hari
+    # ke belakang tak akan pernah menemukannya.
+    #
+    # Terukur sebelum dilepas, sesuai syarat yang ditetapkan saat merancang:
+    # delapan arm UNION atas rentang TIGA TAHUN memakan 0,06 dtk di testGudang
+    # dan 0,04 dtk di grosirPusat (445.873 nota). Murah karena tiap arm
+    # mengerjakan index seek pada `tanggal`, bukan scan — lihat catatan bentuk
+    # predikat di `rpt.nota_mundur`.
+    "max_range_days": None,
+    # Setahun ke belakang, bukan awal bulan: bawaan sebulan membuat layar yang
+    # dibuka pertama kali hampir selalu kosong, dan orang menyimpulkan tak ada
+    # apa-apa alih-alih melebarkan rentangnya.
+    "default_from_days": 365,
+    "options": lambda p: {"divisi": _opt_divisi(p),
+                          "jenis": [{"value": j, "label": j} for j in rpt.JENIS_MUNDUR]},
+    "filename": "nota-tanggal-mundur",
+    "columns": [
+        {"key": "jenis", "label": "Jenis Dokumen"},
+        {"key": "no_dokumen", "label": "No. Dokumen"},
+        {"key": "tanggal", "label": "Tanggal", "format": "date"},
+        {"key": "tanggal_server", "label": "Tanggal Server", "format": "date"},
+        {"key": "selisih_hari", "label": "Selisih (hari)", "format": "number"},
+        {"key": "arah", "label": "Arah"},
+        {"key": "divisi", "label": "Divisi"},
+        {"key": "petugas", "label": "Petugas"},
+        {"key": "keterangan", "label": "Keterangan"},
+    ],
+}
+nota_mundur = _report_view(_NOTA_MUNDUR)
+nota_mundur_export = _report_export(_NOTA_MUNDUR)
 
 
 # Neraca Opname — mencocokkan selisih lintas sesi, yang tak bisa dilihat oleh
@@ -3035,6 +3514,14 @@ _VOUCHER = {
     "component": "Admin/Promo/Voucher",
     "url": "/admin-panel/promo/voucher",
     "inner": rpt.voucher,
+    # Laporan keempat. Terhalang SATU kolom selama ini (`voucher_kode`), bukan
+    # tabel — nilainya sudah ada di keluaran `_nota_net()` sejak awal.
+    #
+    # SATU-SATUNYA laporan yang angkanya tidak persis sama: `V1` 21.257 vs
+    # 21.256, karena satu nota tanpa baris detail (`CT2202150001`) tak muncul di
+    # bentuk Arunika — nota yang memang sudah tak terlihat di laporan penjualan
+    # mana pun. Baca docstring `voucher_arunika` sebelum menganggapnya bug.
+    "inner_arunika": rpt.voucher_arunika,
     "sorts": rpt.SORTS_VOUCHER,
     "default_sort": "kd_voucher",
     "summary": rpt.SUMMARY_VOUCHER,
@@ -3051,6 +3538,11 @@ _FMI_PENJUALAN = {
     "component": "Admin/Analytics/FmiPenjualan",
     "url": "/admin-panel/analitik/fmi-penjualan",
     "inner": rpt.fmi_penjualan,
+    # Laporan ketiga yang membaca bentuk Arunika, dan yang pertama membaca
+    # sampai ke BARIS nota. Baris identik di grosirPusat dan testGUdang (hanya
+    # ULP terakhir float yang berbeda, dan justru sisi Arunika yang lebih
+    # bersih); ongkos 2,0x, seluruhnya di JOIN/GROUP BY atas kunci ber-RTRIM.
+    "inner_arunika": rpt.fmi_penjualan_arunika,
     "sorts": rpt.SORTS_FMI_PENJUALAN,
     "default_sort": "nilai",
     "summary": rpt.SUMMARY_FMI_PENJUALAN,
@@ -3286,9 +3778,14 @@ def klasifikasi_pelanggan(request):
         if not profile:
             return {"tabel": None, "options": {}, "conn_error": CONN_ERROR, "notice": None}
         try:
-            for read_profile in mssql.report_read_profiles(profile):
+            # Bentuk Arunika dibaca dari database pendamping di instans yang
+            # sama, jadi tak ada replica untuk di-fallback-i — daftar kandidat
+            # menciut jadi profil itu sendiri, persis seperti di `_report_view`.
+            lewat_arunika = _arunika_siap(profile)
+            kandidat = [profile] if lewat_arunika else mssql.report_read_profiles(profile)
+            for read_profile in kandidat:
                 try:
-                    tabel = tx.klasifikasi_kolumnar(read_profile, f)
+                    tabel = tx.klasifikasi_kolumnar(read_profile, f, arunika=lewat_arunika)
                     options = {"divisi": _opt_divisi(read_profile)}
                     conn_error = None
                     break
@@ -3322,19 +3819,29 @@ def klasifikasi_pelanggan_export(request):
         request.session["flash_error"] = CONN_ERROR
         return redirect(spec["url"])
 
-    inner, params = spec["inner"](f)
+    # Kedua sheet pindah BERSAMAAN atau tidak sama sekali. Memindahkan yang
+    # pertama saja tak memunculkan galat apa pun — ia cuma membuat satu file
+    # memuat dua sumber yang tak pernah dibandingkan siapa pun.
+    lewat_arunika = _arunika_siap(profile)
+    if lewat_arunika:
+        inner, params = rpt.klasifikasi_pelanggan_arunika(f)
+        favorit_sql, favorit_params = rpt.barang_favorit_massal_arunika(f, top_n=5)
+    else:
+        inner, params = spec["inner"](f)
+        favorit_sql, favorit_params = rpt.barang_favorit_massal(f, top_n=5)
     inner, params = reporting.apply_column_filters(inner, params, f)
     utama_sql = (f"SELECT TOP {reporting.EXPORT_CAP} * FROM ({inner}) AS q "
                  f"ORDER BY {f['order_by']}")
-    favorit_sql, favorit_params = rpt.barang_favorit_massal(f, top_n=5)
 
     kolom_utama = _kolom_tanpa_uang(request, spec)
     kolom_favorit = _kolom_tanpa_uang(request, spec, rpt.FAVORIT_COLUMNS)
 
     resp, last_exc = None, None
-    for read_profile in mssql.report_read_profiles(profile):
+    kandidat = [profile] if lewat_arunika else mssql.report_read_profiles(profile)
+    buka = mssql.arunika_cursor if lewat_arunika else mssql.report_cursor
+    for read_profile in kandidat:
         try:
-            with mssql.report_cursor(read_profile) as cur:
+            with buka(read_profile) as cur:
                 cur.execute(utama_sql, params)
                 utama = reporting.clean_rows(reporting.dictify(cur))
                 cur.execute(favorit_sql, favorit_params)
@@ -3392,17 +3899,33 @@ def klasifikasi_pelanggan_detail(request):
             return rows
         return [{k: v for k, v in r.items() if k != "nilai"} for r in rows]
 
+    # Rute ini punya TIGA kueri, dan yang pertama dulu ditulis langsung di sini
+    # sebagai SELECT mentah ke `m_customer` — satu-satunya rujukan tabel legacy
+    # di layar ini yang tak lewat `reports.py`, dan karena itu yang paling
+    # gampang tertinggal saat sisanya pindah.
+    lewat_arunika = _arunika_siap(profile)
+    if lewat_arunika:
+        profil_sql, profil_prm = rpt.profil_pelanggan_arunika(kd_customer)
+        favorit = rpt.barang_favorit_pelanggan_arunika(f, kd_customer, top_n=20)
+        nota_q = rpt.nota_pelanggan_arunika(f, kd_customer, top_n=20)
+        buka = mssql.arunika_cursor
+    else:
+        profil_sql, profil_prm = ("SELECT kd_customer, nama, alamat, hp, telepon, email, status "
+                                  "FROM m_customer WHERE kd_customer = ?"), [kd_customer]
+        favorit = rpt.barang_favorit_pelanggan(f, kd_customer, top_n=20)
+        nota_q = rpt.nota_pelanggan(f, kd_customer, top_n=20)
+        buka = mssql.report_cursor
+
     try:
-        with mssql.report_cursor(profile) as cur:
-            cur.execute("SELECT kd_customer, nama, alamat, hp, telepon, email, status "
-                        "FROM m_customer WHERE kd_customer = ?", [kd_customer])
+        with buka(profile) as cur:
+            cur.execute(profil_sql, profil_prm)
             profil = (reporting.clean_rows(reporting.dictify(cur)) or [None])[0]
 
-            sql, prm = rpt.barang_favorit_pelanggan(f, kd_customer, top_n=20)
+            sql, prm = favorit
             cur.execute(sql, prm)
             favorit = reporting.clean_rows(reporting.dictify(cur))
 
-            sql, prm = rpt.nota_pelanggan(f, kd_customer, top_n=20)
+            sql, prm = nota_q
             cur.execute(sql, prm)
             nota = reporting.clean_rows(reporting.dictify(cur))
     except pyodbc.Error as exc:
@@ -3449,13 +3972,24 @@ def kas_harian(request):
         profile = _active()
         if profile:
             try:
-                inner, params = rpt.kas_harian(f)
-                with mssql.cursor(profile) as cur:
-                    rows, total = reporting.run_paged(cur, inner, params, f)
+                # Layar ini bespoke, jadi `inner_arunika` di sebuah spec tak akan
+                # pernah terbaca -- gerbangnya dipasang di sini, sama seperti
+                # Klasifikasi Pelanggan. Ketiga rutenya (baris, ringkasan,
+                # pilihan kas) HARUS pindah bersama: meninggalkan satu saja
+                # membuat layar membaca dua sumber sekaligus tanpa galat.
+                lewat_arunika = _arunika_siap(profile)
+                if lewat_arunika:
+                    inner, params = rpt.kas_harian_arunika(f)
+                    ssql, sparams = rpt.kas_summary_arunika(f)
+                else:
+                    inner, params = rpt.kas_harian(f)
                     ssql, sparams = rpt.kas_summary(f)
+                buka = mssql.arunika_cursor if lewat_arunika else mssql.cursor
+                with buka(profile) as cur:
+                    rows, total = reporting.run_paged(cur, inner, params, f)
                     cur.execute(ssql, sparams)
                     summary = reporting.one_row(cur)
-                    options = {"kas": _opt_kas(profile)}
+                    options = {"kas": _opt_kas(profile, arunika=lewat_arunika)}
             except pyodbc.Error as exc:
                 conn_error = mssql.friendly_error(exc, "Gagal membaca kas")
         else:
@@ -3489,7 +4023,8 @@ def kas_harian_export(request):
     if not profile:
         request.session["flash_error"] = CONN_ERROR
         return redirect("/admin-panel/kas/harian")
-    inner, params = rpt.kas_harian(f)
+    lewat_arunika = _arunika_siap(profile)
+    inner, params = (rpt.kas_harian_arunika if lewat_arunika else rpt.kas_harian)(f)
     order_sql = f"SELECT TOP {reporting.EXPORT_CAP} * FROM ({inner}) AS q ORDER BY {f['order_by']}"
     # Penjagaan yang SAMA dengan layar. `_fill_sheet` memetakan kolom lewat nama
     # dari cur.description, jadi mencabut kolom di sini aman — tak ada pergeseran
@@ -3498,7 +4033,7 @@ def kas_harian_export(request):
     buang = _uang_bespoke(request, _KAS_UANG)
     kolom = [c for c in _KAS_COLUMNS if c["key"] not in buang]
     try:
-        with mssql.cursor(profile) as cur:
+        with (mssql.arunika_cursor if lewat_arunika else mssql.cursor)(profile) as cur:
             cur.execute(order_sql, params)
             resp = reporting.xlsx_stream_response("kas-harian", kolom, cur)
     except pyodbc.Error as exc:
@@ -3526,6 +4061,9 @@ _BIAYA = {
     "component": "Admin/Reports/BiayaOperasional",
     "url": "/admin-panel/laporan/biaya-operasional",
     "inner": rpt.biaya_operasional,
+    # Laporan ketujuh & kedelapan, dibuka oleh `jurnal_kas` — satu buku besar
+    # kas menggantikan empat tabel legacy (rancangan Sec 4.2).
+    "inner_arunika": rpt.biaya_operasional_arunika,
     "sorts": rpt.SORTS_BIAYA,
     "default_sort": "tanggal",
     "summary": rpt.SUMMARY_BIAYA,
@@ -3535,6 +4073,7 @@ _BIAYA = {
     "columns": [
         {"key": "no_transaksi", "label": "No. Transaksi"},
         {"key": "tanggal", "label": "Tanggal"},
+        {"key": "tanggal_server", "label": "Tanggal Server"},
         {"key": "divisi", "label": "Divisi"},
         {"key": "biaya", "label": "Biaya"},
         {"key": "kategori", "label": "Kategori"},
@@ -3549,6 +4088,7 @@ _BIAYA_KATEGORI = {
     "component": "Admin/Reports/BiayaKategori",
     "url": "/admin-panel/laporan/biaya-kategori",
     "inner": rpt.biaya_kategori,
+    "inner_arunika": rpt.biaya_kategori_arunika,
     "sorts": rpt.SORTS_BIAYA_KATEGORI,
     "default_sort": "total",
     "summary": rpt.SUMMARY_BIAYA_KATEGORI,
@@ -3652,6 +4192,10 @@ def _master_index(request, entitas: str, aksi_url: str | None = None, pemilih=No
         "angka": s["angka"],
         "lookup_fields": list(s["lookup"]),
         "wajib": s["wajib"],
+        # Batas panjang tiap kolom teks. `_bersihkan` memotong diam-diam yang
+        # kepanjangan, jadi tanpa `maxlength` di layar isian hilang sebagian
+        # tanpa pesan apa pun. Angkanya dari master_crud, tidak disalin ke Vue.
+        "panjang": master_crud.panjang(entitas),
         # Bentuk tabel & form ikut spec, bukan daftar tetap di Vue: tanpa ini
         # layar Merk merender kolom Alamat/Telepon/HP yang tabelnya tak punya.
         "kolom_tabel": s.get("kolom_tabel", []),

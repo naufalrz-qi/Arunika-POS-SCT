@@ -76,20 +76,20 @@ const columns = [
   { key: "kd_kota", label: "Kota" },
   { key: "alamat", label: "Alamat" },
   { key: "telepon", label: "Telepon" },
-  { key: "fax", label: "Fax" },
-  { key: "kontak", label: "Kontak" },
+  { key: "fax", label: "Fax", opsional: true },
+  { key: "kontak", label: "Kontak", opsional: true },
   { key: "hp", label: "HP" },
-  { key: "email", label: "Email" },
+  { key: "email", label: "Email", opsional: true },
   { key: "point", label: "Poin", sortable: true, align: "right" },
   { key: "limit_kredit", label: "Limit Kredit", sortable: true, align: "right" },
   { key: "disc", label: "Diskon (%)", align: "right" },
   { key: "status", label: "Status", align: "center" },
-  { key: "parent", label: "Parent" },
-  { key: "npwp_no", label: "No. NPWP" },
-  { key: "nppkp_no", label: "No. NPPKP" },
-  { key: "npwp_nama", label: "Nama NPWP" },
-  { key: "npwp_alamat", label: "Alamat NPWP" },
-  { key: "keterangan", label: "Keterangan" },
+  { key: "parent", label: "Parent", opsional: true },
+  { key: "npwp_no", label: "No. NPWP", opsional: true },
+  { key: "nppkp_no", label: "No. NPPKP", opsional: true },
+  { key: "npwp_nama", label: "Nama NPWP", opsional: true },
+  { key: "npwp_alamat", label: "Alamat NPWP", opsional: true },
+  { key: "keterangan", label: "Keterangan", opsional: true },
 ];
 
 const exportColumns = columns.map(({ key, label }) => ({ key, label }));
@@ -118,8 +118,8 @@ const exportColumns = columns.map(({ key, label }) => ({ key, label }));
               :options="[{ value: '1', label: 'Ya' }, { value: '0', label: 'Tidak' }]"
               placeholder="Semua"
             />
-            <Input v-model="filters.disc_min" label="Diskon Min (%)" type="number" />
-            <Input v-model="filters.disc_max" label="Diskon Maks (%)" type="number" />
+            <Input v-model="filters.disc_min" label="Diskon Min (%)" type="number" inputmode="decimal" min="0" max="100" />
+            <Input v-model="filters.disc_max" label="Diskon Maks (%)" type="number" inputmode="decimal" min="0" max="100" />
           </FilterSection>
         </template>
       </FilterPanel>

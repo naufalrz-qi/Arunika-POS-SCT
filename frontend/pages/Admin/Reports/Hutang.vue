@@ -21,6 +21,7 @@ const URL = "/admin-panel/laporan/hutang";
 
 const filterDefs = [
   { key: "no_transaksi", label: "No. Nota", type: "text" },
+  { key: "no_order", label: "No. Order" },
   { key: "supplier", label: "Supplier", type: "text" },
   { key: "jatuh_tempo", label: "Jatuh Tempo", type: "date" },
   { key: "total_pembelian", label: "Total Pembelian", type: "number_range" },
@@ -34,7 +35,8 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 
 const columns = [
   { key: "no_transaksi", label: "No. Nota" },
-  { key: "tanggal", label: "Tanggal", format: "date" },
+  { key: "tanggal", label: "Tanggal", format: "datetime" },
+  { key: "tanggal_server", label: "Tanggal Server", format: "datetime" },
   { key: "supplier", label: "Supplier" },
   { key: "jatuh_tempo", label: "Jatuh Tempo", format: "date" },
   { key: "total_pembelian", label: "Total Pembelian", align: "right", format: "rupiah" },

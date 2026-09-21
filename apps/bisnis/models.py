@@ -1,0 +1,1155 @@
+"""Skema bisnis Arunika — dirancang sendiri, bukan turunan skema POS legacy.
+
+Berkas ini adalah **sumber kebenaran tunggal** bentuk database milik Arunika.
+Rancangannya beserta alasan tiap keputusan ada di
+`docs/superpowers/specs/2026-09-07-skema-arunika-rancangan.md`.
+
+## Asal-usul
+
+Tiap tabel di sini diturunkan dari pertanyaan bisnis — apa yang perlu diketahui
+sebuah usaha grosir untuk menjalankan gudang, cabang, dan kasirnya — bukan dari
+DDL legacy. Skema legacy hanya dibaca untuk keperluan **interoperabilitas**:
+Arunika harus tetap bisa membaca data yang sudah ada lewat lapisan adapter
+(`apps/bisnis/adapter.py`), dan itu mustahil tanpa mengetahui bentuk sumbernya.
+
+Yang TIDAK dilakukan, dan tidak boleh: menyalin definisi trigger/view/procedure
+legacy, dan menurunkan rancangan ini dari `sys.columns` server legacy.
+`hub_schema.baca_kolom()` khususnya tidak boleh dipakai di sini — fungsi itu
+membaca katalog server legacy, dan memakainya berarti membangkitkan karya
+turunan.
+
+## Dua keputusan yang membentuk seluruh berkas ini
+
+**1. `PergerakanStok` adalah satu buku besar.** Di legacy, pergerakan stok
+tersebar di sembilan tabel dan tidak ada satu pun yang menyatakan "stok
+berpindah", sehingga `apps/inventory/services._movement_sql` harus menyatukan
+sembilan blok `UNION ALL` setiap kali ada yang bertanya soal stok. Yang menarik:
+keluaran kesembilan blok itu sudah satu bentuk kolom yang seragam. Kodenya sudah
+menemukan bentuk yang benar; skema legacy saja yang tak pernah menyediakan
+tempat menyimpannya. Di sini ia jadi tabel nyata, append-only, terindeks.
+
+**2. Tanpa trigger, sama sekali.** Hampir semua kerusakan tersulit di sistem
+legacy berasal dari trigger: yang menggeser stok satu baris saja dari INSERT
+multi-baris tanpa galat, yang membuat `cur.rowcount` berbohong sehingga 131 dari
+406 baris hilang tanpa jejak, yang memotong nilai pada 30 karakter. Logika yang
+tersembunyi di database adalah logika yang tak bisa diuji dan tak bisa
+di-review. Semua penulisan di sini lewat aplikasi.
+
+## Catatan teknis
+
+Nama tabel sengaja TIDAK diberi awalan schema. Namespace `arunika.*` yang
+disebut dokumen rancangan berlaku untuk **iTVF adapter di server legacy**, di
+mana pemisahan dari objek `dbo.*` milik vendor memang perlu. Database milik
+Arunika sendiri seluruhnya milik kita, jadi `dbo` bawaan sudah benar — dan model
+tanpa kualifikasi schema tetap bisa diuji di SQLite tanpa server apa pun.
+
+Hak Cipta (c) 2026 Naufal Rifqi Zuhrian. Lihat LICENSE.
+"""
+from django.db import models
+
+
+class Referensi(models.Model):
+    """Induk abstrak untuk tabel referensi: kode + nama + bisa dinonaktifkan.
+
+    `aktif` ada di sini karena ketiadaannya di legacy terbukti menyakitkan:
+    `m_supplier` tidak punya kolom status sama sekali (13 kolom), dan karena
+    DELETE juga dilarang (ON DELETE CASCADE dari tabel referensi menjangkau
+    barang), sebuah pemasok yang salah ketik tidak bisa dibatalkan dengan cara
+    apa pun.
+    """
+
+    kode = models.CharField(max_length=20, unique=True)
+    nama = models.CharField(max_length=100)
+    aktif = models.BooleanField(default=True)
+
+    class Meta:
+        abstract = True
+        ordering = ["kode"]
+
+    def __str__(self):
+        return f"{self.kode} {self.nama}"
+
+
+class Merek(Referensi):
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "merek"
+
+
+class Kategori(Referensi):
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "kategori"
+
+
+class ModelBarang(Referensi):
+    """Dinamai `ModelBarang`, bukan `Model`.
+
+    Konsep bisnisnya "model barang", tapi `Model` polos di basis kode Django
+    akan bertabrakan makna dengan `models.Model` di tiap pembacaan berikutnya.
+    """
+
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "model_barang"
+
+
+class Warna(Referensi):
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "warna"
+
+
+class Bahan(Referensi):
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "bahan"
+
+
+class Satuan(Referensi):
+    """PCS, LUSIN, DUS. Konversinya per barang, bukan global — lihat BarangSatuan."""
+
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "satuan"
+
+
+class Divisi(Referensi):
+    """Unit penyimpanan/penjualan di dalam satu server.
+
+    `awalan_nota` bukan hiasan: nomor dokumen diawali per divisi, bukan per
+    server. GUDANG punya lima divisi, dan seluruh opname-nya duduk di satu
+    divisi tertentu — mengambil "divisi pertama" adalah cara yang sudah terbukti
+    salah.
+    """
+
+    awalan_nota = models.CharField(max_length=5, blank=True)
+    # Ditampilkan sebagai kolom tersendiri di laporan Retur Penjualan, di samping
+    # `nama` dan `awalan_nota`.
+    keterangan = models.CharField(max_length=100, blank=True)
+
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "divisi"
+
+
+class Barang(models.Model):
+    """Katalog produk.
+
+    `kode` diketik operator dan tidak punya pola yang bisa ditebak — di data
+    nyata bentuknya berkisar dari `049` sampai `6941057402239B` dan `JM14062-MU`.
+    Karena itu ia `unique` tapi bukan primary key: yang jadi kunci adalah `id`,
+    supaya kode yang salah ketik masih bisa diperbaiki tanpa memutus satu pun
+    baris transaksi yang sudah menunjuk barang ini.
+
+    Itu sekaligus menghindari seluruh kelas masalah penomoran legacy, yang
+    memakai blok bergulir `{huruf}{blok}{NNN}` — `MAA999` menggulung ke `MAB000`
+    — sehingga tiap kueri `MAX()` harus memakai pola `LIKE 'X[A-Z][A-Z][0-9][0-9][0-9]'`
+    dan salah sedikit berarti penomoran bercabang dua.
+    """
+
+    kode = models.CharField(max_length=30, unique=True)
+    nama = models.CharField(max_length=100)
+    keterangan = models.CharField(max_length=100, blank=True)
+
+    merek = models.ForeignKey(Merek, null=True, blank=True, on_delete=models.PROTECT)
+    kategori = models.ForeignKey(Kategori, null=True, blank=True, on_delete=models.PROTECT)
+    model = models.ForeignKey(ModelBarang, null=True, blank=True, on_delete=models.PROTECT)
+    warna = models.ForeignKey(Warna, null=True, blank=True, on_delete=models.PROTECT)
+    bahan = models.ForeignKey(Bahan, null=True, blank=True, on_delete=models.PROTECT)
+
+    # Satuan terkecil. Seluruh kuantitas di PergerakanStok disimpan dalam satuan
+    # ini, sudah dikonversi -- lihat catatan di sana.
+    satuan_dasar = models.ForeignKey(Satuan, on_delete=models.PROTECT, related_name="barang_dasar")
+
+    # ## Dua kolom warisan yang ARTINYA belum diketahui
+    #
+    # Dibawa supaya layar Master Produk bisa pindah tanpa kehilangan kolom, dan
+    # ditandai di sini supaya utangnya kelihatan alih-alih menyatu jadi bagian
+    # rancangan:
+    #
+    # * `ukuran` — 14 nilai (0..23) di kedua server. Dimensi NYATA: dirujuk
+    #   keluarga `GetStokPerUkuran`/`mon_m_barang_stok_per_ukuran`, jadi ia
+    #   bukan kolom terlantar. Tapi kodifikasinya tak ada di skema mana pun.
+    # * `pabrik` — bendera 0/1/2, sebaran nyaris identik di kedua server
+    #   (49.556/4.308/1 dan 49.323/4.288/1). Tak ada objek yang memberinya arti.
+    #
+    # **Layar Arunika sendiri tidak boleh menawarkan keduanya sebagai isian
+    # sampai artinya dipetakan** — mewarisi kode tanpa arti ke dalam entri baru
+    # akan mengabadikannya. `status_pinjam` sengaja TIDAK ikut: konstan 0 di
+    # kedua server dan tak dirujuk siapa pun, jadi view memulangkannya 0.
+    ukuran = models.FloatField(null=True, blank=True)
+    pabrik = models.SmallIntegerField(null=True, blank=True)
+
+    aktif = models.BooleanField(default=True)
+    dibuat_pada = models.DateTimeField(auto_now_add=True)
+    diubah_pada = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "barang"
+        ordering = ["kode"]
+
+    def __str__(self):
+        return f"{self.kode} {self.nama}"
+
+
+class BarangSatuan(models.Model):
+    """Satuan jual sebuah barang beserta konversi dan harganya.
+
+    `isi`, bukan `jumlah`: nilainya adalah berapa satuan dasar yang ada di dalam
+    satu satuan ini (1 LUSIN = 12 PCS). Nama `jumlah` di legacy membuat kolom ini
+    berkali-kali dibaca sebagai kuantitas stok, yang bukan artinya sama sekali.
+
+    `PROTECT` pada kedua FK disengaja. Di legacy, relasi ke tabel referensi
+    memakai ON DELETE CASCADE, sehingga menghapus satu merek akan menyeret
+    barang-barangnya ikut hilang -- itulah kenapa di sana DELETE dilarang total
+    dan pembatalan harus berupa kolom status.
+    """
+
+    barang = models.ForeignKey(Barang, on_delete=models.CASCADE, related_name="satuan")
+    satuan = models.ForeignKey(Satuan, on_delete=models.PROTECT)
+    isi = models.DecimalField(max_digits=18, decimal_places=3, default=1)
+    harga_jual = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = "barang_satuan"
+        constraints = [
+            models.UniqueConstraint(fields=["barang", "satuan"], name="uq_barang_satuan"),
+            models.CheckConstraint(condition=models.Q(isi__gt=0), name="ck_barang_satuan_isi_positif"),
+        ]
+
+    def __str__(self):
+        return f"{self.barang_id}/{self.satuan_id} isi={self.isi}"
+
+
+class JenisPergerakan(models.TextChoices):
+    SALDO_AWAL = "saldo_awal", "Saldo Awal"
+    PENJUALAN = "penjualan", "Penjualan"
+    RETUR_JUAL = "retur_jual", "Retur Penjualan"
+    PEMBELIAN = "pembelian", "Pembelian"
+    RETUR_BELI = "retur_beli", "Retur Pembelian"
+    MUTASI_MASUK = "mutasi_masuk", "Mutasi Masuk"
+    MUTASI_KELUAR = "mutasi_keluar", "Mutasi Keluar"
+    KOREKSI = "koreksi", "Koreksi Stok"
+
+
+class PergerakanStok(models.Model):
+    """Buku besar stok: satu baris per perpindahan, append-only.
+
+    Inilah tabel yang membuat skema ini berbeda secara mendasar dari legacy, di
+    mana pergerakan stok harus direkonstruksi dari sembilan tabel setiap kali
+    ada yang bertanya.
+
+    **Kuantitas disimpan dalam satuan DASAR barang, sudah dikonversi.**
+    `satuan` hanya mencatat satuan apa yang diketik operator. Legacy menyimpan
+    qty dalam satuan input dan mengalikannya kembali lewat trigger; akibatnya,
+    mengganti satuan pada baris yang sudah diisi mengubah arti angka yang sama
+    -- "10" yang tadinya 10 PCS mendadak berarti 10 LUSIN, selisih 12 kali
+    lipat, tanpa satu pun tanda di layar.
+
+    **Saldo awal adalah baris di sini**, bukan tabel tersendiri
+    (`jenis = saldo_awal`). Legacy menyimpannya sebagai kolom di tabel lain,
+    yang memaksanya jadi blok UNION kesembilan dengan aturan tanggal yang
+    berbeda dari delapan blok lainnya.
+
+    **Pembatalan adalah baris pembalik, bukan penghapusan.** Buku besar yang
+    barisnya bisa hilang bukan buku besar.
+    """
+
+    divisi = models.ForeignKey(Divisi, on_delete=models.PROTECT)
+    barang = models.ForeignKey(Barang, on_delete=models.PROTECT)
+    satuan = models.ForeignKey(Satuan, on_delete=models.PROTECT)
+
+    # `DateTimeField`, bukan `DateField`. Legacy menyimpan JAM pada tiap
+    # dokumen (`2025-01-01 17:43:53`), dan laporan memakainya -- Kas Harian
+    # mengurutkan `tanggal, keterangan`, panel kasir menampilkan waktunya.
+    # Versi pertama memakai `DateField`, dan itu baru terlihat saat tabelnya
+    # benar-benar diisi: kolomnya jadi `date` di SQL Server dan jam di seluruh
+    # dokumen hilang tanpa satu galat pun.
+    tanggal = models.DateTimeField()
+    masuk = models.DecimalField(max_digits=18, decimal_places=3, default=0)
+    keluar = models.DecimalField(max_digits=18, decimal_places=3, default=0)
+    harga = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    jenis = models.CharField(max_length=20, choices=JenisPergerakan.choices)
+    sumber_tipe = models.CharField(max_length=20, blank=True)
+    sumber_id = models.BigIntegerField(null=True, blank=True)
+    no_rujukan = models.CharField(max_length=30, blank=True)
+
+    dicatat_pada = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "pergerakan_stok"
+        indexes = [
+            # Pertanyaan yang paling sering: saldo satu barang di satu divisi
+            # sampai tanggal tertentu. Urutan kolomnya mengikuti itu.
+            models.Index(fields=["barang", "divisi", "tanggal"], name="ix_gerak_barang_divisi_tgl"),
+            models.Index(fields=["divisi", "tanggal"], name="ix_gerak_divisi_tgl"),
+            models.Index(fields=["sumber_tipe", "sumber_id"], name="ix_gerak_sumber"),
+        ]
+        constraints = [
+            # Satu baris menyatakan SATU arah. Baris bermuatan dua arah membuat
+            # setiap agregasi harus memutuskan sendiri artinya, dan dua tempat
+            # yang memutuskan berbeda tidak akan pernah menghasilkan galat --
+            # hanya dua angka yang berbeda.
+            models.CheckConstraint(
+                condition=models.Q(masuk=0) | models.Q(keluar=0),
+                name="ck_gerak_satu_arah",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(masuk__gte=0) & models.Q(keluar__gte=0),
+                name="ck_gerak_tak_negatif",
+            ),
+        ]
+
+    def __str__(self):
+        arah = f"+{self.masuk}" if self.masuk else f"-{self.keluar}"
+        return f"{self.tanggal} {self.jenis} {arah}"
+
+
+class StatusPenjualan(models.TextChoices):
+    AKTIF = "aktif", "Aktif"
+    BATAL = "batal", "Batal"
+
+
+class JenisBayar(models.TextChoices):
+    """Cara nota ini dibayar.
+
+    Kolom TERPISAH dari `status`, dan itu memperbaiki penggabungan yang jadi
+    sumber salah baca di legacy: di sana `t_penjualan.status` dipakai untuk
+    KEDUANYA sekaligus (0=Kredit, 1=Tunai, 2=Lunas), sehingga tak ada tempat
+    untuk menyatakan nota batal sama sekali -- dan siapa pun yang membacanya
+    sebagai penanda batal akan melabeli setiap penjualan kredit sebagai batal.
+
+    `LUNAS` memang bukan cara bayar, melainkan kredit yang sudah selesai. Ia
+    tetap ada karena itulah yang tersimpan di data yang harus tetap terbaca;
+    memecahnya jadi `kredit` + kolom pelunasan adalah keputusan yang butuh data
+    cicilan, dan `t_piutang_cicilan` belum punya padanan di sini.
+    """
+
+    KREDIT = "kredit", "Kredit"
+    TUNAI = "tunai", "Tunai"
+    LUNAS = "lunas", "Lunas"
+
+
+class Penjualan(models.Model):
+    """Kepala nota penjualan.
+
+    `total` adalah **kolom biasa**, dan itu keputusan yang dibayar mahal oleh
+    legacy: di sana ia dipisah ke tabel 1:1 `t_penjualan_total`, dan cakupannya
+    ternyata tidak seragam antar-server. Terukur di `grosirPusat`: 474.587 nota
+    berbanding 259.250 baris total -- **215.337 nota (45%) tanpa pasangannya**,
+    padahal keduanya diikat foreign key. Sebuah `INNER JOIN` di sana memangkas
+    separuh omzet dari laporan tanpa satu pun galat.
+    """
+
+    nomor = models.CharField(max_length=30, unique=True)
+    # `DateTimeField`, bukan `DateField`. Legacy menyimpan JAM pada tiap
+    # dokumen (`2025-01-01 17:43:53`), dan laporan memakainya -- Kas Harian
+    # mengurutkan `tanggal, keterangan`, panel kasir menampilkan waktunya.
+    # Versi pertama memakai `DateField`, dan itu baru terlihat saat tabelnya
+    # benar-benar diisi: kolomnya jadi `date` di SQL Server dan jam di seluruh
+    # dokumen hilang tanpa satu galat pun.
+    tanggal = models.DateTimeField()
+    divisi = models.ForeignKey(Divisi, on_delete=models.PROTECT)
+    pelanggan_id = models.BigIntegerField(null=True, blank=True)  # FK menyusul di irisan berikutnya
+
+    # NULL = nota ini tidak memakai voucher, dan itu bedanya dari legacy:
+    # di sana `kd_voucher` kolom WAJIB yang diisi penanda "tanpa voucher"
+    # (`V1`, `V2`, `VAA000` yang bernama `-`) pada 473.199 dari 474.595 nota
+    # grosirPusat. Voucher sungguhan cuma tiga kode, 1.396 pemakaian.
+    #
+    # Penanda itu bukan sekadar jelek dipandang: laporan Voucher legacy
+    # menghitung "dipakai" sebagai `kd_voucher <> ''`, jadi ketiga baris penanda
+    # muncul di layar dengan pemakaian ratusan ribu. Adapter TIDAK memperbaiki
+    # itu -- ia memulangkan apa adanya supaya laporan yang dipindahkan tetap
+    # cocok angka. Yang diperbaiki adalah bentuk baru ini, tempat "tanpa
+    # voucher" memang tidak perlu punya baris master.
+    # Rujukan bertali teks: `Voucher` didefinisikan di bawah, di bagian kas.
+    voucher = models.ForeignKey("Voucher", null=True, blank=True, on_delete=models.PROTECT)
+
+    # Kas yang menerima uangnya -- satu-satunya tali antara sebuah nota dan buku
+    # kas harian. `jurnal_kas` sengaja hanya berisi DOKUMEN kas (empat jenis,
+    # Sec 4.2); penjualan tunai bukan salah satunya, ia punya entitasnya sendiri.
+    # Layar Kas Harian yang menyatukan keduanya.
+    #
+    # NULL-able karena nota kredit tak menerima uang saat dibuat. Di legacy
+    # kolom itu tidak pernah kosong: `t_penjualan.kd_kas` terisi pada SELURUH
+    # 474.595 baris grosirPusat dan 52.801 testGUdang -- termasuk kedelapan nota
+    # kredit grosirPusat, yang karena itu ikut terhitung sebagai uang masuk di
+    # layar Kas Harian hari ini. Penyaring `kd_kas <> ''` di sana tak pernah
+    # membuang apa pun.
+    kas = models.ForeignKey("Kas", null=True, blank=True, on_delete=models.PROTECT,
+                            related_name="penjualan")
+
+    # Siapa yang MENGETIK nota ini di server legacy (`kd_user`). Berbeda dari
+    # `dibuat_oleh` di bawah, yang id user aplikasi Arunika — keduanya hidup
+    # berdampingan justru karena tidak sama, dan `TautanUser` ada supaya yang
+    # satu bisa ditelusuri ke yang lain. Sales-nya di `penjualan_baris`.
+    pengguna = models.ForeignKey("Pengguna", null=True, blank=True,
+                                 on_delete=models.PROTECT, related_name="penjualan")
+
+    subtotal = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    # Diskon tingkat nota sebagai PERSEN, terpisah dari `diskon` yang rupiah.
+    # Satu slot, bukan empat -- lihat catatan di `PenjualanBaris.diskon_persen`.
+    diskon_ghb = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    pajak = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    # TARIF pajak (fraksi, 0,1 = 10%), terpisah dari `pajak` yang rupiah. Laba
+    # HPP memerlukan tarifnya untuk menyusun harga net per unit; menyatukan
+    # keduanya di satu nama adalah persis kekeliruan yang bikin sisi pembelian
+    # nyaris salah baca.
+    pajak_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
+    total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    dibayar = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    jatuh_tempo = models.DateTimeField(null=True, blank=True)
+    keterangan = models.CharField(max_length=100, blank=True)
+
+    jenis_bayar = models.CharField(max_length=10, choices=JenisBayar.choices, default=JenisBayar.TUNAI)
+    status = models.CharField(max_length=10, choices=StatusPenjualan.choices, default=StatusPenjualan.AKTIF)
+    # Cap waktu saat server ASAL benar-benar menyimpan dokumen ini.
+    #
+    # BUKAN `dibuat_pada` di bawahnya, dan bedanya penting: `dibuat_pada`
+    # `auto_now_add`, yaitu kapan baris ini masuk ke database Arunika — kapan
+    # transfernya dijalankan. Memakainya sebagai "Tanggal Server" berarti
+    # memajang angka yang terlihat benar dan bukan.
+    #
+    # Ada karena `tanggal` bisa DIUBAH operator di aplikasi POS lama (dirakit
+    # dari jam PC kasir), sementara ini tidak. Terukur di data nyata: 13.021
+    # dari 15.730 pembelian testGudang bertanggal beda hari dari cap servernya,
+    # dengan selisih terjauh 730 hari.
+    #
+    # Nullable karena ada sumber yang memang tak punya (`t_penambahan_kas`).
+    # "Tidak tahu" harus bisa dikatakan; mengarang tanggal lebih buruk.
+    tanggal_server = models.DateTimeField(null=True, blank=True)
+    dibuat_oleh = models.IntegerField(null=True, blank=True)  # id user aplikasi
+    dibuat_pada = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "penjualan"
+        indexes = [
+            models.Index(fields=["tanggal"], name="ix_jual_tgl"),
+            models.Index(fields=["divisi", "tanggal"], name="ix_jual_divisi_tgl"),
+            models.Index(fields=["pelanggan_id", "tanggal"], name="ix_jual_pelanggan_tgl"),
+        ]
+
+    def __str__(self):
+        return self.nomor
+
+
+class PenjualanBaris(models.Model):
+    """Baris nota.
+
+    Sengaja TANPA unique constraint pada (penjualan, barang): satu nota yang sah
+    bisa memuat barang yang sama dua kali dengan harga atau diskon berbeda.
+    Legacy tak punya primary key sama sekali di tabel ini -- yang berlebihan ke
+    arah sebaliknya, dan itulah yang dulu memaksa sinkronisasi memakai CDC alih-
+    alih replikasi biasa. Di sini kuncinya `id`, dan itu cukup.
+    """
+
+    penjualan = models.ForeignKey(Penjualan, on_delete=models.CASCADE, related_name="baris")
+    barang = models.ForeignKey(Barang, on_delete=models.PROTECT)
+    satuan = models.ForeignKey(Satuan, on_delete=models.PROTECT)
+
+    # Sales ada di BARIS, bukan di kepala nota, dan itu mengikuti legacy:
+    # `kd_pegawai` adalah kolom `t_penjualan_detail`, sehingga satu nota boleh
+    # memuat barang yang dijual orang berbeda. Memindahkannya ke kepala akan
+    # terlihat lebih rapi dan diam-diam membuang kemungkinan yang datanya
+    # izinkan. NULL-able karena jalur legacy meng-LEFT JOIN-nya: baris tanpa
+    # sales yang sah tetap harus muncul.
+    sales = models.ForeignKey("Pegawai", on_delete=models.PROTECT, null=True, blank=True)
+
+    qty = models.DecimalField(max_digits=18, decimal_places=3)
+    harga = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    # ## SATU slot diskon, bukan empat -- dan itu diukur, bukan disederhanakan
+    #
+    # Legacy merantai `diskon1..4` sebagai persen berurutan (`_ghb`). Diukur di
+    # KEDUA server, sisi jual tak pernah memakai lebih dari satu: slot 2, 3, dan
+    # 4 bernilai nol pada SELURUH 570.190 + 2.990.368 baris detail dan
+    # 52.801 + 474.595 kepala nota. Sisi beli memakai slot kedua pada 10 baris
+    # dan ketiga pada 1 kepala, seluruhnya di testGUdang.
+    #
+    # Baris-baris berantai itu tidak hilang: di mode legacy adapter membaca
+    # `diskon1..4` yang asli, jadi laporan tetap memulangkannya utuh. Yang
+    # dibatasi hanya data yang KELAK ditulis Arunika sendiri.
+    #
+    # ## Namanya `_ghb`, bukan `_persen`, dan itu koreksi yang dibayar data
+    #
+    # Kolom ini **dwimode**, persis seperti UDF `GetHargaBersih` yang ditiru
+    # `reports._ghb`: nilai di (-1, 1) berarti PERSEN (`v * (1 - d)`), nilai
+    # >= 1 berarti RUPIAH FLAT (`v - d`). Bukan teori -- di baris jual
+    # grosirPusat 2025 ada **49.099 baris bermode rupiah berbanding 82 bermode
+    # persen**, dengan nilai terbesar 9.650.000.
+    #
+    # Versi pertama menamainya `diskon_persen` dan memberinya `Decimal(9, 6)`
+    # (maksimum 999,999999). Muatan pertama gagal dengan "Arithmetic overflow
+    # converting numeric to numeric" -- galat yang menunjuk tipe, bukan
+    # kesalahpahamannya. Nama yang berbohong menghasilkan ukuran yang salah.
+    diskon_ghb = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = "penjualan_baris"
+        indexes = [models.Index(fields=["barang"], name="ix_jual_baris_barang")]
+
+    def __str__(self):
+        return f"{self.penjualan_id} {self.barang_id} x{self.qty}"
+
+
+
+# --- Pembelian -------------------------------------------------------------
+#
+# Cermin penjualan, dan sengaja cermin: bentuk yang sama berarti satu cara
+# membaca, satu cara menulis laporan, dan satu tempat memperbaiki kalau salah.
+# Yang berbeda cuma sisi lawannya -- pemasok menggantikan pelanggan.
+
+
+class Pembelian(models.Model):
+    """Kepala nota pembelian.
+
+    `jenis_bayar` datang dari `t_pembelian.status`, dan itu BUKAN tebakan:
+    view legacy `mon_t_pembelian` memanggil `GetConvertStatus(beli.status)` lalu
+    memberinya nama kolom **"Pembayaran"** -- UDF yang sama yang dipakai
+    penjualan (0=Kredit, 1=Tunai, 2=Lunas). Jadi pembelian mewarisi penggabungan
+    yang persis sama: satu kolom dipakai untuk cara bayar, dan tak ada tempat
+    untuk menyatakan nota batal. Di sini keduanya dipisah, sama seperti di
+    `Penjualan`.
+
+    `t_pembelian.kd_jenis` adalah hal LAIN (JAA000/JAA001, merujuk
+    `m_jenis_bayar`) dan sengaja belum dipetakan: belum ada laporan yang
+    membutuhkannya, dan menebak arti kolom legacy adalah cara paling rapi untuk
+    salah tanpa ketahuan.
+    """
+
+    nomor = models.CharField(max_length=30, unique=True)
+    # `DateTimeField`, bukan `DateField`. Legacy menyimpan JAM pada tiap
+    # dokumen (`2025-01-01 17:43:53`), dan laporan memakainya -- Kas Harian
+    # mengurutkan `tanggal, keterangan`, panel kasir menampilkan waktunya.
+    # Versi pertama memakai `DateField`, dan itu baru terlihat saat tabelnya
+    # benar-benar diisi: kolomnya jadi `date` di SQL Server dan jam di seluruh
+    # dokumen hilang tanpa satu galat pun.
+    tanggal = models.DateTimeField()
+    divisi = models.ForeignKey(Divisi, on_delete=models.PROTECT)
+    pemasok_id = models.BigIntegerField(null=True, blank=True)  # FK menyusul, spt pelanggan_id
+
+    subtotal = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    pajak = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    # Satu slot persen, sama seperti sisi jual -- lihat `PenjualanBaris.diskon_persen`.
+    # Kedua TARIF disimpan sebagai fraksi (0,1 = 10%), bukan rupiah: `pajak` di
+    # atas hasil hitungnya, `pajak_persen` di sini tarifnya. Laporan Pembelian
+    # menampilkan yang tarif.
+    diskon_ghb = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    pajak_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
+    ppnbm_persen = models.DecimalField(max_digits=9, decimal_places=6, default=0)
+    nomor_order = models.CharField(max_length=30, blank=True, null=True)
+    # Sejajar dengan `Penjualan.jatuh_tempo`. Ada di sisi beli sejak awal di
+    # legacy (`t_pembelian.tanggal_jatuh_tempo`) dan dipakai laporan Hutang,
+    # tapi bentuk Arunika sempat tak membawanya sama sekali.
+    jatuh_tempo = models.DateTimeField(null=True, blank=True)
+    keterangan = models.CharField(max_length=100, blank=True)
+
+    jenis_bayar = models.CharField(max_length=10, choices=JenisBayar.choices, default=JenisBayar.TUNAI)
+    status = models.CharField(max_length=10, choices=StatusPenjualan.choices, default=StatusPenjualan.AKTIF)
+    # Cap waktu server ASAL — lihat catatan lengkap di `Penjualan`.
+    # Sekali lagi: BUKAN `dibuat_pada`, yang mencatat kapan baris ini masuk
+    # ke Arunika, bukan kapan server asal menyimpannya.
+    tanggal_server = models.DateTimeField(null=True, blank=True)
+    dibuat_oleh = models.IntegerField(null=True, blank=True)
+    dibuat_pada = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "pembelian"
+        indexes = [
+            models.Index(fields=["tanggal"], name="ix_beli_tgl"),
+            models.Index(fields=["divisi", "tanggal"], name="ix_beli_divisi_tgl"),
+            models.Index(fields=["pemasok_id", "tanggal"], name="ix_beli_pemasok_tgl"),
+        ]
+
+    def __str__(self):
+        return self.nomor
+
+
+class PembelianBaris(models.Model):
+    """Baris nota pembelian. Tanpa unique constraint pada (pembelian, barang),
+    alasan sama dengan `PenjualanBaris`."""
+
+    pembelian = models.ForeignKey(Pembelian, on_delete=models.CASCADE, related_name="baris")
+    barang = models.ForeignKey(Barang, on_delete=models.PROTECT)
+    satuan = models.ForeignKey(Satuan, on_delete=models.PROTECT)
+
+    qty = models.DecimalField(max_digits=18, decimal_places=3)
+    harga = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    diskon = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    diskon_ghb = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    class Meta:
+        db_table = "pembelian_baris"
+        indexes = [models.Index(fields=["barang"], name="ix_beli_baris_barang")]
+
+    def __str__(self):
+        return f"{self.pembelian_id} {self.barang_id} x{self.qty}"
+
+
+# --- Master: wilayah, mitra, kas -------------------------------------------
+#
+# Ditambahkan di Fase 4 irisan 1. Bentuknya diturunkan dari kebutuhan, lalu
+# DICOCOKKAN dengan kolom legacy yang benar-benar ada (diperiksa lewat
+# INFORMATION_SCHEMA, bukan diingat). Dua koreksi yang lahir dari pemeriksaan itu
+# tercatat di masing-masing kelas.
+
+
+class Negara(Referensi):
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "negara"
+
+
+class Kota(Referensi):
+    """`kode_telepon` = kode area. Legacy menyebutnya `kd_telp`.
+
+    Legacy `m_kota` TIDAK punya kolom `keterangan` (5 kolom), tak seperti tabel
+    referensi lain yang seragam. Karena itu `Referensi` di sini dipakai apa
+    adanya tanpa menambah keterangan -- menambahkannya berarti kolom yang tak
+    pernah bisa diisi adapter.
+    """
+
+    kode_telepon = models.CharField(max_length=4, blank=True)
+    negara = models.ForeignKey(Negara, null=True, blank=True, on_delete=models.PROTECT)
+
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "kota"
+
+
+class Bank(Referensi):
+    keterangan = models.CharField(max_length=50, blank=True)
+
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "bank"
+
+
+class Mitra(models.Model):
+    """Induk abstrak pelanggan & pemasok: keduanya orang/badan dengan alamat.
+
+    Digabung karena kolomnya memang sama sembilan dari sepuluh, bukan demi
+    kerapian. Yang berbeda tetap dipisah ke kelas turunannya.
+    """
+
+    kode = models.CharField(max_length=20, unique=True)
+    nama = models.CharField(max_length=100)
+    alamat = models.CharField(max_length=200, blank=True)
+    kota = models.ForeignKey(Kota, null=True, blank=True, on_delete=models.PROTECT)
+    telepon = models.CharField(max_length=20, blank=True)
+    hp = models.CharField(max_length=20, blank=True)
+    email = models.CharField(max_length=60, blank=True)
+    kontak = models.CharField(max_length=50, blank=True)
+    keterangan = models.CharField(max_length=200, blank=True)
+    aktif = models.BooleanField(default=True)
+
+    class Meta:
+        abstract = True
+        ordering = ["nama"]
+
+    def __str__(self):
+        return f"{self.kode} {self.nama}"
+
+
+class Pelanggan(Mitra):
+    """`batas_piutang` = `m_customer.limit_kredit`.
+
+    Rancangan awal juga menyebut `tempo_hari`, dan itu DIBUANG setelah kolom
+    `m_customer` diperiksa: 19 kolom, tak satu pun menyimpan tempo pembayaran.
+    Memasangnya berarti kolom yang selamanya kosong di mode legacy -- adapter
+    tak punya apa pun untuk diisikan ke sana. Tambahkan kalau suatu hari ada
+    layar yang benar-benar memakainya.
+    """
+
+    batas_piutang = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    diskon_persen = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+
+    class Meta(Mitra.Meta):
+        abstract = False
+        db_table = "pelanggan"
+
+
+class Pemasok(Mitra):
+    """**`aktif` di sini tidak punya padanan di legacy, dan itu disengaja.**
+
+    `m_supplier` punya 13 kolom dan tak satu pun berupa status (diverifikasi
+    lewat INFORMATION_SCHEMA). Karena DELETE juga dilarang di sana -- relasi
+    tabel referensi memakai ON DELETE CASCADE yang menjangkau `m_barang` --
+    sebuah pemasok yang salah ketik tidak bisa dibatalkan dengan cara APA PUN.
+    Adapter mengisinya konstan aktif; skema Arunika sendiri bisa menonaktifkan.
+    """
+
+    bank = models.ForeignKey(Bank, null=True, blank=True, on_delete=models.PROTECT)
+    rekening = models.CharField(max_length=30, blank=True)
+
+    class Meta(Mitra.Meta):
+        abstract = False
+        db_table = "pemasok"
+
+
+class Kas(Referensi):
+    """Akun kas/rekening.
+
+    Kolom manusiawinya di legacy bernama `cabang`, BUKAN `nama` -- `m_kas` tak
+    punya kolom `nama` sama sekali. Di sini ia `nama`, apa adanya, dan
+    pemetaannya dikerjakan adapter.
+    """
+
+    no_rekening = models.CharField(max_length=30, blank=True)
+    bank = models.ForeignKey(Bank, null=True, blank=True, on_delete=models.PROTECT)
+    kota = models.ForeignKey(Kota, null=True, blank=True, on_delete=models.PROTECT)
+    telepon = models.CharField(max_length=20, blank=True)
+    kontak = models.CharField(max_length=50, blank=True)
+    saldo_awal = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    keterangan = models.CharField(max_length=50, blank=True)
+
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "kas"
+
+
+class JenisBiaya(models.TextChoices):
+    """Bagian biaya di laporan laba rugi.
+
+    Legacy menyimpannya di `m_biaya.status` -- kolom yang sama yang tampak
+    seperti bendera aktif dan sempat dibaca begitu. Yang membantahnya view
+    legacy sendiri: `mon_m_biaya` menamai hasil CASE-nya `Jenis`, dan dua view
+    laba rugi menyaring `status = 1` dan `status = 2` sebagai dua bagian biaya.
+    """
+
+    PENJUALAN = "penjualan", "Operasional (Penjualan)"
+    ADM_UMUM = "adm_umum", "Operasional (Adm. dan Umum)"
+    PRODUKSI_LANGSUNG = "produksi_langsung", "Produksi (Biaya Langsung)"
+    PRODUKSI_TAK_LANGSUNG = "produksi_tak_langsung", "Produksi (Biaya Tak Langsung)"
+
+
+class KategoriBiaya(Referensi):
+    """Jenis biaya operasional.
+
+    Di legacy, "aktif" pada `m_biaya` bernilai **2, bukan 1** -- seluruh 38
+    barisnya bernilai 2. Nilai ajaib seperti itu berhenti di sini: `aktif`
+    adalah boolean, dan penerjemahannya urusan adapter.
+    """
+
+    keterangan = models.CharField(max_length=50, blank=True)
+
+    # `jenis` adalah kolom TERSENDIRI, dan itu perbaikan bukan tambahan: di
+    # legacy ia berbagi tempat dengan apa yang dikira bendera aktif. `aktif`
+    # sendiri milik Arunika -- `m_biaya` tak punya padanannya sama sekali.
+    jenis = models.CharField(max_length=24, choices=JenisBiaya.choices,
+                             default=JenisBiaya.ADM_UMUM)
+
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "kategori_biaya"
+
+
+
+class JenisJurnalKas(models.TextChoices):
+    BIAYA = "biaya", "Biaya"
+    PENDAPATAN = "pendapatan", "Pendapatan"
+    PENAMBAHAN = "penambahan", "Penambahan Kas"
+    MUTASI = "mutasi", "Mutasi Antar-Kas"
+
+
+class JurnalKas(models.Model):
+    """Satu buku besar kas, menggantikan empat tabel legacy.
+
+    `t_biaya_operasional`, `t_pendapatan`, `t_penambahan_kas`, dan `t_mutasi_kas`
+    dipisah di legacy, padahal `apps/transactions/kas.py` sudah menggerakkan
+    keempatnya dari SATU `SPEC` dengan satu route generik -- dokumen kas keempat
+    terbukti tak butuh view maupun route baru sama sekali. Kodenya sudah
+    memperlakukan mereka sebagai satu hal; skema legacy saja yang tidak.
+
+    `kas_tujuan` hanya terisi untuk `mutasi`, dan tipenya di sini tidak berbohong:
+    di legacy `t_mutasi_kas.kd_kas_tujuan` bertipe `varchar(10)`/`JR_KODE_ACCOUNT`
+    seolah menunjuk akun jurnal, padahal tiga view legacy membuktikan ia menunjuk
+    `m_kas`.
+
+    `kategori` hanya bermakna untuk `biaya`. Baris pendapatan legacy menunjuk
+    `m_pendapatan` -- tabel LAIN, satu baris di kedua server yang bisa dijangkau
+    -- dan sengaja belum dipetakan: memaksanya masuk `kategori_biaya` berarti
+    menyatakan pendapatan adalah sejenis biaya.
+    """
+
+    nomor = models.CharField(max_length=30, unique=True)
+    # `DateTimeField`, bukan `DateField`. Legacy menyimpan JAM pada tiap
+    # dokumen (`2025-01-01 17:43:53`), dan laporan memakainya -- Kas Harian
+    # mengurutkan `tanggal, keterangan`, panel kasir menampilkan waktunya.
+    # Versi pertama memakai `DateField`, dan itu baru terlihat saat tabelnya
+    # benar-benar diisi: kolomnya jadi `date` di SQL Server dan jam di seluruh
+    # dokumen hilang tanpa satu galat pun.
+    tanggal = models.DateTimeField()
+    divisi = models.ForeignKey(Divisi, null=True, blank=True, on_delete=models.PROTECT)
+
+    kas = models.ForeignKey("Kas", on_delete=models.PROTECT, related_name="jurnal")
+    kas_tujuan = models.ForeignKey("Kas", null=True, blank=True, on_delete=models.PROTECT,
+                                   related_name="jurnal_masuk")
+
+    jenis = models.CharField(max_length=12, choices=JenisJurnalKas.choices)
+    kategori = models.ForeignKey("KategoriBiaya", null=True, blank=True, on_delete=models.PROTECT)
+
+    jumlah = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    keterangan = models.CharField(max_length=200, blank=True)
+    # Cap waktu server ASAL — lihat catatan lengkap di `Penjualan`.
+    # Sekali lagi: BUKAN `dibuat_pada`, yang mencatat kapan baris ini masuk
+    # ke Arunika, bukan kapan server asal menyimpannya.
+    tanggal_server = models.DateTimeField(null=True, blank=True)
+    dibuat_oleh = models.IntegerField(null=True, blank=True)
+    dibuat_pada = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "jurnal_kas"
+        indexes = [
+            models.Index(fields=["tanggal"], name="ix_jurkas_tgl"),
+            models.Index(fields=["kas", "tanggal"], name="ix_jurkas_kas_tgl"),
+            models.Index(fields=["jenis", "tanggal"], name="ix_jurkas_jenis_tgl"),
+        ]
+
+    def __str__(self):
+        return f"{self.nomor} {self.jenis} {self.jumlah}"
+
+class Voucher(Referensi):
+    nominal = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    keterangan = models.CharField(max_length=50, blank=True)
+
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "voucher"
+
+
+class Pengguna(Referensi):
+    """Akun yang MENGETIK dokumen — `m_userx` di legacy, kolom `kd_user`.
+
+    Terpisah dari `Pegawai` karena keduanya memang beda peran, bukan dua nama
+    untuk hal yang sama: laporan Penjualan Detail menampilkan keduanya
+    berdampingan (`petugas` dari sini, `sales` dari sana), dan tak ada satu
+    kolom pun di legacy yang menghubungkan sebuah baris `m_userx` ke sebuah
+    baris `m_pegawai`. Menggabungkannya berarti menebak.
+
+    Ini BUKAN `User` aplikasi Arunika (`apps/auth_app`). Yang itu login ke panel
+    ini; yang ini identitas di server legacy, dan `kd_user` dibangkitkan sendiri
+    oleh tiap server sehingga kode yang sama berarti orang berbeda di server
+    lain — persis alasan `TautanUser` ada satu baris per user x koneksi.
+
+    Tanpa kolom sandi, dan itu disengaja: `m_userx` menyimpan `passwd` dan
+    `passweb`, keduanya tak pernah dibutuhkan laporan mana pun. Adapter tidak
+    memproyeksikannya, jadi keduanya tak bisa bocor lewat view.
+    """
+
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "pengguna"
+
+
+class Pegawai(Referensi):
+    """Orang yang MENJUAL — `m_pegawai` di legacy, kolom `kd_pegawai`.
+
+    Hanya kode + nama + aktif. `m_pegawai` legacy punya 23 kolom berisi rekam
+    kepegawaian penuh (foto, KTP, agama, tempat/tanggal lahir, status kawin,
+    status lembur, jabatan, shift), dan §6 sudah menyatakan seluruh cabang HR
+    tidak diwarisi — `t_absensi`, `t_gaji`, `m_jabatan_gaji`, `m_pegawai_komisi`.
+    Mewarisi kolomnya saja tanpa cabangnya cuma memindahkan data pribadi ke
+    tempat yang tak punya alasan menyimpannya.
+
+    `divisi` sengaja belum ditarik meski `m_pegawai.kd_divisi` ada: belum satu
+    pun laporan memakainya. Tambahkan saat ada yang benar-benar membacanya.
+    """
+
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "pegawai"
+
+
+class JenisKoreksi(models.TextChoices):
+    """Empat jenis koreksi stok, dinamai view legacy `mon_t_opname_stok`.
+
+    Arahnya MELEKAT pada jenisnya dan tak pernah jadi pilihan terpisah: hanya
+    `LAIN_PLUS` menambah stok, tiga sisanya mengurangi. Menyediakan pilihan arah
+    sendiri berarti mengizinkan "Rusak, stok bertambah" — dan di gudang legacy
+    sudah ada 30 baris Lain-Lain(−) yang keterangannya diketik "RUSAK", operator
+    memilih jenis yang salah lalu menuliskan maksudnya sebagai teks bebas.
+    """
+
+    HILANG = "hilang", "Hilang"
+    RUSAK = "rusak", "Rusak"
+    LAIN_PLUS = "lain_plus", "Lain-Lain (+)"
+    LAIN_MINUS = "lain_minus", "Lain-Lain (−)"
+
+
+class KoreksiStok(models.Model):
+    """Kepala koreksi stok — `t_opname_stok` di legacy.
+
+    Dipisah jadi kepala + baris meski legacy DATAR (satu baris = satu dokumen
+    berisi satu barang; diperiksa: `no_transaksi` unik 6.699/6.699 di testGUdang
+    dan 2.038/2.038 di grosirPusat). Bentuk datar itu bukan kebutuhan bisnis,
+    melainkan bekas cacat: `trig_update_stok_opname_stok` menetapkan skalar dari
+    `inserted`, sehingga satu INSERT multi-baris cuma menggeser stok SATU baris
+    dan sisanya gagal diam-diam. Jalur tulis kita karena itu menyisipkan satu
+    baris per `execute`.
+
+    Adapter memproyeksikan 1:1 (satu baris legacy -> satu kepala + satu baris),
+    jadi bentuk ini tidak mengarang data. Yang ia lakukan adalah berhenti
+    mewariskan batasan trigger sebagai batasan model.
+    """
+
+    nomor = models.CharField(max_length=30, unique=True)
+    tanggal = models.DateTimeField()
+    divisi = models.ForeignKey("Divisi", on_delete=models.PROTECT)
+    jenis = models.CharField(max_length=12, choices=JenisKoreksi.choices)
+    keterangan = models.CharField(max_length=100, blank=True)
+    pengguna = models.ForeignKey("Pengguna", null=True, blank=True, on_delete=models.PROTECT)
+    # Cap waktu saat server ASAL benar-benar menyimpan dokumen ini.
+    #
+    # BUKAN `dibuat_pada` di bawahnya, dan bedanya penting: `dibuat_pada`
+    # `auto_now_add`, yaitu kapan baris ini masuk ke database Arunika — kapan
+    # transfernya dijalankan. Memakainya sebagai "Tanggal Server" berarti
+    # memajang angka yang terlihat benar dan bukan.
+    #
+    # Ada karena `tanggal` bisa DIUBAH operator di aplikasi POS lama (dirakit
+    # dari jam PC kasir), sementara ini tidak. Terukur di data nyata: 13.021
+    # dari 15.730 pembelian testGudang bertanggal beda hari dari cap servernya,
+    # dengan selisih terjauh 730 hari.
+    #
+    # Nullable karena ada sumber yang memang tak punya (`t_penambahan_kas`).
+    # "Tidak tahu" harus bisa dikatakan; mengarang tanggal lebih buruk.
+    tanggal_server = models.DateTimeField(null=True, blank=True)
+    dibuat_oleh = models.IntegerField(null=True, blank=True)  # id user aplikasi
+    dibuat_pada = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "koreksi_stok"
+        indexes = [models.Index(fields=["tanggal"], name="ix_koreksi_tgl")]
+
+    def __str__(self):
+        return f"{self.nomor} {self.get_jenis_display()}"
+
+
+class KoreksiStokBaris(models.Model):
+    koreksi = models.ForeignKey(KoreksiStok, on_delete=models.CASCADE, related_name="baris")
+    barang = models.ForeignKey("Barang", on_delete=models.PROTECT)
+    satuan = models.ForeignKey("Satuan", on_delete=models.PROTECT)
+    qty = models.DecimalField(max_digits=18, decimal_places=3)
+
+    class Meta:
+        db_table = "koreksi_stok_baris"
+        indexes = [models.Index(fields=["barang"], name="ix_koreksi_baris_barang")]
+
+
+class StatusOrder(models.TextChoices):
+    """Order terbuka vs sudah jadi nota.
+
+    Kolom yang berarti apa adanya, dan itu perbaikan yang disengaja atas legacy:
+    di sana order terbuka ditandai `no_transaksi = no_order`, sebab kolom
+    `status` miliknya tidak bisa dipercaya — 16 baris `status=0` berbanding 38
+    order terbuka di server yang sama. Order yang salah tanda tidak menimbulkan
+    galat apa pun; ia cuma lenyap dari daftar.
+    """
+
+    TERBUKA = "terbuka", "Terbuka"
+    JADI_NOTA = "jadi_nota", "Jadi Nota"
+
+
+class PenjualanOrder(models.Model):
+    """Order penjualan — pesanan yang belum tentu jadi nota.
+
+    `nomor_nota` adalah talinya ke `Penjualan` bila order sudah direalisasi.
+    Sengaja `CharField`, bukan FK: di legacy ia diisi nomor nota apa adanya, dan
+    memaksakan FK berarti order yang notanya sudah dihapus/diarsipkan tak bisa
+    dibaca sama sekali.
+    """
+
+    nomor = models.CharField(max_length=30, unique=True)
+    tanggal = models.DateTimeField()
+    tanggal_terima = models.DateTimeField(null=True, blank=True)
+    divisi = models.ForeignKey("Divisi", on_delete=models.PROTECT)
+    pelanggan = models.ForeignKey("Pelanggan", null=True, blank=True, on_delete=models.PROTECT)
+
+    status = models.CharField(max_length=10, choices=StatusOrder.choices,
+                              default=StatusOrder.TERBUKA)
+    nomor_nota = models.CharField(max_length=30, blank=True, null=True)
+    total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    # Cap waktu saat server ASAL benar-benar menyimpan dokumen ini.
+    #
+    # BUKAN `dibuat_pada` di bawahnya, dan bedanya penting: `dibuat_pada`
+    # `auto_now_add`, yaitu kapan baris ini masuk ke database Arunika — kapan
+    # transfernya dijalankan. Memakainya sebagai "Tanggal Server" berarti
+    # memajang angka yang terlihat benar dan bukan.
+    #
+    # Ada karena `tanggal` bisa DIUBAH operator di aplikasi POS lama (dirakit
+    # dari jam PC kasir), sementara ini tidak. Terukur di data nyata: 13.021
+    # dari 15.730 pembelian testGudang bertanggal beda hari dari cap servernya,
+    # dengan selisih terjauh 730 hari.
+    #
+    # Nullable karena ada sumber yang memang tak punya (`t_penambahan_kas`).
+    # "Tidak tahu" harus bisa dikatakan; mengarang tanggal lebih buruk.
+    tanggal_server = models.DateTimeField(null=True, blank=True)
+    dibuat_oleh = models.IntegerField(null=True, blank=True)  # id user aplikasi
+    dibuat_pada = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "penjualan_order"
+        indexes = [models.Index(fields=["tanggal"], name="ix_order_jual_tgl")]
+
+    def __str__(self):
+        return f"{self.nomor} ({self.get_status_display()})"
+
+
+class PenjualanOrderBaris(models.Model):
+    order = models.ForeignKey(PenjualanOrder, on_delete=models.CASCADE, related_name="baris")
+    barang = models.ForeignKey("Barang", on_delete=models.PROTECT)
+    satuan = models.ForeignKey("Satuan", on_delete=models.PROTECT)
+    qty = models.DecimalField(max_digits=18, decimal_places=3)
+    harga = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = "penjualan_order_baris"
+        indexes = [models.Index(fields=["barang"], name="ix_order_jual_baris_brg")]
+
+
+class CaraBayar(Referensi):
+    """Alat bayar sebuah dokumen — `m_jenis_bayar` di legacy (TUNAI, BON, DEBIT,
+    BG, CEK, KREDIT).
+
+    Dinamai berbeda dari `JenisBayar` dengan sengaja: yang itu kredit/tunai/lunas
+    dari `t_penjualan.status`, yang ini alat bayarnya. Keduanya hidup
+    berdampingan di dokumen retur.
+
+    `m_jenis_bayar.status` TIDAK dipetakan ke `aktif`. Ia klasifikasi, bukan
+    bendera hidup-mati — pengelompokannya identik di kedua server (1 = lunas
+    seketika: TUNAI/BON/DEBIT; 2 = tertunda: BG/CEK/KREDIT) dan tak satu pun
+    view legacy menyaringnya. Ini kejadian ketiga sesudah `m_biaya` dan
+    `m_pegawai`, jadi `_referensi()` sengaja tidak dipakai untuk tabel ini.
+    """
+
+    class Meta(Referensi.Meta):
+        abstract = False
+        db_table = "cara_bayar"
+
+
+class _ReturBase(models.Model):
+    """Kepala retur — bentuk yang sama di kedua sisi.
+
+    Abstrak, bukan satu tabel berkolom `sisi`: retur jual menunjuk pelanggan dan
+    retur beli menunjuk pemasok, dan FK sungguhan lebih murah daripada
+    pemeriksaan di aplikasi.
+    """
+
+    nomor = models.CharField(max_length=30, unique=True)
+    tanggal = models.DateTimeField()
+    no_bukti = models.CharField(max_length=30, blank=True)
+    divisi = models.ForeignKey("Divisi", on_delete=models.PROTECT)
+    cara_bayar = models.ForeignKey("CaraBayar", null=True, blank=True, on_delete=models.PROTECT)
+    kas = models.ForeignKey("Kas", null=True, blank=True, on_delete=models.PROTECT)
+    keterangan = models.CharField(max_length=100, blank=True)
+    pengguna = models.ForeignKey("Pengguna", null=True, blank=True, on_delete=models.PROTECT)
+    # Cap waktu saat server ASAL benar-benar menyimpan dokumen ini.
+    #
+    # BUKAN `dibuat_pada` di bawahnya, dan bedanya penting: `dibuat_pada`
+    # `auto_now_add`, yaitu kapan baris ini masuk ke database Arunika — kapan
+    # transfernya dijalankan. Memakainya sebagai "Tanggal Server" berarti
+    # memajang angka yang terlihat benar dan bukan.
+    #
+    # Ada karena `tanggal` bisa DIUBAH operator di aplikasi POS lama (dirakit
+    # dari jam PC kasir), sementara ini tidak. Terukur di data nyata: 13.021
+    # dari 15.730 pembelian testGudang bertanggal beda hari dari cap servernya,
+    # dengan selisih terjauh 730 hari.
+    #
+    # Nullable karena ada sumber yang memang tak punya (`t_penambahan_kas`).
+    # "Tidak tahu" harus bisa dikatakan; mengarang tanggal lebih buruk.
+    tanggal_server = models.DateTimeField(null=True, blank=True)
+    dibuat_oleh = models.IntegerField(null=True, blank=True)  # id user aplikasi
+    dibuat_pada = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        abstract = True
+
+    def __str__(self):
+        return self.nomor
+
+
+class PenjualanRetur(_ReturBase):
+    pelanggan = models.ForeignKey("Pelanggan", null=True, blank=True, on_delete=models.PROTECT)
+
+    class Meta(_ReturBase.Meta):
+        abstract = False
+        db_table = "penjualan_retur"
+        indexes = [models.Index(fields=["tanggal"], name="ix_retur_jual_tgl")]
+
+
+class PenjualanReturBaris(models.Model):
+    retur = models.ForeignKey(PenjualanRetur, on_delete=models.CASCADE, related_name="baris")
+    barang = models.ForeignKey("Barang", on_delete=models.PROTECT)
+    satuan = models.ForeignKey("Satuan", on_delete=models.PROTECT)
+    # Sales ada di baris, sama seperti `PenjualanBaris` -- `kd_pegawai` memang
+    # kolom `t_penjualan_retur_detail`.
+    sales = models.ForeignKey("Pegawai", null=True, blank=True, on_delete=models.PROTECT)
+    qty = models.DecimalField(max_digits=18, decimal_places=3)
+    harga = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = "penjualan_retur_baris"
+        indexes = [models.Index(fields=["barang"], name="ix_retur_jual_baris_brg")]
+
+
+class PembelianRetur(_ReturBase):
+    pemasok = models.ForeignKey("Pemasok", null=True, blank=True, on_delete=models.PROTECT)
+
+    class Meta(_ReturBase.Meta):
+        abstract = False
+        db_table = "pembelian_retur"
+        indexes = [models.Index(fields=["tanggal"], name="ix_retur_beli_tgl")]
+
+
+class PembelianReturBaris(models.Model):
+    """Tanpa `sales`, dan itu bukan kelalaian: `t_pembelian_retur_detail` tak
+    punya `kd_pegawai`. Yang menjual barang adalah orang, yang memasoknya
+    perusahaan."""
+
+    retur = models.ForeignKey(PembelianRetur, on_delete=models.CASCADE, related_name="baris")
+    barang = models.ForeignKey("Barang", on_delete=models.PROTECT)
+    satuan = models.ForeignKey("Satuan", on_delete=models.PROTECT)
+    qty = models.DecimalField(max_digits=18, decimal_places=3)
+    harga = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = "pembelian_retur_baris"
+        indexes = [models.Index(fields=["barang"], name="ix_retur_beli_baris_brg")]
+
+
+class BarangDivisi(models.Model):
+    """Saldo & harga awal sebuah barang di satu divisi — `m_barang_divisi`.
+
+    Entitas sendiri, bukan kolom tempelan di `Barang`: Laba HPP memakai
+    `harga_beli_awal` sebagai cadangan ketika sebuah barang belum pernah dibeli,
+    dan menaruh agregat itu di dalam view `barang` akan membebani setiap
+    pembacanya demi satu laporan.
+
+    Bukan 1:1 dengan barang — gudang punya lima divisi: 35.309 baris untuk
+    30.938 barang di testGUdang, 53.411 untuk 53.411 di grosirPusat.
+    """
+
+    barang = models.ForeignKey("Barang", on_delete=models.CASCADE, related_name="per_divisi")
+    divisi = models.ForeignKey("Divisi", on_delete=models.PROTECT)
+    stok_awal = models.DecimalField(max_digits=18, decimal_places=3, default=0)
+    harga_beli_awal = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    stok_min = models.DecimalField(max_digits=18, decimal_places=3, default=0)
+
+    class Meta:
+        db_table = "barang_divisi"
+        constraints = [
+            models.UniqueConstraint(fields=["barang", "divisi"], name="uq_barang_divisi"),
+        ]

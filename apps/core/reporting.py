@@ -12,6 +12,8 @@ from decimal import Decimal
 
 from django.http import HttpResponse
 
+from core import mssql
+
 # Karakter kontrol yg ditolak XML 1.0 -> openpyxl melempar IllegalCharacterError
 # (bukan pyodbc.Error, jadi lolos dari `except pyodbc.Error` di view = 500).
 # Teks legacy MS SQL (keterangan/nama/alamat) sering bawa byte ini. Cermin dari
@@ -183,10 +185,17 @@ def run_paged(cur, inner_sql, params, f):
     from the whitelist in parse_report_params). Returns (rows, total); every row
     gets a synthetic `_rid` (global row number) usable as a stable row key.
     """
-    cur.execute(f"SELECT COUNT(*) FROM ({inner_sql}) AS q", params)
+    # execute_varchar, bukan cur.execute: filter laporan (kd_barang, kd_divisi,
+    # kd_customer, kata kunci pencarian) diadu dengan kolom `varchar` legacy,
+    # dan pyodbc mengikat `str` sebagai NVARCHAR. Konversi implisitnya mendarat
+    # di sisi KOLOM, seek batal, tabelnya dipindai. Daftar parameter di sini
+    # campuran (tanggal + string + int halaman), jadi pengikatannya harus
+    # per posisi -- lihat `core/mssql.execute_varchar`.
+    mssql.execute_varchar(cur, f"SELECT COUNT(*) FROM ({inner_sql}) AS q", params)
     total = int(cur.fetchone()[0] or 0)
     offset = (f["page"] - 1) * f["per_page"]
-    cur.execute(
+    mssql.execute_varchar(
+        cur,
         f"SELECT * FROM ({inner_sql}) AS q ORDER BY {f['order_by']} "
         "OFFSET ? ROWS FETCH NEXT ? ROWS ONLY",
         list(params) + [offset, f["per_page"]],
@@ -199,7 +208,8 @@ def run_paged(cur, inner_sql, params, f):
 
 def run_all(cur, inner_sql, params, f):
     """Export path: the same query without pagination, capped at EXPORT_CAP."""
-    cur.execute(
+    mssql.execute_varchar(
+        cur,
         f"SELECT TOP {EXPORT_CAP} * FROM ({inner_sql}) AS q ORDER BY {f['order_by']}",
         params,
     )
@@ -219,7 +229,7 @@ def run_recent(cur, inner_sql, params, f):
     # Alias `q` (not q0) so f["order_by"] — built with a `q.` prefix in
     # parse_report_params, matching run_paged/run_all — binds here too.
     capped_sql = f"SELECT TOP {f['per_page']} * FROM ({inner_sql}) AS q ORDER BY {f['order_by']}"
-    cur.execute(capped_sql, params)
+    mssql.execute_varchar(cur, capped_sql, params)
     rows = clean_rows(dictify(cur))
     for i, r in enumerate(rows):
         r["_rid"] = i + 1

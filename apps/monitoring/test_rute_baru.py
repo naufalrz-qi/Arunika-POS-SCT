@@ -17,14 +17,17 @@ _HALAMAN = (
     "/admin-panel/laporan/order-pembelian",
     "/admin-panel/kas/input/pendapatan",
     "/admin-panel/laporan/laba-rugi",
+    "/admin-panel/laporan/rekap-kasir",
 )
 _EXPORT = (
     "/admin-panel/laporan/hutang/export",
     "/admin-panel/laporan/order-penjualan/export",
     "/admin-panel/laporan/order-pembelian/export",
     "/admin-panel/laporan/laba-rugi/export",
+    "/admin-panel/laporan/rekap-kasir/export",
 )
-_MENU_BARU = ("hutang", "order_penjualan", "order_pembelian", "kas_pendapatan", "laba_rugi")
+_MENU_BARU = ("hutang", "order_penjualan", "order_pembelian", "kas_pendapatan",
+              "laba_rugi", "rekap_kasir")
 
 
 class RuteBaru(TestCase):

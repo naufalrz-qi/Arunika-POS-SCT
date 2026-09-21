@@ -3,7 +3,6 @@ import { computed } from "vue";
 import { Deferred, Link, usePage } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import Card from "@/components/ui/Card.vue";
-import Badge from "@/components/ui/Badge.vue";
 import Banner from "@/components/ui/Banner.vue";
 import BarChart from "@/components/charts/BarChart.vue";
 import Icon from "@/components/nav/Icon.vue";
@@ -50,6 +49,12 @@ const summaryItems = computed(() => {
   return items;
 });
 
+// Yang offline di depan: dari 14 server, yang perlu dicari mata hanya yang mati.
+const servers = computed(() =>
+  [...(data.value.servers || [])].sort((a, b) => (a.status === "online") - (b.status === "online")),
+);
+const jumlahOffline = computed(() => servers.value.filter((s) => s.status !== "online").length);
+
 const chartData = computed(() =>
   (data.value.hourly_transactions || []).map((h) => ({ label: h.hour, value: h.count })),
 );
@@ -79,17 +84,30 @@ const chartData = computed(() =>
            port tiap server MS SQL, dan datanya memang tak dikirim ke yang lain
            (lihat dashboard() di apps/monitoring/views.py) — `v-if` di sini
            hanya merapikan tata letak. -->
-      <Card v-if="bolehLihatServer" title="Status Server">
-        <ul class="space-y-3">
-          <li v-for="s in data.servers || []" :key="s.id" class="flex items-center justify-between">
-            <div>
-              <p class="text-sm font-medium text-ink">{{ s.name }}</p>
-              <p class="text-xs text-ink-muted">{{ s.host }}</p>
-            </div>
-            <Badge :variant="s.status === 'online' ? 'success' : 'danger'">
-              <span :class="['h-1.5 w-1.5 rounded-full', s.status === 'online' ? 'bg-success-600' : 'bg-danger-600']" />
-              {{ s.status === "online" ? "Online" : "Offline" }}
-            </Badge>
+      <!-- Grid ringkas, bukan daftar: 14 server bertumpuk dengan host di bawah
+           namanya membuat kartu ini dua kali lebih tinggi dari grafik di
+           sebelahnya. Host pindah ke tooltip. -->
+      <Card
+        v-if="bolehLihatServer"
+        title="Status Server"
+        :subtitle="`${servers.length - jumlahOffline} online · ${jumlahOffline} offline`"
+      >
+        <ul class="grid grid-cols-2 gap-2">
+          <li
+            v-for="s in servers"
+            :key="s.id"
+            :title="s.host"
+            :class="[
+              'flex min-w-0 items-center gap-2 rounded-control border px-2.5 py-2',
+              s.status === 'online' ? 'border-border-default' : 'border-danger-500/40 bg-danger-bg',
+            ]"
+          >
+            <span :class="['h-2 w-2 shrink-0 rounded-full', s.status === 'online' ? 'bg-success-500' : 'bg-danger-500']" />
+            <span class="min-w-0">
+              <span class="block truncate text-xs font-medium text-ink">{{ s.name }}</span>
+              <span v-if="s.status !== 'online'" class="block text-[11px] text-danger-fg">Offline</span>
+              <span v-else class="sr-only">Online</span>
+            </span>
           </li>
         </ul>
       </Card>

@@ -7,7 +7,7 @@ defineProps({
 
 <template>
   <div class="surface-flat mb-4 last:mb-0">
-    <div v-if="title || $slots.header" class="flex items-center justify-between gap-3 border-b border-border-default px-4 py-3">
+    <div v-if="title || $slots.header" class="flex items-center justify-between gap-3 px-5 pt-4">
       <div>
         <h3 v-if="title" class="text-sm font-semibold text-ink">{{ title }}</h3>
         <!-- Subtitle memuat kalimat utuh ("Top 10 qty terjual — barang tanpa
@@ -16,7 +16,7 @@ defineProps({
       </div>
       <slot name="header" />
     </div>
-    <div class="p-4">
+    <div class="p-5">
       <slot />
     </div>
   </div>

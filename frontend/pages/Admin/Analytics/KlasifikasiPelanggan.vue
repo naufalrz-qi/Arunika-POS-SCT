@@ -200,14 +200,14 @@ const detailParams = computed(() => ({
         <!-- Ambang ini bagian dari perhitungan SQL, jadi mengubahnya perlu
              menekan Tampilkan — beda dari saringan di bawah tabel yang instan. -->
         <FilterSection title="Aturan Segmen (hari) — perlu Tampilkan">
-          <Input v-model="pull.baru_hari" label="Baru: belanja pertama dalam" type="number" />
-          <Input v-model="pull.jarang_hari" label="Mulai jarang: jeda lebih dari" type="number" />
-          <Input v-model="pull.hilang_hari" label="Hilang: jeda lebih dari" type="number" />
-          <Input v-model="pull.setia_min_nota" label="Setia: minimal jumlah nota" type="number" />
+          <Input v-model="pull.baru_hari" label="Baru: belanja pertama dalam" type="number" inputmode="numeric" step="1" min="1" />
+          <Input v-model="pull.jarang_hari" label="Mulai jarang: jeda lebih dari" type="number" inputmode="numeric" step="1" min="1" />
+          <Input v-model="pull.hilang_hari" label="Hilang: jeda lebih dari" type="number" inputmode="numeric" step="1" min="1" />
+          <Input v-model="pull.setia_min_nota" label="Setia: minimal jumlah nota" type="number" inputmode="numeric" step="1" min="1" />
         </FilterSection>
         <FilterSection title="Kelas Nilai (rata per nota) — perlu Tampilkan">
-          <Input v-model="pull.tier_besar" label="Besar: mulai dari" type="number" />
-          <Input v-model="pull.tier_sedang" label="Sedang: mulai dari" type="number" />
+          <Input v-model="pull.tier_besar" label="Besar: mulai dari" type="number" inputmode="numeric" step="1" min="0" />
+          <Input v-model="pull.tier_sedang" label="Sedang: mulai dari" type="number" inputmode="numeric" step="1" min="0" />
         </FilterSection>
       </template>
     </FilterPanel>

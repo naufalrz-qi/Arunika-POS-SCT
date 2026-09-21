@@ -25,7 +25,7 @@ function submit() {
   <div class="flex min-h-screen items-center justify-center bg-surface-2 p-4">
     <div class="w-full max-w-sm">
       <div class="mb-6 text-center">
-        <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-control bg-brand-600 text-white">
+        <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-card bg-ink text-surface">
           <Icon name="crown" size="h-6 w-6" />
         </div>
         <h1 class="text-lg font-semibold text-ink">Sukses Crown Toys</h1>

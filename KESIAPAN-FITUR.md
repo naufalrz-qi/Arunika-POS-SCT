@@ -84,18 +84,62 @@ Kolom **Sumber baca**: `replica` = bisa membaca replica laporan bila dikonfigura
 | Master Pelanggan | `customers` | khusus | primary | — (hanya baca) | Siap |
 | Master Supplier | `suppliers` | khusus | primary | — (hanya baca) | Siap |
 | Update Barang | `update_barang` | khusus | primary | **Ya** (harga, status, nama & keterangan—khusus gudang) | Siap |
-| Riwayat Update Barang | `riwayat_update_barang` | khusus | SQLite | — | Siap |
+| Riwayat Update Barang | `riwayat_update_barang` | khusus | pangkal | — | Siap |
 | Pergerakan Harga | `pergerakan_harga` | khusus | primary | — | Siap |
 | Sinkronisasi Harga | `sync_harga` | khusus | 2 server | **Ya** (lintas server) | Siap dengan catatan |
 | Sinkronisasi Master Data | `sync_master` | khusus | 2 server | **Ya** (lintas server) | Siap dengan catatan |
-| Riwayat Sinkronisasi | `sync_history` | khusus | SQLite | — | Siap |
-| Manajemen User | `users` | khusus | SQLite | — | Siap |
-| Koneksi Server | `connections` | khusus | SQLite | — | Siap |
-| Log Aktivitas | `logs` | khusus | SQLite | — | Siap |
-| Kelola Menu | `menus` | khusus | SQLite | — | Siap (superadmin) |
+| Riwayat Operasi | `sync_history` | khusus | pangkal | — | Siap |
+| Manajemen User | `users` | khusus | pangkal | — | Siap |
+| Koneksi Server | `connections` | khusus | pangkal | — | Siap |
+| Log Aktivitas | `logs` | khusus | pangkal | — | Siap |
+| Kelola Menu | `menus` | khusus | pangkal | — | Siap (superadmin) |
 
 ⚠ **Jebakan penamaan:** key `stok_akhir` menunjuk halaman **Mutasi Stok**, sedangkan halaman
 **Stok Akhir** ber-key `stock`. Hati-hati saat memberikan hak menu per key.
+
+---
+
+## Kembaran Arunika per laporan
+
+Kolom "Sumber baca" di matriks atas menjawab pertanyaan lain (replica lawan primary).
+Bagian ini menjawab: **laporan mana yang sudah bisa dibaca dari skema Arunika sendiri,
+dan mana yang masih legacy penuh.** Gerbangnya `ARUNIKA_LAPORAN=1` + profil punya
+`db_arunika`; default MATI, jadi pemasangan biasa tetap membaca legacy.
+
+Daftar ini dijaga `apps/monitoring/test_laporan_arunika.PetaKembaranTerdaftar` —
+ia menghitung sendiri dari `views.py` dan menolak kalau daftar di bawah menyimpang.
+
+**Sudah punya kembaran (18 spec + 2 layar khusus).** Nama ditulis utuh, bukan
+disingkat: penjaganya mencocokkan label menu satu per satu.
+
+Penjualan (Detail), Laba per Barang, Penjualan per Nota, Penjualan per Customer,
+Penjualan per User, Penjualan per Periode, Retur Penjualan, Order Penjualan,
+Pembelian, Pembelian per Supplier, Pembelian per Periode, Retur Pembelian,
+Opname Stok, Voucher, FMI Penjualan, Biaya Operasional, Biaya per Kategori,
+Master Produk.
+
+Ditambah dua layar khusus lewat jalur `_arunika_siap`, bukan `inner_arunika`
+(keduanya tak punya satu `inner` untuk ditukar): **Klasifikasi Pelanggan** dan
+**Kas Harian**.
+
+**Belum, dan hampir semuanya bukan soal kode:**
+
+| Laporan | Hambatan |
+|---|---|
+| Hutang Supplier | `t_hutang_cicilan` **nol baris di setiap server** |
+| Order Pembelian | `t_pembelian_order` nol baris di kedua server |
+| Promo & Diskon | `m_barang_promo` nol baris di kedua server |
+| Shift Kasir | `t_pegawai_ganti_shift` nol baris di kedua server |
+| Piutang Pelanggan | `t_piutang_cicilan` 5 baris, hanya grosirPusat |
+| Nota Tanggal Mundur | **sengaja**: bentuk Arunika tak menyimpan cap waktu server asal (`views.py`) |
+| Rekap Kasir | baru; kembarannya tinggal mengikuti `penjualan_user_arunika` di atas `arunika_src.penjualan`, tapi belum diverifikasi baris demi baris di kedua profil — dan verifikasi itulah bagian terbesar pekerjaannya |
+| Transaksi Barang | UNION 9 tabel gerakan stok legacy; belum punya jalur baca Arunika |
+| Laba Rugi | modul tersendiri (`apps/transactions/laba_rugi.py`), di luar `reports.py` |
+| Stok Akhir, Stok per Divisi, Mutasi Stok, Stok Awal, Barang Histori, FMI Stok | seluruhnya lewat mesin stok `apps/inventory/services.py`; tak ada `inner` untuk ditukar |
+
+Lima yang pertama menunggu **data**, bukan kode: adapternya bisa ditulis, yang tak bisa
+adalah membuktikannya — "identik" atas nol baris lawan nol baris tak menyatakan apa pun
+(rancangan §7.12). Empat yang terakhir proyek tersendiri, bukan satu spec.
 
 ---
 
@@ -244,20 +288,32 @@ diduga lambat, pengukuran membantahnya, jadi tak ada perubahan di sana.
 
 ## Cakupan pengujian
 
-51 test, 7 berkas, semuanya lolos. Tanpa CI, tanpa test runner JavaScript.
+**Semuanya lolos** (`python manage.py test` — jumlahnya sengaja tak ditulis di sini;
+angka yang harus dirawat tangan sudah dua kali basi di paragraf ini sendiri). Tanpa CI,
+tanpa test runner JavaScript.
 
-**Belum diuji sama sekali:**
+> Angka sebelumnya di sini "51 test, 7 berkas" — sudah lama tidak benar, dan daftar "belum
+> diuji"-nya ikut usang. Diperiksa ulang per berkas, bukan diperbarui angkanya saja.
 
-- 19 view laporan spec-driven
-- `apps/transactions/reports.py` (>1000 baris — permukaan SQL terbesar di repo)
-- `apps/core/reporting.py` (paginasi, filter, sort)
-- Seluruh lapisan CDC (`apps/transactions/cdc_sync.py`) — tak bisa diuji tanpa server nyata
-- `sync_harga_jual`, `sync_entity` — justru jalur tulis paling berisiko
-- App `connections`, `apps/core/scheduler.py`
-- Semua komponen Vue
+**Sudah punya test yang sebelumnya disebut tidak ada:** `apps/transactions/reports.py` (kontrak
+kembaran Arunika, klasifikasi pelanggan, laba rugi), `apps/core/reporting.py` (4 berkas),
+`sync_harga_jual`, `services_sync`, app `connections`, `apps/core/scheduler.py`.
 
-**Celah terbesar yang diakui proyek sendiri** (`context.md` Fase 7): verifikasi menyeluruh
-dan uji beban belum pernah dilakukan.
+**Masih belum diuji:**
+
+- Seluruh lapisan CDC (`apps/transactions/cdc_sync.py`) — tak bisa diuji tanpa server nyata,
+  dan replikanya memang belum diaktifkan.
+- Semua komponen Vue — tak ada test runner JavaScript sama sekali.
+
+**Sifat cakupannya, dan ini yang lebih penting dari jumlahnya.** Hampir seluruh test
+memeriksa **bentuk SQL dan kontrak**, bukan menjalankannya terhadap data. Kebenaran angka
+laporan tidak dibuktikan oleh suite ini melainkan oleh perbandingan baris-per-baris legacy vs
+Arunika di dua server, yang dijalankan tangan tiap kali sebuah laporan pindah dan hasilnya
+dicatat di pesan commit-nya. Suite menahan regresi bentuk; ia tidak akan menangkap angka yang
+salah.
+
+**Celah terbesar yang diakui proyek sendiri** (`context.md` Fase 7): verifikasi menyeluruh dan
+uji beban belum pernah dilakukan.
 
 ---
 

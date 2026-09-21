@@ -24,6 +24,7 @@ const filterDefs = [
   { key: "barang", label: "Barang", type: "text" },
   { key: "kd_barang", label: "Kode Barang", type: "text" },
   { key: "kategori", label: "Kategori", type: "text" },
+  { key: "petugas", label: "Petugas" },
   { key: "laba", label: "Laba", type: "number_range" },
   { key: "margin", label: "Margin %", type: "number_range" },
   { key: "total_bersih", label: "Total Bersih", type: "number_range" },
@@ -35,16 +36,17 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 
 const columns = [
   { key: "no_transaksi", label: "No. Transaksi" },
-  { key: "tanggal", label: "Tanggal", format: "date" },
+  { key: "tanggal", label: "Tanggal", format: "datetime" },
+  { key: "tanggal_server", label: "Tanggal Server", format: "datetime" },
   { key: "divisi", label: "Divisi" },
   { key: "customer", label: "Customer" },
   { key: "kd_barang", label: "Kode Barang" },
   { key: "barang", label: "Barang" },
-  { key: "kategori", label: "Kategori" },
+  { key: "kategori", label: "Kategori", opsional: true },
   { key: "qty", label: "Qty", align: "right", format: "number" },
   { key: "satuan", label: "Satuan" },
-  { key: "harga", label: "Harga", align: "right", format: "rupiah" },
-  { key: "harga_pokok", label: "Harga Pokok", align: "right", format: "rupiah" },
+  { key: "harga", label: "Harga", align: "right", format: "rupiah", opsional: true },
+  { key: "harga_pokok", label: "Harga Pokok", align: "right", format: "rupiah", opsional: true },
   { key: "total_bersih", label: "Total Bersih", align: "right", format: "rupiah" },
   { key: "total_harga_pokok", label: "Total HPP", align: "right", format: "rupiah" },
   { key: "laba", label: "Laba", align: "right", format: "rupiah" },
@@ -113,7 +115,7 @@ const summaryItems = computed(() => {
         </FilterPanel>
       </template>
       <template #cell-laba="{ value }">
-        <span :class="Number(value) < 0 ? 'text-red-600 font-medium' : ''">
+        <span :class="Number(value) < 0 ? 'text-danger-fg font-medium' : ''">
           {{ value == null ? "—" : new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(value) }}
         </span>
       </template>

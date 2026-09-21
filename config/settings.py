@@ -2,11 +2,14 @@
 Django settings for the POS Multi-Server app (admin panel).
 
 Django + Inertia + Vite over a legacy MS SQL Server dataset. App-local state
-(auth, sessions, logs, connection profiles) lives in SQLite; all business data
-is read from MS SQL via raw pyodbc in each app's services.py.
+(auth, sessions, logs, connection profiles) lives in the "pangkal" database
+configured from .env — MS SQL, always, including `manage.py test` (see DATABASES
+below; SQLite is gone). All business data is read from MS SQL via raw pyodbc in
+each app's services.py.
 """
 import ipaddress
 import os
+import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -47,6 +50,7 @@ INSTALLED_APPS = [
     "django_vite",
     # Local apps
     "apps.core",
+    "apps.bisnis",
     "apps.auth_app",
     "apps.monitoring",
     "apps.connections",
@@ -89,13 +93,100 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-# Local app DB (PRD §5: SQLite for auth/config). Default unused in this phase.
+# --- Basis data aplikasi (koneksi PANGKAL) ---------------------------------
+#
+# Di sinilah ke-16 model app-local tinggal: akun, sesi, `ServerProfile`,
+# `TautanUser`, `ActivityLog`, seluruh cursor & snapshot, `InfoPerusahaan`.
+#
+# Kenapa dari .env dan bukan dari `ServerProfile` seperti server bisnis:
+# `ServerProfile` justru MENYIMPAN cara menyambung ke server-server itu. Kalau
+# ia sendiri hanya bisa dibaca lewat sebuah profil, tak ada yang bisa dibaca
+# pertama kali. Satu koneksi pangkal di .env memutus lingkaran itu; profil
+# cabang yang lain jadi baris biasa di dalamnya.
+#
+# HANYA MS SQL. SQLite dihapus seluruhnya — termasuk untuk `manage.py test`,
+# yang kini membuat `test_<POS_APP_DB_NAME>` di server yang sama. Alasannya
+# bukan keseragaman demi keseragaman: beda perilaku kedua mesin sudah menggigit
+# data sungguhan. SQLite menganggap dua NULL berbeda di unique constraint dan
+# tak menegakkan panjang kolom sama sekali, jadi baris yang MUSTAHIL di MS SQL
+# hidup bertahun-tahun tanpa gejala, dan tak satu pun test bisa menangkapnya
+# selama test-nya sendiri jalan di SQLite.
+#
+# Konsekuensi yang harus disadari: kalau server ini mati, TAK ADA yang bisa
+# login. Karena itu ia mesin aplikasi sendiri, bukan server lain lewat jaringan.
+#
+# Memindahkan data dari pemasangan SQLite lama: `manage.py pindah_pangkal`.
+from django.core.exceptions import ImproperlyConfigured
+
+_APP_DB_ENGINE = os.environ.get("POS_APP_DB_ENGINE", "mssql").strip().lower()
+if _APP_DB_ENGINE not in ("mssql", "sqlserver"):
+    raise ImproperlyConfigured(
+        f"POS_APP_DB_ENGINE={_APP_DB_ENGINE!r} tidak lagi didukung — basis data "
+        "pangkal sekarang HANYA MS SQL. Hapus baris itu dari .env, lalu isi "
+        "POS_APP_DB_*. Data SQLite lama dipindahkan dengan "
+        "`manage.py pindah_pangkal` (lihat PRODUCTION.md)."
+    )
+
+_wajib = ("POS_APP_DB_HOST", "POS_APP_DB_NAME")
+_kosong = [k for k in _wajib if not os.environ.get(k)]
+if _kosong:
+    raise ImproperlyConfigured(
+        f"{', '.join(_kosong)} belum diisi di .env. Lihat .env.example."
+    )
+
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "ENGINE": "mssql",
+        "NAME": os.environ["POS_APP_DB_NAME"],
+        "HOST": os.environ["POS_APP_DB_HOST"],
+        "PORT": os.environ.get("POS_APP_DB_PORT", "1433"),
+        # Boleh kosong: USER kosong membuat mssql-django memakai
+        # `Trusted_Connection=yes` (autentikasi Windows), dan itu pemasangan
+        # yang sah — bukan konfigurasi setengah jadi.
+        "USER": os.environ.get("POS_APP_DB_USER", ""),
+        "PASSWORD": os.environ.get("POS_APP_DB_PASSWORD", ""),
+        "OPTIONS": {
+            # Sengaja disamakan dengan driver yang sudah dipakai jalur pyodbc
+            # di core/mssql.py. mssql-django default-nya Driver 18 dengan
+            # fallback ke 17; menyebutnya eksplisit membuat satu mesin tidak
+            # diam-diam memakai dua driver berbeda.
+            "driver": os.environ.get(
+                "POS_APP_DB_DRIVER", "ODBC Driver 17 for SQL Server"
+            ),
+            # Postur TLS yang sama dengan `core.mssql.build_conn_str`. Hari ini
+            # keduanya cocok karena kebetulan: Driver 17 default-nya
+            # `Encrypt=no`. Begitu Driver 18 terpasang di mesin mana pun,
+            # jalur Django gagal TLS pada sertifikat self-signed sementara
+            # jalur pyodbc tetap jalan — persis jenis perbedaan yang paling
+            # lama dicari orang.
+            "extra_params": os.environ.get(
+                "POS_APP_DB_EXTRA", "Encrypt=yes;TrustServerCertificate=yes"
+            ),
+            # Sama dengan core.mssql.CONNECT_TIMEOUT. `query_timeout` SENGAJA
+            # tidak disetel: snapshot harga menulis ±779rb baris lewat koneksi
+            # ini, dan batas waktu di sana menggagalkannya di tengah jalan.
+            "connection_timeout": 5,
+        },
+        # 0 (tutup tiap request). ODBC sudah menyatukan handle-nya sendiri
+        # (`pyodbc.pooling`, core/mssql.py), dan seluruh kode latar bertumpu
+        # pada `connections.close_all()` di akhir tiap thread.
+        "CONN_MAX_AGE": 0,
+        "TEST": {
+            # Tanpa COLLATION, supaya database test mewarisi collation `model`
+            # — sama persis dengan yang didapat database produksi. Menyetelnya
+            # berbeda berarti test menguji semantik yang tak dimiliki produksi.
+            "NAME": os.environ.get(
+                "POS_APP_DB_TEST_NAME", "test_" + os.environ["POS_APP_DB_NAME"]
+            ),
+        },
     }
 }
+
+# Skema Arunika (`apps.bisnis`) milik database cabang, bukan pangkal — dan sebaliknya,
+# auth/sesi/log Django tak boleh tumpah ke database cabang. Lihat apps/core/db_router.py,
+# termasuk kenapa TESTING dikecualikan di sana.
+TESTING = "test" in sys.argv
+DATABASE_ROUTERS = ["apps.core.db_router.PangkalRouter"]
 
 # --- Auth (PRD §4, §8.1) ---------------------------------------------------
 AUTH_USER_MODEL = "auth_app.User"
@@ -240,13 +331,3 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage" 
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# --- SQLite WAL mode (multi-reader/single-writer) ----
-# Enabled so SELECT doesn't stall on WRITE; readers see last committed state while
-# a writer prepares the next. Readers don't block each other.
-def _enable_sqlite_wal(sender, connection, **kwargs):
-    if connection.vendor == "sqlite":
-        with connection.cursor() as cursor:
-            cursor.execute("PRAGMA journal_mode=WAL")
-
-from django.db.backends.signals import connection_created
-connection_created.connect(_enable_sqlite_wal)

@@ -19,7 +19,7 @@ const modes = [
       :aria-pressed="mode === m.key"
       @click="emit('update:mode', m.key)"
       :class="[
-        'px-2.5 py-0.5 text-[11px] transition-colors',
+        'px-2 py-0.5 text-[11px] transition-colors',
         mode === m.key ? 'bg-brand-bg font-medium text-brand-fg' : 'text-ink-muted hover:bg-surface-2',
       ]"
     >

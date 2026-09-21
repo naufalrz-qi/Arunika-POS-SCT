@@ -3,6 +3,7 @@ import json
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class ActivityLog(models.Model):
@@ -64,22 +65,46 @@ def log_activity(request, action, detail=""):
         user=user if (user and user.is_authenticated) else None,
         username=(user.username if (user and user.is_authenticated) else ""),
         action=action,
-        detail=detail,
+        # Dipotong DI SINI, penulis satu-satunya, bukan di pemanggil yang
+        # kebetulan meluap duluan (`monitoring.views.menus_save` mengirim
+        # daftar 40+ kunci menu dipisah koma). SQLite tak menegakkan panjang
+        # kolom, jadi baris 505 karakter lolos bertahun-tahun; MS SQL
+        # menolaknya. Kolomnya sengaja tidak dilebarkan: 255 -> 1000 hanya
+        # memindahkan tebingnya, dan layar Log Aktivitas menampilkan detail
+        # ini apa adanya dalam satu baris.
+        detail=str(detail)[:255],
         ip_address=ip,
     )
 
 
 class SyncLog(models.Model):
-    """Riwayat sinkronisasi antar-server (harga, m_barang, m_customer, m_supplier).
+    """Riwayat SATU proses latar: sinkronisasi, tarik AMPHOREUS, cadangan, transfer.
 
     Menggantikan ActivityLog (terlalu generik: tidak ada field src/dst/mode/
-    jumlah) sebagai sumber data untuk halaman Riwayat Sinkronisasi.
+    jumlah) sebagai sumber data untuk halaman Riwayat Operasi.
+
+    Dipakai lintas-fitur, bukan hanya sync harga/master seperti dulu. `feature`
+    adalah nama bebas ("harga", "hub_pull", "feed_sync", "backup", "transfer"),
+    dan `compared_count`/`applied_count` dibaca sebagai "diperiksa"/"diterapkan"
+    — sengaja generik supaya enam fitur muat di satu tabel dan satu garis waktu,
+    bukan enam tabel 80% identik yang harus di-UNION di Python.
+
+    Yang TIDAK ditanyakan ke tabel ini: "apakah job-nya masih hidup?". Baris di
+    sini adalah KEJADIAN, dan job yang sehat di hari sunyi tidak menulis apa pun
+    (lihat aturan anti-banjir di tiap pemanggil). Liveness dijawab
+    `scheduler.status()`, yang membaca memori proses. Satu kolom dua arti adalah
+    persis yang bikin `m_barang_stok_akhir` legacy tak bisa dipercaya.
     """
 
     class Status(models.TextChoices):
         OK = "ok", "Berhasil"
         PARTIAL = "partial", "Sebagian"
         FAILED = "failed", "Gagal"
+        # Dipakai tugas latar yang dipicu dari web: baris progres dan baris
+        # riwayat adalah baris yang SAMA. Selesai = status pindah dari sini ke
+        # ok/failed dan duration_ms terisi — tak ada tabel progres kedua yang
+        # harus dijaga tetap sinkron dengan yang ini.
+        BERJALAN = "berjalan", "Berjalan"
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -106,6 +131,11 @@ class SyncLog(models.Model):
     detail = models.TextField(blank=True)  # JSON-serialized list of changed-item dicts
     error_message = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Satu-satunya angka di baris ini yang tak bisa dihitung ulang: tidak ada
+    # `selesai_at`, jadi tanpa kolom ini "hub_pull lambat" tak bisa dibedakan
+    # dari "hub_pull sedang jalan". Diisi di akhir run, tetap 0 untuk baris yang
+    # masih BERJALAN.
+    duration_ms = models.PositiveIntegerField(default=0)
 
     class Meta:
         ordering = ["-created_at"]
@@ -222,23 +252,46 @@ class CdcSyncCursor(models.Model):
         return f"{self.profile_id}:{self.table_name} @ {self.last_lsn or '(belum sync)'}"
 
 
-def log_sync(request, feature, mode, src, dst, compared, applied, status="ok", items=None, error=""):
-    """Catat satu proses sinkronisasi (harga atau master data) untuk halaman Riwayat Sinkronisasi."""
+def _fk_profil(p):
+    """`p` kalau ia benar-benar `ServerProfile` yang sudah tersimpan, selain itu None."""
+    from apps.connections.models import ServerProfile
+
+    return p if isinstance(p, ServerProfile) and p.pk else None
+
+
+def log_sync(request, feature, mode, src, dst, compared, applied, status="ok", items=None,
+             error="", duration_ms=0, username=""):
+    """Catat satu proses latar untuk halaman Riwayat Operasi.
+
+    `request` boleh None: job terjadwal dan management command tidak punya satu,
+    dan `getattr(None, "user", None)` sudah mengembalikan None sejak dulu. Yang
+    kurang cuma cara memberi nama pelakunya — itulah `username`, yang diisi
+    "(terjadwal)" oleh scheduler dan "(cli)" oleh management command. Karena itu
+    TIDAK ada writer kedua untuk jalur tanpa request.
+
+    `src`/`dst` boleh objek apa pun yang punya `.name`, bukan harus
+    `ServerProfile` tersimpan. Nama tetap masuk (kolomnya memang sudah
+    didenormalisasi supaya baris bertahan sesudah profilnya dihapus); hanya
+    FK-nya yang dilepas. Alasannya bukan kenyamanan test: fungsi ini dipanggil
+    dari dalam job yang sedang berjalan, dan sebuah PENCATAT tidak boleh pernah
+    menjatuhkan pekerjaan yang dicatatnya.
+    """
     user = getattr(request, "user", None)
     SyncLog.objects.create(
         user=user if (user and user.is_authenticated) else None,
-        username=(user.username if (user and user.is_authenticated) else ""),
+        username=username or (user.username if (user and user.is_authenticated) else ""),
         feature=feature,
         mode=mode,
-        src_profile=src,
-        src_name=src.name if src else "",
-        dst_profile=dst,
-        dst_name=dst.name if dst else "",
+        src_profile=_fk_profil(src),
+        src_name=getattr(src, "name", "") if src else "",
+        dst_profile=_fk_profil(dst),
+        dst_name=getattr(dst, "name", "") if dst else "",
         compared_count=compared,
         applied_count=applied,
         status=status,
         detail=json.dumps(items or []),
         error_message=error,
+        duration_ms=duration_ms,
     )
 
 
@@ -314,7 +367,17 @@ class HargaSnapshotRun(models.Model):
     class Meta:
         ordering = ["-ran_at"]
         constraints = [
-            models.UniqueConstraint(fields=["profile", "run_date"], name="unique_harga_snapshot_run_per_day")
+            # `condition`, karena `profile` nullable (SET_NULL saat profilnya
+            # dihapus). SQLite menganggap dua NULL berbeda; SQL Server
+            # menganggapnya SAMA, jadi tanpa syarat ini run yatim milik dua
+            # profil berbeda di hari yang sama saling menabrak. Penulisnya
+            # (apps/core/scheduler.py) selalu mengisi `profile`, jadi indeks
+            # tersaring menutupi setiap baris yang benar-benar dibaca.
+            models.UniqueConstraint(
+                fields=["profile", "run_date"],
+                condition=models.Q(profile__isnull=False),
+                name="unique_harga_snapshot_run_per_day",
+            )
         ]
 
     def __str__(self) -> str:
@@ -338,7 +401,13 @@ class StokSnapshotRun(models.Model):
     class Meta:
         ordering = ["-ran_at"]
         constraints = [
-            models.UniqueConstraint(fields=["profile", "run_date"], name="unique_stok_snapshot_run_per_day")
+            # Sama seperti HargaSnapshotRun di atas: NULL yang dianggap sama
+            # oleh SQL Server.
+            models.UniqueConstraint(
+                fields=["profile", "run_date"],
+                condition=models.Q(profile__isnull=False),
+                name="unique_stok_snapshot_run_per_day",
+            )
         ]
 
     def __str__(self) -> str:
@@ -362,7 +431,12 @@ class StokSnapshotBaseRun(models.Model):
     class Meta:
         ordering = ["-ran_at"]
         constraints = [
-            models.UniqueConstraint(fields=["profile", "base_month"], name="unique_stok_snapshot_base_per_month")
+            # Sama seperti dua di atas.
+            models.UniqueConstraint(
+                fields=["profile", "base_month"],
+                condition=models.Q(profile__isnull=False),
+                name="unique_stok_snapshot_base_per_month",
+            )
         ]
 
     def __str__(self) -> str:
@@ -591,3 +665,180 @@ class InfoPerusahaan(models.Model):
 
     def __str__(self) -> str:
         return f"{self.profile_id}: {self.perusahaan or '(belum diisi)'}"
+
+
+class TransferArunika(models.Model):
+    """Satu kali jalan layar Transfer ke Arunika: legacy -> salinan lokal -> DB Arunika.
+
+    Tinggal di database pangkal, BUKAN `apps/bisnis/models.py`: model di sana
+    adalah skema Arunika sendiri dan ikut termigrasi ke setiap database Arunika
+    yang dibuat -- catatan jalan tak boleh ikut tersalin ke sana.
+
+    Pekerjaannya berjalan di thread latar (`apps/bisnis/transfer.py`), dan baris
+    ini satu-satunya tempat layar membaca progresnya. `langkah` diperbarui tiap
+    tabel/entitas selesai; halaman memuat ulang prop-nya selama status
+    `berjalan`.
+    """
+
+    BERJALAN, SELESAI, GAGAL, TERPUTUS = "berjalan", "selesai", "gagal", "terputus"
+    STATUS = [
+        (BERJALAN, "Berjalan"),
+        (SELESAI, "Selesai"),
+        (GAGAL, "Gagal"),
+        # Server berhenti (restart, deploy) saat thread masih bekerja. Hasilnya
+        # setengah jadi; profil & database-nya tetap ada dan boleh dihapus.
+        (TERPUTUS, "Terputus"),
+    ]
+
+    nama = models.CharField(max_length=100)
+    sumber = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="transfer_arunika_sumber",
+    )
+    sumber_nama = models.CharField(max_length=100, blank=True)
+    profil_legacy = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="transfer_arunika_legacy",
+    )
+    profil_arunika = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="transfer_arunika_tujuan",
+    )
+    dari = models.DateField()
+    sampai = models.DateField()
+    # Tutup buku terakhir server sumber saat transfer dimulai. Mesin stok
+    # berjangkar di tanggal ini dan menghitung maju/mundur darinya, jadi stok di
+    # profil legacy hasil transfer hanya benar kalau rentang `dari..sampai`
+    # mencakupnya. Terukur pada salinan PUSAT Januari 2025: stok 31 Des 2025
+    # nol beda, stok 31 Jan 2025 beda di 9.741 barang. NULL = sumber tak punya
+    # catatan tutup buku.
+    tutup_buku = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS, default=BERJALAN)
+    tahap = models.CharField(max_length=100, blank=True)
+    # [{tahap, nama, baris, detik, dilewati, alasan}], urut selesai.
+    langkah = models.JSONField(default=list, blank=True)
+    pesan_galat = models.TextField(blank=True)
+    total_baris = models.PositiveIntegerField(default=0)
+    total_dilewati = models.PositiveIntegerField(default=0)
+    dibuat_oleh = models.CharField(max_length=150, blank=True)
+    mulai_pada = models.DateTimeField(auto_now_add=True)
+    selesai_pada = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-mulai_pada"]
+
+    @property
+    def stok_benar(self):
+        """True/False: apakah stok di profil legacy-nya bisa dipercaya. None = tak diketahui."""
+        if self.tutup_buku is None:
+            return None
+        from django.utils import timezone
+
+        tgl = self.tutup_buku
+        tgl = timezone.localtime(tgl).date() if timezone.is_aware(tgl) else tgl.date()
+        return self.dari <= tgl <= self.sampai
+
+    def __str__(self) -> str:
+        return f"{self.nama} ({self.status})"
+
+
+class CadanganBerkas(models.Model):
+    """Inventaris berkas cadangan, beserta hasil verifikasinya.
+
+    Kenapa tabel dan bukan `os.listdir` pada folder cadangan — dua alasan, dan
+    keduanya sudah pasti terjadi di pemasangan ini:
+
+    1. **Berkas `.bak` AMPHOREUS ditulis DI MESIN SQL SERVER**, bukan di mesin
+       yang menjalankan aplikasi. Kalau SQL Server ada di mesin lain, folder itu
+       tidak terjangkau sama sekali dari sini, dan daftar berbasis `listdir`
+       akan berkata "tidak ada cadangan" untuk cadangan yang sebenarnya ada.
+    2. **Hasil verifikasi harus bertahan.** `RESTORE VERIFYONLY` pada berkas
+       ratusan MB lewat WAN butuh waktu; menjalankannya ulang tiap kali halaman
+       dibuka bukan pilihan.
+
+    `verifikasi_ok` sengaja nullable TIGA nilai. "Belum pernah diverifikasi"
+    bukan "gagal verifikasi", dan default `False` akan mengecat seluruh daftar
+    merah pada hari pertama — peringatan yang selalu menyala adalah peringatan
+    yang berhenti dibaca.
+    """
+
+    PANGKAL = "pangkal"
+    AMPHOREUS = "amphoreus"
+    JENIS = [(PANGKAL, "Basis data pangkal"), (AMPHOREUS, "Pusat AMPHOREUS")]
+
+    jenis = models.CharField(max_length=10, choices=JENIS)
+    profile = models.ForeignKey(
+        "connections.ServerProfile", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="cadangan",
+    )
+    nama_berkas = models.CharField(max_length=255)
+    # Sebagaimana dilihat MESIN PENULISNYA. Untuk AMPHOREUS itu path di mesin
+    # SQL Server, yang bisa sama sekali tak berarti di mesin ini.
+    path = models.CharField(max_length=500)
+    # 0 = tak terjangkau dari mesin ini, BUKAN "berkas kosong".
+    ukuran_byte = models.BigIntegerField(default=0)
+    # `default=timezone.now`, BUKAN `auto_now_add`: cadangan harian menimpa
+    # berkas bertanggal sama, dan barisnya diperbarui — bukan dibuat ulang.
+    # `auto_now_add` tidak bisa disetel saat UPDATE, jadi tanggalnya akan beku
+    # di kapan berkas itu pertama kali pernah ada, bukan kapan isinya ditulis.
+    dibuat_at = models.DateTimeField(default=timezone.now)
+    dibuat_oleh = models.CharField(max_length=150, blank=True)
+    verifikasi_at = models.DateTimeField(null=True, blank=True)
+    verifikasi_ok = models.BooleanField(null=True)
+    verifikasi_pesan = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["-dibuat_at"]
+        constraints = [
+            # Satu baris per berkas. Cadangan harian menimpa berkas bertanggal
+            # sama (VACUUM INTO menghapus dulu, BACKUP pakai WITH INIT), jadi
+            # baris keduanya akan menunjuk berkas yang sudah tidak ada isinya.
+            models.UniqueConstraint(fields=["jenis", "path"], name="unique_cadangan_path"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.jenis}: {self.nama_berkas}"
+
+
+class BayarNota(models.Model):
+    """Uang yang DITERIMA kasir untuk sebuah nota penjualan.
+
+    `t_penjualan` legacy tak punya kolom untuk ini (lihat `penjualan._HEADER`),
+    dan database itu milik bersama dengan aplikasi POS lama — menambah kolom di
+    sana bukan pilihan. Jadi angkanya tinggal di pangkal.
+
+    Ia disimpan, bukan dihitung ulang, karena TAK BISA diturunkan dari apa pun:
+    berapa lembar yang disodorkan pembeli adalah kejadian di meja kasir, bukan
+    fungsi dari total nota. Sekali tak dicatat, ia hilang selamanya — sebelum
+    ini ia cuma dioper lewat query string ke halaman cetak lalu lenyap, sehingga
+    cetak ulang lewat Cetak Faktur sengaja mengosongkan baris Bayar/Kembali.
+
+    `kembalian` TIDAK ikut disimpan. Ia `dibayar - total`, dan menghitungnya
+    dari total versi server itulah yang membuat angka di struk tak bisa dikarang
+    lewat URL.
+
+    `profile` ikut jadi kunci dan NOT NULL: `no_transaksi` bertabrakan antar
+    server — kode yang sama menunjuk nota yang lain di gudang dan di tiap toko.
+    Kolom profil yang boleh NULL sudah pernah menggigit di proyek ini, lihat
+    migrasi `0017_snapshot_unik_hanya_dengan_profil`.
+    """
+
+    profile = models.ForeignKey(
+        "connections.ServerProfile", on_delete=models.CASCADE, related_name="bayar_nota")
+    no_transaksi = models.CharField(max_length=30)
+    dibayar = models.DecimalField(max_digits=18, decimal_places=2)
+    # SET_NULL, bukan CASCADE: kasir yang keluar kerja tak boleh menghapus bukti
+    # uang yang pernah ia terima.
+    dibuat_oleh = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="bayar_nota")
+    dibuat_pada = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["profile", "no_transaksi"], name="unique_bayar_nota"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.no_transaksi}: {self.dibayar}"

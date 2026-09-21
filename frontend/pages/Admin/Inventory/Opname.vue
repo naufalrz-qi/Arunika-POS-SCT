@@ -19,9 +19,13 @@ const { form, apply, onPage, onSort, onPerPage, reset, exportHref } = useServerR
 
 const columns = [
   { key: "no_transaksi", label: "No. Opname" },
-  { key: "tanggal", label: "Tanggal", format: "date" },
+  { key: "tanggal", label: "Tanggal", format: "datetime" },
+  { key: "tanggal_server", label: "Tanggal Server", format: "datetime" },
   { key: "divisi", label: "Divisi" },
   { key: "barang", label: "Barang" },
+  { key: "satuan", label: "Satuan" },
+  { key: "petugas", label: "Petugas" },
+  { key: "keterangan", label: "Keterangan" },
   // Dulu "Qty Sistem"/"Qty Fisik" — keduanya menyesatkan: t_opname_stok tak
   // menyimpan saldo stok, hanya besar koreksi dan arahnya.
   { key: "koreksi_masuk", label: "Koreksi Masuk", align: "right", format: "number" },

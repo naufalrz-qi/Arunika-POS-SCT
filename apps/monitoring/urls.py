@@ -20,6 +20,11 @@ urlpatterns = [
     path("master/suppliers", views.suppliers_index, name="suppliers"),
     path("master/sync-history", views.sync_history_index, name="sync_history"),
     path("master/sync-health", views.sync_health_index, name="sync_health"),
+    path("master/sync-health/jalankan", views.sync_health_jalankan, name="sync_health_jalankan"),
+    path("pengaturan", views.pengaturan, name="pengaturan"),
+    path("pengaturan/cadangan", views.cadangan_index, name="cadangan"),
+    path("pengaturan/cadangan/jalankan", views.cadangan_jalankan, name="cadangan_jalankan"),
+    path("pengaturan/cadangan/verifikasi", views.cadangan_verifikasi, name="cadangan_verifikasi"),
     path("master/kelola-pelanggan", views.pelanggan, name="kelola_pelanggan"),
     path("master/kelola-pelanggan/save", views.pelanggan_save, name="kelola_pelanggan_save"),
     path("master/kelola-supplier", views.supplier, name="kelola_supplier"),
@@ -33,6 +38,12 @@ urlpatterns = [
          name="kelola_referensi_save"),
     path("master/kode-nota", views.kode_nota_index, name="kode_nota"),
     path("master/kode-nota/save", views.kode_nota_save, name="kode_nota_save"),
+    path("master/transfer-arunika", views.transfer_arunika_index, name="transfer_arunika"),
+    path("master/transfer-arunika/mulai", views.transfer_arunika_mulai, name="transfer_arunika_mulai"),
+    # Sub-path mewarisi `superadmin_only` milik `transfer_arunika` lewat
+    # pencocokan prefix di admin_network_guard — tak perlu entri menu sendiri.
+    path("master/transfer-arunika/<int:pk>", views.transfer_arunika_detail,
+         name="transfer_arunika_detail"),
     path("master-data/informasi-perusahaan", views.informasi_perusahaan, name="informasi_perusahaan"),
 
     # Alamat lama, dipertahankan SEMENTARA untuk masa peralihan. Halaman yang
@@ -89,6 +100,8 @@ urlpatterns = [
     path("laporan/penjualan-customer/export", views.penjualan_customer_export, name="penjualan_customer_export"),
     path("laporan/penjualan-user", views.penjualan_user, name="penjualan_user"),
     path("laporan/penjualan-user/export", views.penjualan_user_export, name="penjualan_user_export"),
+    path("laporan/rekap-kasir", views.rekap_kasir, name="rekap_kasir"),
+    path("laporan/rekap-kasir/export", views.rekap_kasir_export, name="rekap_kasir_export"),
     path("laporan/penjualan-periode", views.penjualan_periode, name="penjualan_periode"),
     path("laporan/penjualan-periode/export", views.penjualan_periode_export, name="penjualan_periode_export"),
     path("laporan/retur-penjualan", views.retur_penjualan, name="retur_penjualan"),
@@ -113,6 +126,8 @@ urlpatterns = [
     path("laporan/laba-rugi", views.laba_rugi, name="laba_rugi"),
     path("laporan/laba-rugi/export", views.laba_rugi_export, name="laba_rugi_export"),
     # Analitik (FMI)
+    path("analitik/nota-mundur", views.nota_mundur, name="nota_mundur"),
+    path("analitik/nota-mundur/export", views.nota_mundur_export, name="nota_mundur_export"),
     path("analitik/fmi-penjualan", views.fmi_penjualan, name="fmi_penjualan"),
     path("analitik/fmi-penjualan/export", views.fmi_penjualan_export, name="fmi_penjualan_export"),
     path("analitik/fmi-stok", views.fmi_stok, name="fmi_stok"),
