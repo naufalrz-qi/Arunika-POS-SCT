@@ -798,3 +798,47 @@ class CadanganBerkas(models.Model):
 
     def __str__(self) -> str:
         return f"{self.jenis}: {self.nama_berkas}"
+
+
+class BayarNota(models.Model):
+    """Uang yang DITERIMA kasir untuk sebuah nota penjualan.
+
+    `t_penjualan` legacy tak punya kolom untuk ini (lihat `penjualan._HEADER`),
+    dan database itu milik bersama dengan aplikasi POS lama — menambah kolom di
+    sana bukan pilihan. Jadi angkanya tinggal di pangkal.
+
+    Ia disimpan, bukan dihitung ulang, karena TAK BISA diturunkan dari apa pun:
+    berapa lembar yang disodorkan pembeli adalah kejadian di meja kasir, bukan
+    fungsi dari total nota. Sekali tak dicatat, ia hilang selamanya — sebelum
+    ini ia cuma dioper lewat query string ke halaman cetak lalu lenyap, sehingga
+    cetak ulang lewat Cetak Faktur sengaja mengosongkan baris Bayar/Kembali.
+
+    `kembalian` TIDAK ikut disimpan. Ia `dibayar - total`, dan menghitungnya
+    dari total versi server itulah yang membuat angka di struk tak bisa dikarang
+    lewat URL.
+
+    `profile` ikut jadi kunci dan NOT NULL: `no_transaksi` bertabrakan antar
+    server — kode yang sama menunjuk nota yang lain di gudang dan di tiap toko.
+    Kolom profil yang boleh NULL sudah pernah menggigit di proyek ini, lihat
+    migrasi `0017_snapshot_unik_hanya_dengan_profil`.
+    """
+
+    profile = models.ForeignKey(
+        "connections.ServerProfile", on_delete=models.CASCADE, related_name="bayar_nota")
+    no_transaksi = models.CharField(max_length=30)
+    dibayar = models.DecimalField(max_digits=18, decimal_places=2)
+    # SET_NULL, bukan CASCADE: kasir yang keluar kerja tak boleh menghapus bukti
+    # uang yang pernah ia terima.
+    dibuat_oleh = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="bayar_nota")
+    dibuat_pada = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["profile", "no_transaksi"], name="unique_bayar_nota"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.no_transaksi}: {self.dibayar}"

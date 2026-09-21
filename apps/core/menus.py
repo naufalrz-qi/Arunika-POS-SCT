@@ -72,7 +72,10 @@ ALL_MENUS = [
     # penjualan yang tabelnya tanpa trigger sama sekali.
     {"key": "kasir_pembelian_order", "label": "Order Pembelian", "icon": "list", "href": "/kasir/pembelian-order", "section": "pos_beli", "roles": ("supervisor",), "butuh_tautan": True},
     {"key": "kasir_retur_pembelian", "label": "Retur Pembelian", "icon": "refund", "href": "/kasir/pembelian-retur", "section": "pos_beli", "roles": ("supervisor",), "butuh_tautan": True},
-    {"key": "dashboard", "label": "Dashboard", "icon": "dashboard", "href": "/admin-panel/dashboard", "section": "ringkasan"},
+    # Supervisor dapat bawaan: KPI-nya memang se-toko, dan mengawasi toko itu
+    # pekerjaannya. Kartu Aktivitas di dalamnya tetap baris sendiri saja
+    # (`log_untuk`), dan kolom uang tetap tunduk pada `hidden_data_keys`.
+    {"key": "dashboard", "label": "Dashboard", "icon": "dashboard", "href": "/admin-panel/dashboard", "section": "ringkasan", "roles": ("supervisor",)},
     # "always": tak bisa dicabut lewat Kelola Menu. Bantuan yang bisa hilang dari
     # sidebar justru menghilang tepat saat pengguna paling butuh.
     {"key": "bantuan", "label": "Bantuan & Istilah", "icon": "help", "href": "/admin-panel/bantuan", "section": "ringkasan", "always": True},
@@ -84,6 +87,10 @@ ALL_MENUS = [
     {"key": "penjualan_nota", "label": "Penjualan per Nota", "icon": "list", "href": "/admin-panel/laporan/penjualan-nota", "section": "penjualan", "roles": ("kasir", "supervisor")},
     {"key": "penjualan_customer", "label": "Penjualan per Customer", "icon": "user", "href": "/admin-panel/laporan/penjualan-customer", "section": "penjualan"},
     {"key": "penjualan_user", "label": "Penjualan per User", "icon": "users", "href": "/admin-panel/laporan/penjualan-user", "section": "penjualan"},
+    # Agregat per kasir. Ke supervisor secara bawaan: ia yang mengawasi laci,
+    # dan Penjualan per User di atasnya per-NOTA — menjawab pertanyaan yang sama
+    # di sana berarti menjumlahkan ratusan baris dengan mata.
+    {"key": "rekap_kasir", "label": "Rekap Kasir", "icon": "users", "href": "/admin-panel/laporan/rekap-kasir", "section": "penjualan", "roles": ("supervisor",)},
     {"key": "penjualan_periode", "label": "Penjualan per Periode", "icon": "calendar", "href": "/admin-panel/laporan/penjualan-periode", "section": "penjualan"},
     {"key": "retur_penjualan", "label": "Retur Penjualan", "icon": "refund", "href": "/admin-panel/laporan/retur-penjualan", "section": "penjualan", "roles": ("supervisor",)},
     {"key": "piutang", "label": "Piutang Pelanggan", "icon": "cash", "href": "/admin-panel/laporan/piutang", "section": "penjualan"},

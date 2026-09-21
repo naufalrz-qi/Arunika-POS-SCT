@@ -31,6 +31,8 @@ BOCOR_DULU = {
     "/admin-panel/laporan/penjualan-nota": ("total_kotor", "potongan", "total_bersih"),
     "/admin-panel/laporan/penjualan-customer": ("total",),
     "/admin-panel/laporan/penjualan-user": ("nominal",),
+    "/admin-panel/laporan/rekap-kasir": ("total_kotor", "total", "total_tunai",
+                                         "total_kredit", "rata_nota"),
     "/admin-panel/laporan/penjualan-periode": ("total_kotor", "total"),
     "/admin-panel/laporan/pembelian-supplier": ("total",),
     "/admin-panel/laporan/pembelian-periode": ("total_kotor", "total"),

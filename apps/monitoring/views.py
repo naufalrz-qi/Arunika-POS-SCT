@@ -109,6 +109,9 @@ _UANG_LAPORAN = {
     "potongan", "voucher", "total_setelah_voucher", "pajak", "pajak2",
     # Voucher
     "nilai_dipakai", "total_nominal", "total_nilai_dipakai",
+    # Rekap Kasir — dan panel "Rekap Saya" di layar kasir, yang sengaja memakai
+    # nama kolom yang sama persis supaya satu pendaftaran menutup keduanya.
+    "total_tunai", "total_kredit",
     # harga satuan yang namanya tak menyebut sisi mana — lihat catatan di atas
     "harga",
     # Kolom diskon per baris & per nota. Nilainya dual-mode (persen ATAU rupiah
@@ -2610,6 +2613,42 @@ _PENJUALAN_USER = {
 }
 penjualan_user = _report_view(_PENJUALAN_USER)
 penjualan_user_export = _report_export(_PENJUALAN_USER)
+
+# Agregat per kasir — pertanyaan "siapa menjual berapa", yang di Penjualan per
+# User cuma bisa dijawab dengan menjumlahkan ratusan baris sendiri.
+#
+# Tanpa `enable_recent`: "100 terbaru" tak punya arti pada agregat — ia akan
+# memulangkan 100 kasir dari rentang tanggal yang tak disebut siapa pun. Clamp
+# 92 hari sengaja dibiarkan: ini pertanyaan tentang satu periode, bukan riwayat.
+#
+# Belum punya `inner_arunika`. Kembarannya tinggal mengikuti
+# `penjualan_user_arunika`, tapi aturan rumah ini menuntut verifikasi baris demi
+# baris di KEDUA profil lebih dulu, dan itu bagian terbesar pekerjaannya.
+_REKAP_KASIR = {
+    "component": "Admin/Reports/RekapKasir",
+    "url": "/admin-panel/laporan/rekap-kasir",
+    "inner": rpt.rekap_kasir,
+    "sorts": rpt.SORTS_REKAP_KASIR,
+    "default_sort": "total",
+    "summary": rpt.SUMMARY_REKAP_KASIR,
+    "filter_keys": ["kd_divisi"],
+    "filters": rpt.FILTERS_REKAP_KASIR,
+    "options": lambda p: {"divisi": _opt_divisi(p)},
+    "filename": "rekap-kasir",
+    "columns": [
+        {"key": "kasir", "label": "Kasir"},
+        {"key": "kd_user", "label": "Kode User"},
+        {"key": "jml_nota", "label": "Jml Nota", "align": "right", "format": "number"},
+        {"key": "total_kotor", "label": "Total Kotor", "align": "right", "format": "rupiah"},
+        {"key": "total_diskon", "label": "Total Diskon", "align": "right", "format": "rupiah"},
+        {"key": "total", "label": "Total Bersih", "align": "right", "format": "rupiah"},
+        {"key": "total_tunai", "label": "Tunai", "align": "right", "format": "rupiah"},
+        {"key": "total_kredit", "label": "Kredit", "align": "right", "format": "rupiah"},
+        {"key": "rata_nota", "label": "Rata per Nota", "align": "right", "format": "rupiah"},
+    ],
+}
+rekap_kasir = _report_view(_REKAP_KASIR)
+rekap_kasir_export = _report_export(_REKAP_KASIR)
 
 _PENJUALAN_PERIODE = {
     "component": "Admin/Reports/PenjualanPeriode",

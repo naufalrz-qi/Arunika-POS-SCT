@@ -144,17 +144,23 @@ const kotakEntri = ref(null);
 const wadahTabel = ref(null);
 const fokusEntri = () => nextTick(() => kotakEntri.value?.focus?.());
 
+// `urut` menjaga hasil yang datang tak berurutan tidak menimpa yang terbaru.
+// Bukan kosmetik: `masukkan()` langkah 4 mengambil `hasil.value[0]` sebagai
+// cadangan terakhir, jadi daftar basi berarti BARANG LAIN masuk keranjang.
 let timer = null;
+let urut = 0;
 watch(entri, (q) => {
   clearTimeout(timer);
   sorot.value = 0;
   digeser.value = false;
+  const milikku = ++urut;
   if (!q.trim()) {
     hasil.value = [];
     return;
   }
   timer = setTimeout(async () => {
     const { data } = await axios.get(`${props.base}/cari-barang`, { params: { cari: q } });
+    if (milikku !== urut) return;   // sudah ada ketukan yang lebih baru
     hasil.value = data.rows || [];
   }, 250);
 });
@@ -237,15 +243,18 @@ const cariCustomer = ref("");
 const hasilCustomer = ref([]);
 const sorotCust = ref(0);
 let timerCust = null;
+let urutCust = 0;
 watch(cariCustomer, (q) => {
   clearTimeout(timerCust);
   sorotCust.value = 0;
+  const milikku = ++urutCust;
   if (!q.trim()) {
     hasilCustomer.value = [];
     return;
   }
   timerCust = setTimeout(async () => {
     const { data } = await axios.get(`${props.base}/cari-customer`, { params: { cari: q } });
+    if (milikku !== urutCust) return;   // lihat catatan di kotak cari barang
     hasilCustomer.value = data.rows || [];
   }, 250);
 });
@@ -309,6 +318,9 @@ const lewatLimit = computed(() => {
 watch(() => tab.value.kd_customer, (kd) => { muatInfoCustomer(kd); }, { immediate: true });
 
 const histori = ref([]);
+// Rekap HARI INI milik akun ini — yang ditanyakan kasir saat menutup laci.
+// Datang bersama histori dalam satu respons, bukan endpoint sendiri.
+const rekapSaya = ref(null);
 const historiMuat = ref(false);
 const historiGalat = ref("");
 let historiPernahDimuat = false;
@@ -320,7 +332,10 @@ async function muatHistoriSaya() {
   try {
     const { data } = await axios.get(`${props.base}/histori-user`);
     if (data.error) historiGalat.value = data.error;
-    else histori.value = data.rows || [];
+    else {
+      histori.value = data.rows || [];
+      rekapSaya.value = data.rekap || null;
+    }
   } catch {
     historiGalat.value = "Histori tak bisa diambil.";
   } finally {
@@ -438,12 +453,10 @@ const menyimpan = ref(false);
 // nota milik orang lain.
 const notaTerakhir = ref(props.nota_terakhir || "");
 watch(() => props.nota_terakhir, (v) => { if (v) notaTerakhir.value = v; });
-// Uang yang diterima, ditahan di sini karena `t_penjualan` tak punya kolomnya
-// dan `tutupTab()` menghapus keranjangnya begitu simpan berhasil — saat Cetak
-// ditekan, `tab.value.bayar` sudah tidak ada. Sengaja TIDAK dipulihkan dari
-// props: setelah halaman dimuat ulang, nomor nota masih ada tapi uangnya tidak,
-// dan struk tanpa baris Bayar lebih benar daripada struk dengan angka tebakan.
-const bayarTerakhir = ref(0);
+// Uang yang diterima dikirim bersama notanya dan dicatat di pangkal
+// (`core.models.BayarNota`), karena `t_penjualan` tak punya kolomnya. Halaman
+// cetak membacanya dari sana, jadi ia tak lagi perlu dioper lewat query string
+// — dan cetak ulang lewat Cetak Faktur akhirnya membawa angka yang sama.
 // Syaratnya kd_user + kd_divisi, TANPA kd_pegawai — sama persis dengan
 // tautan_wajib() di server. Dulu di sini kd_pegawai ikut wajib, jadi akun yang
 // bertautan lengkap tapi tak dipasangi pegawai melihat tombol Simpan mati
@@ -459,11 +472,13 @@ function simpan() {
   const jam = new Date();
   const hh = (n) => String(n).padStart(2, "0");
   menyimpan.value = true;
-  bayarTerakhir.value = angka(t.bayar);
   router.post(`${props.base}/save`, {
     kd_customer: t.kd_customer, kd_jenis: t.kd_jenis, kd_kas: t.kd_kas,
     kd_voucher: t.kd_voucher, kd_pegawai: props.kd_pegawai,
     keterangan: t.keterangan, no_order: t.no_order,
+    // Layar order tak punya isian ini; di sana `bayar` tetap 0 dan server
+    // memang tak mencatat apa pun untuk nol.
+    bayar: angka(t.bayar),
     // Jam PC kasir, bukan jam server — tanggal_server diisi database sendiri.
     tanggal: `${t.tanggal}T${hh(jam.getHours())}:${hh(jam.getMinutes())}:${hh(jam.getSeconds())}`,
     jatuh_tempo: t.jatuh_tempo,
@@ -480,6 +495,13 @@ function simpan() {
     preserveScroll: true,
     onSuccess: () => {
       tutupTab();              // keranjang selesai → tabnya ditutup
+      // Nota barusan mengubah rekap hari ini. Tanpa ini angkanya beku di
+      // keadaan saat tab Nota Saya pertama dibuka — rekap yang salah lebih
+      // buruk daripada rekap yang belum dimuat. Kalau tabnya sedang TERBUKA,
+      // ia dijemput sekarang juga: membuka-tutup tab bukan syarat yang masuk
+      // akal untuk melihat angka yang benar.
+      historiPernahDimuat = false;
+      if (infoTab.value === "nota_saya") muatHistoriSaya();
     },
     onFinish: () => {
       menyimpan.value = false;
@@ -488,10 +510,8 @@ function simpan() {
   });
 }
 function cetak() {
-  if (notaTerakhir.value && !order.value) {
-    const q = bayarTerakhir.value > 0 ? `?bayar=${bayarTerakhir.value}` : "";
-    window.open(`/kasir/penjualan/${notaTerakhir.value}/cetak${q}`, "_blank");
-  }
+  if (notaTerakhir.value && !order.value)
+    window.open(`/kasir/penjualan/${notaTerakhir.value}/cetak`, "_blank");
 }
 
 // --- Papan ketik ------------------------------------------------------------
@@ -852,6 +872,25 @@ const KELAS_PILIH =
                    saat tabnya pertama dibuka: satu perjalanan WAN yang tak boleh
                    terjadi tiap kali layar dimuat. -->
               <template v-else-if="infoTab === 'nota_saya'">
+                <!-- Rekap hari ini di paling atas: itu yang ditanyakan saat
+                     menutup laci, sedangkan daftar di bawahnya riwayat.
+                     `!== undefined` menjaga akun yang izin uangnya dicabut —
+                     server membuang kuncinya, dan `jml_nota` tetap ada karena
+                     hitungan nota bukan uang. -->
+                <div
+                  v-if="rekapSaya && !historiMuat"
+                  class="mb-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-border-default pb-1.5"
+                >
+                  <span class="text-ink-subtle">Hari ini:</span>
+                  <strong class="tabular-nums text-ink">{{ rekapSaya.jml_nota }} nota</strong>
+                  <strong v-if="rekapSaya.total !== undefined" class="tabular-nums text-ink">
+                    {{ formatRupiah(rekapSaya.total) }}
+                  </strong>
+                  <span v-if="rekapSaya.total_tunai !== undefined" class="text-ink-subtle">
+                    tunai {{ formatRupiah(rekapSaya.total_tunai) }} ·
+                    kredit {{ formatRupiah(rekapSaya.total_kredit) }}
+                  </span>
+                </div>
                 <p v-if="historiMuat" class="text-ink-subtle">Mengambil…</p>
                 <p v-else-if="historiGalat" class="text-danger-fg">{{ historiGalat }}</p>
                 <p v-else-if="!histori.length" class="text-ink-subtle">

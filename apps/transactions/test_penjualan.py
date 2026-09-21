@@ -124,6 +124,12 @@ class NotaPalsu:
         self.sql = []
         self.connection = self
 
+    def setinputsizes(self, v):
+        # Cursor pyodbc sungguhan punya ini, dan `mssql.execute_varchar`
+        # memanggilnya untuk mengikat kolom kunci varchar. Palsu yang tak
+        # punya berarti palsunya yang salah, bukan pemanggilnya.
+        pass
+
     def execute(self, sql, params=None):
         self.sql.append(" ".join(sql.split()))
         self._hasil = self._jawab.pop(0)
@@ -232,11 +238,36 @@ class BacaNotaTests(SimpleTestCase):
         self.assertEqual(nota["keterangan"], "")
         self.assertEqual(nota["no_bukti"], "")
 
-    def test_bayar_tak_pernah_datang_dari_baca_nota(self):
-        """t_penjualan tak punya kolomnya; nilainya dioper dari layar kasir."""
+    def test_bayar_tak_pernah_datang_dari_baris_legacy(self):
+        """`t_penjualan` tak punya kolomnya, jadi tanpa catatan di pangkal
+        jawabannya None — bukan nol.
+
+        Struk memang harus kosong di situ: `NotaCetak.vue` menjaganya dengan
+        `n.bayar != null`, dan "Kembali: 0" pada nota yang uangnya tak pernah
+        dicatat adalah angka yang salah, bukan angka yang belum ada.
+        """
         nota, _ = _baca(self.HEADER, self.DETAIL)
-        self.assertNotIn("bayar", nota)
-        self.assertNotIn("kembali", nota)
+        self.assertIsNone(nota["bayar"])
+        self.assertIsNone(nota["kembali"])
+
+    def test_kembali_diturunkan_dari_total_versi_server(self):
+        """Yang disimpan cuma `dibayar`; kembaliannya DIHITUNG di sini.
+
+        Itu yang membuat angka di struk tak bisa dikarang: tak ada jalan
+        mengirim "kembali" dari luar, dan pengurangnya selalu total yang baru
+        saja dibaca server — bukan total versi layar.
+        """
+        with patch.object(pj, "_bayar_tercatat", return_value=600_000.0):
+            nota, _ = _baca(self.HEADER, self.DETAIL)
+        self.assertAlmostEqual(nota["bayar"], 600_000.0)
+        self.assertAlmostEqual(nota["kembali"], 600_000.0 - nota["total"])
+
+    def test_bayar_kurang_dari_total_tak_pernah_kembali_negatif(self):
+        """Bayar sebagian (nota kredit yang dicicil di muka) bukan kembalian
+        minus — itu akan tercetak sebagai "Kembali: -139.500"."""
+        with patch.object(pj, "_bayar_tercatat", return_value=400_000.0):
+            nota, _ = _baca(self.HEADER, self.DETAIL)
+        self.assertEqual(nota["kembali"], 0.0)
 
     def test_no_transaksi_kosong_tak_menyentuh_server(self):
         self.assertIsNone(pj.baca_nota(object(), "   "))

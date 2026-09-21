@@ -462,6 +462,70 @@ def penjualan_user(f):
     return inner, params
 
 
+# --- Rekap Kasir (agregat per kd_user) --
+
+# Kembaran agregat dari `penjualan_user`, yang grain-nya sengaja per NOTA supaya
+# cocok dengan view legacy `mon_t_penjualan_per_user`. Pertanyaan supervisor
+# "siapa menjual berapa hari ini" tak bisa dijawab dari sana tanpa menjumlahkan
+# ratusan baris sendiri — jadi spec terpisah, bukan mengubah grain di sana.
+#
+# Rumus uangnya `_nota_net()` yang sama; tak satu pun angka rupiah disusun ulang
+# di sini. `total_diskon` diturunkan aljabar persis seperti `penjualan_periode`.
+#
+# Pemecahan tunai/kredit memakai `status_raw` yang SUDAH dipulangkan `_nota_net`,
+# jadi ongkosnya nol — tanpa join dan tanpa kolom tambahan. Labelnya bukan
+# karangan: `STATUS_PENJUALAN_CASE` menamainya 0 Kredit / 1 Tunai / 2 Lunas.
+# `Lunas` masuk kolom KREDIT — ia nota kredit yang sudah dibayar, bukan
+# penjualan tunai; menaruhnya di tunai membuat setoran laci tak pernah cocok.
+SORTS_REKAP_KASIR = {
+    "kasir": "kasir", "kd_user": "kd_user", "jml_nota": "jml_nota",
+    "total_kotor": "total_kotor", "total_diskon": "total_diskon",
+    "total": "total", "total_tunai": "total_tunai",
+    "total_kredit": "total_kredit", "rata_nota": "rata_nota",
+}
+SUMMARY_REKAP_KASIR = (
+    "COUNT(*) AS jml_kasir, COALESCE(SUM(q.jml_nota), 0) AS total_nota, "
+    "COALESCE(SUM(q.total), 0) AS total_nilai"
+)
+FILTERS_REKAP_KASIR = {
+    "kasir": ("kasir", "text"),
+    "jml_nota": ("jml_nota", "number_range"),
+    "total": ("total", "number_range"),
+}
+
+def rekap_kasir(f):
+    # Penyaring tanggal/divisi didorong ke DALAM `_nota_net` — di situlah
+    # IX_tpenjualan_user_tanggal (kd_user, tanggal) bisa jadi seek. Pencarian
+    # nama kasir TIDAK boleh ikut: `u.nama` baru ada sesudah LEFT JOIN di luar,
+    # dan menanamkannya memberi "multi-part identifier could not be bound" —
+    # jebakan yang sama persis dengan `penjualan_customer` di atas.
+    where, params = _base_where(f)
+    nota_sql = _nota_net(" AND ".join(where))
+    where_outer, params_outer = [], []
+    if f["search"]:
+        where_outer.append("(u.nama LIKE ? OR n.kd_user LIKE ?)")
+        params_outer.extend([f"%{f['search']}%"] * 2)
+    inner = (
+        # COALESCE(u.nama, RTRIM(kd_user)): kd_user tanpa baris m_userx tetap
+        # harus muncul — alasan yang sama dengan `penjualan_user`.
+        "SELECT n.kd_user, COALESCE(u.nama, RTRIM(n.kd_user)) AS kasir, "
+        "COUNT(n.no_transaksi) AS jml_nota, "
+        "COALESCE(SUM(n.total_kotor), 0) AS total_kotor, "
+        "COALESCE(SUM(n.total_kotor) - SUM(n.total_bersih) + SUM(n.pajak), 0) AS total_diskon, "
+        "COALESCE(SUM(n.total_bersih), 0) AS total, "
+        "COALESCE(SUM(CASE WHEN n.status_raw = 1 THEN n.total_bersih ELSE 0 END), 0) AS total_tunai, "
+        "COALESCE(SUM(CASE WHEN n.status_raw <> 1 THEN n.total_bersih ELSE 0 END), 0) AS total_kredit, "
+        # NULLIF: kd_user yang lolos filter selalu punya >= 1 nota, tapi
+        # pembagian nol di T-SQL menggagalkan SELURUH query, bukan satu baris.
+        "COALESCE(SUM(n.total_bersih) / NULLIF(COUNT(n.no_transaksi), 0), 0) AS rata_nota "
+        f"FROM ({nota_sql}) n "
+        "LEFT JOIN m_userx u ON n.kd_user = u.kd_user "
+        + (f"WHERE {' AND '.join(where_outer)} " if where_outer else "")
+        + "GROUP BY n.kd_user, u.nama"
+    )
+    return inner, params + params_outer
+
+
 # --- Penjualan per Periode (B11) --
 
 SORTS_PENJUALAN_PERIODE = {"periode": "periode", "total": "total"}

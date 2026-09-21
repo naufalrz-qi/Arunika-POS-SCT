@@ -1246,6 +1246,29 @@ menjawabnya. Dua hal yang perlu diluruskan:
 Peta yang dibaca manusia sekarang tinggal di `KESIAPAN-FITUR.md` § "Kembaran Arunika
 per laporan", dan dijaga test supaya tidak ikut basi seperti tabel di atas.
 
+#### Catatan, 2026-09-21: sumber `penjualan.dibayar` akhirnya ada
+
+`dibayar` sudah berdiri di §5.E sejak awal dan tetap kosong sepanjang itu, karena
+legacy tak punya sumbernya: `t_penjualan` tak punya kolom uang-diterima, jadi
+`adapter.badan_penjualan` tak bisa memulangkan apa pun untuknya, dan `muat._rencana`
+— yang digerakkan kolom VIEW, bukan field model — memang tak pernah menulisnya.
+
+Sekarang sumbernya ada: layar kasir mencatat uang yang diterima ke
+`apps.core.models.BayarNota` di pangkal (kunci `profile` + `no_transaksi`, karena
+nomor nota bertabrakan antar server). Yang **belum** dikerjakan, dan disengaja:
+
+- `dibayar` **tidak** ditambahkan ke `master_src._MASTER["penjualan"]["kolom"]`.
+  Menambahkannya memaksa badan `legacy` mengisi konstanta — nol atau NULL untuk
+  setiap baris — dan itu persis kategori "angka yang terlihat benar dan tidak benar"
+  yang membuat Nota Tanggal Mundur ditolak di atas. Nol di kolom uang-diterima tak
+  bisa dibedakan dari "memang dibayar nol".
+- `kembalian` tidak ditambahkan sama sekali. Ia `dibayar - total`, dan menurunkannya
+  dari total versi server itulah yang membuat angkanya tak bisa dikarang dari luar.
+
+Yang tersisa saat jalur tulis Arunika benar-benar dibangun (§8.4 butir 3-4 masih
+terbuka): isi `Penjualan.dibayar` dari `BayarNota` di jalur tulis itu, bukan lewat
+adapter — adapter membaca legacy, dan angka ini tak pernah ada di sana.
+
 ## 8. Yang harus diverifikasi sebelum rancangan ini dibekukan
 
 1. ~~Ulangi hitungan baris §2 terhadap GUDANG produksi.~~ **Selesai — §8.1.**

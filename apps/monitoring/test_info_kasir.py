@@ -19,11 +19,14 @@ yang gagal tanpa suara:
 import json
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import RequestFactory, TestCase
 
 from apps.auth_app.models import Role, TautanUser, User
 from apps.connections.models import ServerProfile
 from apps.core.menus import menu_key_for_path
+from apps.core.models import BayarNota
+from apps.monitoring import views_kasir as vk
+from apps.transactions import penjualan as pj
 
 PROFIL = {"kd_customer": "CAA111", "nama": "TOKO MAJU", "alamat": "Jl. Mawar",
           "hp": "0812", "telepon": "", "point": 12.0, "limit_kredit": 5_000_000.0,
@@ -33,12 +36,36 @@ PIUTANG = [{"no_transaksi": "SC0001", "tanggal": "2026-01-02", "jatuh_tempo": "2
             "sisa_piutang": 800_000.0, "hari_terlambat": 12}]
 HISTORI = [{"no_transaksi": "SC0009", "tanggal": "2026-08-01 10:00", "status": "Tunai",
             "nominal": 250_000.0, "customer": "TOKO MAJU"}]
+REKAP = {"jml_nota": 7, "total": 3_500_000.0,
+         "total_tunai": 3_000_000.0, "total_kredit": 500_000.0}
 
 
 def _profil_server():
     return ServerProfile.objects.create(
         name="TOKO A", host="h", db_name="SOLID_SIM", username="sa",
         password_encrypted="x", is_default=True)
+
+
+class Penghitung:
+    """Pengganti `mssql.cursor` yang menghitung berapa kali ia dimasuki.
+
+    MS SQL tak disentuh: yang diuji berapa banyak sambungan dibuka, bukan apa
+    yang dibacanya. Kursornya sendiri tak pernah dipakai karena ketiga fungsi
+    layanan di-patch.
+    """
+
+    def __init__(self):
+        self.dibuka = 0
+
+    def __call__(self, *a, **k):
+        self.dibuka += 1
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
 
 
 class InfoCustomerTests(TestCase):
@@ -52,12 +79,19 @@ class InfoCustomerTests(TestCase):
         self.client.force_login(self.spv)
 
     def _get(self, url, **params):
-        with patch("apps.transactions.penjualan.info_customer", return_value=dict(PROFIL)), \
+        d, _ = self._get_hitung(url, **params)
+        return d
+
+    def _get_hitung(self, url, **params):
+        """Seperti `_get`, tapi ikut memulangkan berapa kali kursor dibuka."""
+        hitung = Penghitung()
+        with patch("apps.monitoring.views_kasir.mssql.cursor", hitung), \
+             patch("apps.transactions.penjualan.info_customer", return_value=dict(PROFIL)), \
              patch("apps.transactions.penjualan.piutang_customer",
                    return_value=[dict(r) for r in PIUTANG]), \
              patch("apps.transactions.penjualan.histori_nota",
                    return_value=[dict(r) for r in HISTORI]):
-            return json.loads(self.client.get(url, params).content)
+            return json.loads(self.client.get(url, params).content), hitung
 
     def test_satu_round_trip_membawa_ketiganya(self):
         """Tiga endpoint terpisah = tiga perjalanan WAN untuk satu klik."""
@@ -65,6 +99,19 @@ class InfoCustomerTests(TestCase):
         self.assertEqual(d["profil"]["nama"], "TOKO MAJU")
         self.assertEqual(len(d["piutang"]), 1)
         self.assertEqual(len(d["histori"]), 1)
+
+    def test_satu_koneksi_untuk_ketiganya(self):
+        """Satu HTTP tak ada gunanya kalau di dalamnya tetap tiga handshake ODBC.
+
+        Dulu `info_customer`, `piutang_customer`, dan `histori_nota`
+        masing-masing membuka `mssql.cursor` sendiri, jadi satu klik pelanggan
+        = tiga sambungan. Di profil jauh sambungannya yang mahal, bukan
+        querynya.
+        """
+        _, hitung = self._get_hitung(
+            "/kasir/penjualan/info-customer", kd_customer="CAA111")
+        self.assertEqual(hitung.dibuka, 1,
+                         f"kursor dibuka {hitung.dibuka}x, seharusnya sekali")
 
     def test_pelanggan_umum_tidak_dijemput(self):
         """CAA000 bawaan hampir tiap nota tunai; menjemputnya = perjalanan
@@ -105,20 +152,46 @@ class HistoriUserTests(TestCase):
             user=self.spv, profile=self.server, kd_user="UAA002", kd_divisi="DAA000")
         self.client.force_login(self.spv)
 
+    def _get(self, **params):
+        with patch("apps.monitoring.views_kasir.mssql.cursor", Penghitung()), \
+             patch("apps.transactions.penjualan.histori_nota",
+                   return_value=[dict(r) for r in HISTORI]) as m, \
+             patch("apps.transactions.penjualan.rekap_hari_ini",
+                   return_value=dict(REKAP)) as r:
+            resp = self.client.get("/kasir/penjualan/histori-user", params)
+        return json.loads(resp.content), m, r
+
     def test_kd_user_diambil_dari_tautan_bukan_dari_url(self):
-        with patch("apps.transactions.penjualan.histori_nota",
-                   return_value=[dict(r) for r in HISTORI]) as m:
-            self.client.get("/kasir/penjualan/histori-user", {"kd_user": "UAA999"})
+        _, m, r = self._get(kd_user="UAA999")
         self.assertEqual(m.call_args.kwargs["kd_user"], "UAA002")
+        # Rekapnya UANG, jadi aturan yang sama berlaku — bahkan lebih keras.
+        self.assertEqual(r.call_args.args[1], "UAA002")
 
     def test_kolom_uang_dicabut_di_server(self):
         self.spv.hidden_data_keys = ["nominal"]
         self.spv.save()
-        with patch("apps.transactions.penjualan.histori_nota",
-                   return_value=[dict(r) for r in HISTORI]):
-            d = json.loads(self.client.get("/kasir/penjualan/histori-user").content)
+        d, _, _ = self._get()
         self.assertNotIn("nominal", d["rows"][0])
         self.assertIn("no_transaksi", d["rows"][0])
+
+    def test_rekap_hari_ini_ikut_terkirim(self):
+        """Ia menumpang endpoint ini, bukan rute sendiri: rute baru harus
+        didaftarkan ulang di bawah tiap prefix layar, dan path yang tak cocok
+        menu mana pun dianggap BEBAS oleh middleware."""
+        d, _, _ = self._get()
+        self.assertEqual(d["rekap"]["jml_nota"], 7)
+        self.assertEqual(d["rekap"]["total"], 3_500_000.0)
+
+    def test_rekap_uangnya_dicabut_tapi_jumlah_notanya_tidak(self):
+        """`rekap` dict tunggal — bukan baris tabel — jadi ia gampang terlewat
+        dari penyaringan, persis seperti `limit_kredit` di panel member.
+        Hitungan nota bukan uang dan tetap tinggal."""
+        self.spv.hidden_data_keys = ["nominal"]
+        self.spv.save()
+        d, _, _ = self._get()
+        for k in ("total", "total_tunai", "total_kredit"):
+            self.assertNotIn(k, d["rekap"], f"{k} lolos ke peramban")
+        self.assertEqual(d["rekap"]["jml_nota"], 7)
 
 
 class SqlBentukTests(TestCase):
@@ -137,6 +210,10 @@ class SqlBentukTests(TestCase):
 
         cur = MagicMock()
         cur.fetchall.return_value = []
+        # None, bukan MagicMock: pembangun yang memakai fetchone() memeriksa
+        # baris kosong, dan MagicMock selalu truthy sehingga ia akan mencoba
+        # meng-int-kan mock alih-alih memulangkan nilai nolnya.
+        cur.fetchone.return_value = None
         ctx = MagicMock()
         ctx.__enter__.return_value = cur
         with patch("core.mssql.cursor", return_value=ctx):
@@ -163,6 +240,43 @@ class SqlBentukTests(TestCase):
         # Didorong ke DALAM _nota_net supaya index (kd_user, tanggal) dipakai
         # untuk MENYARING, bukan memindai lalu membuang.
         self.assertIn("h.kd_user = ?", sql.split(") n ")[0])
+
+    def test_rekap_hari_ini_seimbang(self):
+        import datetime as _dt
+
+        from apps.transactions.penjualan import rekap_hari_ini
+
+        sql, params = self._tangkap(
+            rekap_hari_ini, kd_user="UAA002", tanggal=_dt.date(2026, 9, 21))
+        self.assertEqual(sql.count("?"), len(params))
+        self.assertEqual(params[0], "UAA002")
+        # Jendelanya TEPAT satu hari, batas atas eksklusif: `tanggal` menyimpan
+        # jam, dan `<= 23:59:59` membuang nota di detik terakhir hari itu.
+        self.assertEqual(params[2] - params[1], _dt.timedelta(days=1))
+        self.assertEqual(params[1], _dt.datetime(2026, 9, 21, 0, 0))
+        # Didorong ke DALAM _nota_net — alasan yang sama dengan histori_nota.
+        self.assertIn("h.kd_user = ?", sql.split(") n")[0])
+
+    def test_rekap_tanpa_kd_user_tak_menyentuh_server(self):
+        """Akun tanpa tautan tak boleh memicu query apa pun — tanpa penyaring
+        kd_user, agregatnya akan memulangkan omset SELURUH toko."""
+        from apps.transactions.penjualan import rekap_hari_ini
+
+        with patch("core.mssql.cursor") as m:
+            hasil = rekap_hari_ini(object(), "   ")
+        m.assert_not_called()
+        self.assertEqual(hasil["jml_nota"], 0)
+        self.assertEqual(hasil["total"], 0.0)
+
+    def test_rekap_tunai_dan_kredit_menutup_semua_nota(self):
+        """Tiap nota jatuh ke TEPAT satu kolom: `= 1` dan `<> 1` saling
+        melengkapi. Kalau suatu saat jadi `= 0`, nota Lunas hilang dari
+        keduanya dan tunai+kredit tak lagi menjumlah ke total."""
+        from apps.transactions.penjualan import rekap_hari_ini
+
+        sql, _ = self._tangkap(rekap_hari_ini, kd_user="UAA002")
+        self.assertIn("WHEN n.status_raw = 1 THEN", sql)
+        self.assertIn("WHEN n.status_raw <> 1 THEN", sql)
 
     def test_histori_tanpa_penyaring_menolak_jalan(self):
         """Tanpa ini ia akan memindai seluruh t_penjualan (438rb baris)."""
@@ -201,3 +315,120 @@ class PrefixIzinTests(TestCase):
         self.client.force_login(spv)
         r = self.client.get("/kasir/penjualan/info-customer", {"kd_customer": "CAA111"})
         self.assertEqual(r.status_code, 403)
+
+
+class BayarNotaTests(TestCase):
+    """Uang yang diterima kasir: dicatat saat simpan, dibaca saat cetak.
+
+    `t_penjualan` legacy tak punya kolomnya dan database itu milik bersama,
+    jadi angkanya tinggal di pangkal. Yang dijaga di sini bukan aritmetikanya
+    (itu di test_penjualan) melainkan hal-hal yang gagal tanpa suara:
+
+    1. **Pangkal yang bermasalah tak boleh menjatuhkan nota yang sudah jadi.**
+       Nota sudah di-commit ke MS SQL saat pencatatan bayar dijalankan.
+    2. **Nol bukan nilai.** Layar Order tak punya isian bayar sama sekali;
+       mencatat "0" di sana berarti mengaku tahu sesuatu yang tak ditanyakan.
+    """
+
+    def setUp(self):
+        self.server = _profil_server()
+        self.kasir = User.objects.create_user(
+            "kasir_b", password="rahasia-kuat-123", role=Role.KASIR,
+            server_profile=self.server)
+        # Request sungguhan, bukan objek tipis: jalur gagalnya memanggil
+        # `log_activity`, yang membaca `request.META` untuk IP.
+        self.req = RequestFactory().post("/kasir/penjualan/save")
+        self.req.user = self.kasir
+
+    def test_tersimpan_dan_terbaca_kembali(self):
+        vk._simpan_bayar(self.req, self.server, "SC2609210001", 600000)
+        self.assertEqual(
+            pj._bayar_tercatat(self.server, "SC2609210001"), 600000.0)
+
+    def test_nol_dan_kosong_tak_dicatat(self):
+        for nilai in (0, "", None, "bukan angka"):
+            vk._simpan_bayar(self.req, self.server, "SC2609210002", nilai)
+        self.assertIsNone(pj._bayar_tercatat(self.server, "SC2609210002"))
+
+    def test_simpan_ulang_memperbarui_bukan_menggandakan(self):
+        """Nomor nota unik per server; dua baris untuk satu nota berarti dua
+        jawaban berbeda untuk 'berapa yang dibayar'."""
+        vk._simpan_bayar(self.req, self.server, "SC2609210003", 500000)
+        vk._simpan_bayar(self.req, self.server, "SC2609210003", 700000)
+        self.assertEqual(
+            BayarNota.objects.filter(no_transaksi="SC2609210003").count(), 1)
+        self.assertEqual(
+            pj._bayar_tercatat(self.server, "SC2609210003"), 700000.0)
+
+    def test_kegagalan_pangkal_tak_melempar(self):
+        """Nota sudah tersimpan di MS SQL saat ini dipanggil — melempar di sini
+        membuat kasir mengira notanya gagal, lalu mengetiknya dua kali."""
+        with patch.object(BayarNota.objects, "update_or_create",
+                          side_effect=RuntimeError("pangkal mati")):
+            vk._simpan_bayar(self.req, self.server, "SC2609210004", 100000)
+        self.assertIsNone(pj._bayar_tercatat(self.server, "SC2609210004"))
+
+    def test_nota_beda_server_tak_saling_menimpa(self):
+        """`no_transaksi` bertabrakan antar server: kode yang sama menunjuk
+        nota yang lain di gudang dan di tiap toko."""
+        lain = ServerProfile.objects.create(
+            name="TOKO B", host="h2", db_name="LAIN", username="sa",
+            password_encrypted="x")
+        vk._simpan_bayar(self.req, self.server, "SC0001", 111000)
+        vk._simpan_bayar(self.req, lain, "SC0001", 222000)
+        self.assertEqual(pj._bayar_tercatat(self.server, "SC0001"), 111000.0)
+        self.assertEqual(pj._bayar_tercatat(lain, "SC0001"), 222000.0)
+
+
+class BayarLewatHttpTests(TestCase):
+    """Bayar dari layar benar-benar SAMPAI ke pangkal lewat rute simpan.
+
+    `BayarNotaTests` di atas membuktikan helpernya bekerja — bukan bahwa view
+    memanggilnya dengan angka yang dikirim layar. Jebakan itu sudah pernah
+    terjadi di proyek ini (lihat CLAUDE.md soal `_uang_bespoke`): versi pertama
+    tetap hijau padahal penyaringnya sudah dicabut dari view. Karena itu tes ini
+    menembak HTTP sungguhan; `buat_nota` dipalsukan supaya MS SQL tak disentuh.
+    """
+
+    def setUp(self):
+        self.server = _profil_server()
+        self.kasir = User.objects.create_user(
+            "kasir_http", password="rahasia-kuat-123", role=Role.KASIR,
+            server_profile=self.server)
+        TautanUser.objects.create(user=self.kasir, profile=self.server,
+                                  kd_user="UAA002", kd_divisi="DAA000")
+        self.client.force_login(self.kasir)
+
+    def _simpan(self, url, **isi):
+        hasil = {"no_transaksi": "SC2609210099", "no_order": "",
+                 "total": 500_000.0, "baris": 2}
+        data = {"kd_customer": "CAA000", "kd_jenis": "JAA000", "kd_kas": "KAA001",
+                "kd_voucher": "VAA000", "items": [{"kd_barang": "X", "qty": 1}]}
+        data.update(isi)
+        with patch("apps.transactions.penjualan.buat_nota", return_value=hasil), \
+             patch("apps.transactions.penjualan.buat_order",
+                   return_value={"no_order": "OJ2609210099", "total": 500_000.0, "baris": 2}):
+            return self.client.post(url, data, content_type="application/json")
+
+    def test_bayar_dari_layar_tercatat(self):
+        self._simpan("/kasir/penjualan/save", bayar=600000)
+        b = BayarNota.objects.get(no_transaksi="SC2609210099")
+        self.assertEqual(float(b.dibayar), 600000.0)
+        self.assertEqual(b.profile_id, self.server.pk)
+        self.assertEqual(b.dibuat_oleh_id, self.kasir.pk)
+
+    def test_bayar_nol_tak_mencatat_apa_apa(self):
+        """Nol berarti "tak ditanyakan", bukan "dibayar nol" — dan nota tanpa
+        catatan bayar mencetak tanpa baris Bayar/Kembali, yang benar."""
+        self._simpan("/kasir/penjualan/save", bayar=0)
+        self.assertFalse(BayarNota.objects.exists())
+
+    def test_tanpa_kunci_bayar_sama_sekali_tetap_aman(self):
+        """Layar lama (bundel belum di-build ulang) tak mengirim kunci ini."""
+        self._simpan("/kasir/penjualan/save")
+        self.assertFalse(BayarNota.objects.exists())
+
+    def test_layar_order_tak_pernah_mencatat_bayar(self):
+        """Order belum ada uang berpindah; uangnya berpindah saat jadi nota."""
+        self._simpan("/kasir/penjualan-order/save", bayar=600000)
+        self.assertFalse(BayarNota.objects.exists())

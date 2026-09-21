@@ -5,6 +5,7 @@ memperlakukan /kasir berbeda dari /admin-panel (tanpa syarat Tailscale), jadi
 memisahkan berkasnya membuat batas itu terlihat saat membaca kode.
 """
 import datetime as dt
+from decimal import Decimal
 
 import pyodbc
 from django.http import JsonResponse
@@ -14,7 +15,7 @@ from inertia import defer, render
 
 from apps.auth_app.tautan import tautan_untuk, tautan_wajib
 from apps.core.http import get_data
-from apps.core.models import log_activity
+from apps.core.models import BayarNota, log_activity
 from apps.inventory import services as inv
 from apps.master_data import master_crud
 from apps.transactions import penjualan as pj
@@ -159,6 +160,7 @@ def penjualan_save(request):
                  f"Nota {hasil['no_transaksi']} — {hasil['baris']} baris, "
                  f"total {hasil['total']:.0f}"
                  + (f", dari order {hasil['no_order']}" if hasil.get("no_order") else ""))
+    _simpan_bayar(request, profile, hasil["no_transaksi"], data.get("bayar"))
     # Nomor ASLI, bukan ancar-ancar yang tampil sebelum simpan: nomor bisa
     # bergeser kalau kasir lain (atau POS lama) mendahului, dan tombol Cetak
     # yang memakai ancar-ancar akan mencetak nota MILIK ORANG LAIN.
@@ -380,6 +382,34 @@ def retur_pembelian_save(request):
     return _transaksi_save(request, "pembelian_retur")
 
 
+def _simpan_bayar(request, profile, no_transaksi, bayar):
+    """Catat uang yang diterima kasir. Nota sudah tersimpan saat ini dipanggil.
+
+    Ditulis SESUDAH transaksi MS SQL, dan kegagalannya sengaja ditelan: nota
+    yang sudah jadi jauh lebih penting daripada catatan bayarnya, dan pangkal
+    yang sedang bermasalah tak boleh membuat kasir mengira notanya gagal.
+    Bekasnya tetap ada di log kalau itu terjadi.
+
+    Angka nol/kosong tak dicatat: layar Order tak punya isian bayar sama sekali,
+    dan "0" di sana berarti "tak ditanyakan", bukan "dibayar nol".
+    """
+    try:
+        nilai = float(bayar or 0)
+    except (TypeError, ValueError):
+        return
+    if nilai <= 0:
+        return
+    try:
+        BayarNota.objects.update_or_create(
+            profile=profile, no_transaksi=no_transaksi,
+            defaults={"dibayar": Decimal(str(round(nilai, 2))),
+                      "dibuat_oleh": request.user},
+        )
+    except Exception as exc:   # noqa: BLE001 — lihat docstring
+        log_activity(request, "penjualan",
+                     f"Bayar nota {no_transaksi} gagal dicatat: {exc}")
+
+
 def _waktu(nilai):
     """Parse waktu kiriman layar (jam PC kasir). None kalau tak masuk akal —
     pemanggil lalu memakai jam mesin ini, bukan menolak nota karena satu kolom."""
@@ -469,9 +499,12 @@ def cari_customer_json(request):
 def info_customer_json(request):
     """Panel info pelanggan: identitas + piutang aktif + nota terakhirnya.
 
-    SATU round-trip untuk ketiganya, dipanggil ketika pelanggan dipilih. Tiga
-    endpoint terpisah akan berarti tiga perjalanan WAN untuk satu klik — dan di
-    profil jauh jumlah round-trip-lah biayanya, bukan besar datanya.
+    SATU round-trip HTTP dan SATU koneksi pyodbc untuk ketiganya, dipanggil
+    ketika pelanggan dipilih. Tiga endpoint terpisah akan berarti tiga
+    perjalanan WAN untuk satu klik — dan di profil jauh jumlah round-trip-lah
+    biayanya, bukan besar datanya. Itu berlaku untuk handshake ODBC juga: dulu
+    ketiga fungsi di bawah membuka koneksinya masing-masing, jadi satu klik
+    pelanggan tetap tiga sambungan walau HTTP-nya sudah satu.
 
     Pelanggan UMUM tidak dijemput sama sekali (dijaga juga di layar): ia bawaan
     setiap nota tunai, jadi memanggilnya berarti satu perjalanan sia-sia di awal
@@ -484,7 +517,12 @@ def info_customer_json(request):
     if not kd or kd.upper() == pj.CUSTOMER_UMUM:
         return JsonResponse({"profil": None, "piutang": [], "histori": []})
     try:
-        profil = pj.info_customer(profile, kd)
+        # Satu kursor dioper ke ketiganya, dan ditutup SEBELUM respons dirakit
+        # supaya sambungannya lepas selagi _tanpa_harga bekerja.
+        with mssql.cursor(profile) as cur:
+            profil = pj.info_customer(profile, kd, cur=cur)
+            piutang = pj.piutang_customer(profile, kd, cur=cur)
+            histori = pj.histori_nota(profile, kd_customer=kd, cur=cur)
         return JsonResponse({
             # Kolom uang dicabut DI SINI, bukan di layar: penyaringan di Vue
             # cuma kosmetik (lihat useHiddenData.js), dan payload-nya tetap
@@ -492,8 +530,8 @@ def info_customer_json(request):
             # jadi ia dibungkus list dulu — kalau tidak, `limit_kredit` lolos
             # justru di satu-satunya tempat panel ini menyebut rupiah langsung.
             "profil": (_tanpa_harga(request, [profil])[0] if profil else None),
-            "piutang": _tanpa_harga(request, pj.piutang_customer(profile, kd)),
-            "histori": _tanpa_harga(request, pj.histori_nota(profile, kd_customer=kd)),
+            "piutang": _tanpa_harga(request, piutang),
+            "histori": _tanpa_harga(request, histori),
         })
     except pyodbc.Error as exc:
         return JsonResponse(
@@ -501,24 +539,38 @@ def info_customer_json(request):
 
 
 def histori_user_json(request):
-    """Nota terakhir yang dibuat AKUN INI di koneksi ini.
+    """Nota terakhir yang dibuat AKUN INI di koneksi ini, plus rekap hari ini.
 
     `kd_user` diambil dari tautan, tidak pernah dari payload layar: kalau layar
     boleh menyebut kodenya sendiri, siapa pun bisa membaca nota orang lain
-    dengan mengganti satu parameter di URL.
+    dengan mengganti satu parameter di URL. Itu berlaku untuk rekapnya juga —
+    ia uang, bukan sekadar daftar nomor.
+
+    Rekap menumpang endpoint yang sudah ada alih-alih jadi rute sendiri: rute
+    baru harus didaftarkan ulang di bawah TIAP prefix layar (urls_kasir.py),
+    dan path yang tak cocok menu mana pun dianggap BEBAS oleh middleware.
     """
     profile = _active()
     if not profile:
-        return JsonResponse({"rows": [], "error": CONN_ERROR})
+        return JsonResponse({"rows": [], "rekap": None, "error": CONN_ERROR})
     kd_user = tautan_untuk(request.user, profile).kd_user
     if not kd_user:
-        return JsonResponse({"rows": []})
+        return JsonResponse({"rows": [], "rekap": None})
     try:
-        rows = pj.histori_nota(profile, kd_user=kd_user)
-        return JsonResponse({"rows": _tanpa_harga(request, rows)})
+        with mssql.cursor(profile) as cur:
+            rows = pj.histori_nota(profile, kd_user=kd_user, cur=cur)
+            rekap = pj.rekap_hari_ini(profile, kd_user, cur=cur)
+        return JsonResponse({
+            "rows": _tanpa_harga(request, rows),
+            # `rekap` dict tunggal, jadi dibungkus list dulu — persis seperti
+            # `profil` di info_customer_json. Tanpa itu total rupiahnya lolos
+            # justru ke akun yang izin uangnya dicabut.
+            "rekap": _tanpa_harga(request, [rekap])[0],
+        })
     except pyodbc.Error as exc:
         return JsonResponse(
-            {"rows": [], "error": mssql.friendly_error(exc, "Gagal membaca histori")})
+            {"rows": [], "rekap": None,
+             "error": mssql.friendly_error(exc, "Gagal membaca histori")})
 
 
 def order_json(request):
@@ -545,26 +597,15 @@ def nota_cetak(request, no_transaksi):
     Windows LX-310 mengeluarkannya apa adanya dan cepat, alih-alih merender
     grafis baris demi baris.
 
-    `?bayar=` — uang yang diterima kasir. `t_penjualan` TIDAK punya kolom untuk
-    itu (lihat `penjualan._HEADER`), jadi satu-satunya tempat angkanya ada
-    adalah layar yang baru saja menerimanya. Ia dioper lewat query string, dan
-    kembaliannya dihitung DI SINI dari total versi server — bukan diterima dari
-    layar — supaya angka di struk tak bisa dikarang lewat URL.
-
-    Cetak ulang lewat /kasir/faktur tak membawa `bayar`, jadi di sana kedua
-    baris itu tidak tercetak sama sekali. Itu disengaja: lebih baik kosong
-    daripada "Kembali: 0" yang tidak benar.
+    Bayar/Kembali datang dari `baca_nota`, yang membacanya di pangkal
+    (`core.models.BayarNota`) — bukan lagi dari `?bayar=` di query string.
+    Dengan begitu cetak ulang lewat /kasir/faktur membawa angka yang sama,
+    dan tak ada jalan mengarang nominal bayar lewat URL. Nota yang bayarnya
+    tak pernah tercatat tetap mencetak tanpa kedua baris itu.
     """
     profile = _active()
     nota = pj.baca_nota(profile, no_transaksi) if profile else None
     if not nota:
         request.session["flash_error"] = f"Nota {no_transaksi} tidak ditemukan."
         return redirect("/kasir/penjualan")
-    try:
-        bayar = float(request.GET.get("bayar") or "")
-    except ValueError:
-        bayar = None
-    if bayar is not None and bayar > 0:
-        nota["bayar"] = bayar
-        nota["kembali"] = max(0.0, bayar - float(nota["total"]))
     return render(request, "Kasir/NotaCetak", props={"nota": nota})

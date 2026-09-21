@@ -59,17 +59,22 @@ const kotakEntri = ref(null);
 const wadahTabel = ref(null);
 const fokusEntri = () => nextTick(() => kotakEntri.value?.focus?.());
 
+// `urut` membuang hasil yang datang tak berurutan — alasannya sama dengan
+// layar Penjualan: daftar basi berarti barang lain yang masuk keranjang.
 let timer = null;
+let urut = 0;
 watch(entri, (q) => {
   clearTimeout(timer);
   sorot.value = 0;
   digeser.value = false;
+  const milikku = ++urut;
   if (!q.trim()) {
     hasil.value = [];
     return;
   }
   timer = setTimeout(async () => {
     const { data } = await axios.get(`${props.aksi_url}/cari-barang`, { params: { cari: q } });
+    if (milikku !== urut) return;
     hasil.value = data.rows || [];
   }, 250);
 });

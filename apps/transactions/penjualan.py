@@ -20,14 +20,23 @@ yang separuh jadi.
 from __future__ import annotations
 
 import datetime as dt
+from contextlib import nullcontext
+
+from django.utils import timezone
 
 from apps.transactions.hub_sync import bind_varchar
 from apps.transactions.penomoran import awalan_untuk, no_berikutnya, simpan_dengan_nomor
 from core import mssql
+from core.cache import _cached
 
 # Kolom yang menerima nilai kosong di data legacy — dilihat dari nota yang sudah
 # ada, bukan ditebak: no_bukti dan keterangan berisi "-", bukan string kosong.
 KOSONG = "-"
+
+# Panjang minimal kotak cari barang/pelanggan. Dua, bukan tiga: potongan kode
+# seperti "TY" masuk akal diketik, sedangkan satu huruf tak pernah menghasilkan
+# daftar yang berguna — ia cuma memaksa scan penuh per ketukan tombol.
+MIN_CARI = 2
 
 _HEADER = [
     "no_transaksi", "kd_customer", "kd_divisi", "kd_jenis", "kd_kas", "kd_voucher",
@@ -272,9 +281,15 @@ def cari_barang(profile, cari: str, limit: int = 20) -> list[dict]:
 
     Satu barang bisa punya beberapa satuan (pcs/lusin/dus); semuanya dikembalikan
     sebagai baris terpisah supaya kasir memilih satuan sekaligus, bukan menebak.
+
+    Minimal `MIN_CARI` huruf. `LIKE '%x%'` tak pernah bisa seek, jadi satu huruf
+    berarti memindai join m_barang x m_barang_satuan (55rb baris) lalu menyortir
+    SELURUH hasil cocok sebelum TOP 20 memotongnya — untuk daftar yang tak
+    berguna bagi siapa pun. Jalur pemindai tak lewat sini: ia memanggil
+    `barang_persis` dengan kode utuh.
     """
     cari = (cari or "").strip()
-    if not cari:
+    if len(cari) < MIN_CARI:
         return []
     with mssql.cursor(profile) as cur:
         cur.execute(
@@ -316,7 +331,10 @@ def satuan_barang(profile, kd_barang: str) -> list[dict]:
     if not kd_barang:
         return []
     with mssql.cursor(profile) as cur:
-        cur.execute(
+        # kd_barang varchar; tanpa execute_varchar pyodbc mengikatnya NVARCHAR
+        # dan konversi implisitnya mematikan seek index.
+        mssql.execute_varchar(
+            cur,
             "SELECT bs.kd_satuan, s.nama, bs.jumlah, bs.harga_jual, bs.status "
             "FROM m_barang_satuan bs LEFT JOIN m_satuan s ON s.kd_satuan = bs.kd_satuan "
             "WHERE bs.kd_barang = ? ORDER BY bs.jumlah, bs.harga_jual",
@@ -374,21 +392,35 @@ def opsi_nota(profile) -> dict:
     Semuanya WAJIB terisi kode yang nyata: kd_jenis dan kd_voucher punya
     FOREIGN KEY, dan kd_kas/kd_customer/kd_pegawai NOT NULL. Membiarkannya
     sebagai isian bebas membuat setiap simpan pertama gagal dengan galat FK.
+
+    Dicache seperti `inv.list_divisi`, dan alasannya sama: kelima daftarnya
+    tabel `m_*` yang jarang berubah, sementara ia dibaca di SETIAP muat layar
+    kasir — lima query tabel penuh untuk data yang identik sepanjang hari.
+    Tulis master membuang cache profil ini lewat `invalidate_master_cache`
+    (master_crud.simpan_master dan master_data.services), jadi voucher atau
+    pegawai baru tetap langsung terlihat.
+
+    `bawaan_form` sengaja TIDAK ikut dicache: ia memulangkan ancar-ancar nomor
+    nota berikutnya, dan nomor basi sepuluh menit lebih buruk daripada satu
+    koneksi.
     """
     def ambil(cur, sql):
         cur.execute(sql)
         return [{"value": (r[0] or "").strip(), "label": (r[1] or "").strip()}
                 for r in cur.fetchall()]
 
-    with mssql.cursor(profile) as cur:
-        return {
-            "jenis_bayar": ambil(cur, "SELECT kd_jenis, nama FROM m_jenis_bayar ORDER BY nama"),
-            "kas": ambil(cur, "SELECT kd_kas, no_rekening FROM m_kas ORDER BY kd_kas"),
-            "voucher": ambil(cur, "SELECT kd_voucher, nama FROM m_voucher ORDER BY kd_voucher"),
-            "pegawai": ambil(cur, "SELECT kd_pegawai, nama FROM m_pegawai ORDER BY nama"),
-            "pelanggan": ambil(
-                cur, "SELECT TOP 200 kd_customer, nama FROM m_customer ORDER BY nama"),
-        }
+    def bangun():
+        with mssql.cursor(profile) as cur:
+            return {
+                "jenis_bayar": ambil(cur, "SELECT kd_jenis, nama FROM m_jenis_bayar ORDER BY nama"),
+                "kas": ambil(cur, "SELECT kd_kas, no_rekening FROM m_kas ORDER BY kd_kas"),
+                "voucher": ambil(cur, "SELECT kd_voucher, nama FROM m_voucher ORDER BY kd_voucher"),
+                "pegawai": ambil(cur, "SELECT kd_pegawai, nama FROM m_pegawai ORDER BY nama"),
+                "pelanggan": ambil(
+                    cur, "SELECT TOP 200 kd_customer, nama FROM m_customer ORDER BY nama"),
+            }
+
+    return _cached(profile, "opsi_nota", bangun)
 
 
 # Nilai bawaan form nota, disamakan dengan layar aplikasi legacy.
@@ -448,9 +480,11 @@ def cari_customer(profile, cari: str, limit: int = 20) -> list[dict]:
     Dicari, BUKAN di-dropdown: m_customer punya 9.367 baris di server testing,
     dan menggulung daftar sepanjang itu tiap nota lebih lambat daripada
     mengetik tiga huruf.
+
+    Batas `MIN_CARI` huruf, alasannya sama dengan `cari_barang`.
     """
     cari = (cari or "").strip()
-    if not cari:
+    if len(cari) < MIN_CARI:
         return []
     with mssql.cursor(profile) as cur:
         cur.execute(
@@ -478,7 +512,22 @@ def cari_customer(profile, cari: str, limit: int = 20) -> list[dict]:
 CUSTOMER_UMUM = "CAA000"
 
 
-def info_customer(profile, kd_customer: str) -> dict | None:
+def _kursor(profile, cur=None):
+    """Kursor yang dioper pemanggil, atau satu yang dibuka sendiri.
+
+    Panel info memanggil TIGA fungsi di bawah dalam satu permintaan HTTP, dan
+    masing-masing dulu membuka koneksi pyodbc sendiri — tiga handshake ODBC
+    untuk satu klik pelanggan. Di profil jauh, handshake-lah ongkosnya, bukan
+    querynya.
+
+    Tetap `cur=None` dan bukan kursor wajib di argumen pertama (pola
+    `penomoran.awalan_untuk`): `histori_nota` punya pemanggil kedua
+    (`histori_user_json`) yang tak punya alasan mengurus koneksi sendiri.
+    """
+    return nullcontext(cur) if cur is not None else mssql.cursor(profile)
+
+
+def info_customer(profile, kd_customer: str, cur=None) -> dict | None:
     """Identitas pelanggan untuk panel info. None kalau kodenya tak ada.
 
     `point`, `limit_kredit`, dan `disc` ikut dibawa: ketiganya sudah lama ada di
@@ -489,11 +538,14 @@ def info_customer(profile, kd_customer: str) -> dict | None:
     kd = (kd_customer or "").strip()
     if not kd:
         return None
-    with mssql.cursor(profile) as cur:
-        cur.execute(
+    with _kursor(profile, cur) as c:
+        # execute_varchar: kd_customer varchar, dan pyodbc mengikat str sebagai
+        # NVARCHAR — konversi implisitnya jatuh di KOLOM dan mematikan seek PK.
+        mssql.execute_varchar(
+            c,
             "SELECT kd_customer, nama, alamat, hp, telepon, point, limit_kredit, "
             "disc, status FROM m_customer WHERE kd_customer = ?", [kd])
-        r = cur.fetchone()
+        r = c.fetchone()
     if not r:
         return None
     teks = lambda v: (v or "").strip() if isinstance(v, str) else (v or "")  # noqa: E731
@@ -519,7 +571,7 @@ def _tanpa_rentang_tanggal(where_extra, params):
     return " AND ".join(where + where_extra), p + params
 
 
-def piutang_customer(profile, kd_customer: str, limit: int = 10) -> list[dict]:
+def piutang_customer(profile, kd_customer: str, limit: int = 10, cur=None) -> list[dict]:
     """Nota yang belum lunas milik satu pelanggan, terlama dulu.
 
     Bentuk hitungannya sama dengan laporan Piutang Pelanggan (`reports.piutang`):
@@ -548,8 +600,10 @@ def piutang_customer(profile, kd_customer: str, limit: int = 10) -> list[dict]:
         # ditagih, dan daftar ini dipotong di baris ke-10.
         "ORDER BY n.tanggal"
     )
-    with mssql.cursor(profile) as cur:
-        cur.execute(sql, params)
+    with _kursor(profile, cur) as c:
+        # kd_customer varchar; execute_varchar (bukan bind_varchar) karena
+        # `_base_where` bisa menyisipkan parameter bertipe lain di depannya.
+        mssql.execute_varchar(c, sql, params)
         return [{
             "no_transaksi": (r[0] or "").strip(),
             "tanggal": r[1].strftime("%Y-%m-%d") if r[1] else "",
@@ -558,11 +612,11 @@ def piutang_customer(profile, kd_customer: str, limit: int = 10) -> list[dict]:
             "total_cicilan": float(r[4] or 0),
             "sisa_piutang": float(r[5] or 0),
             "hari_terlambat": int(r[6] or 0),
-        } for r in cur.fetchall()]
+        } for r in c.fetchall()]
 
 
 def histori_nota(profile, kd_customer: str = "", kd_user: str = "",
-                 limit: int = 10) -> list[dict]:
+                 limit: int = 10, cur=None) -> list[dict]:
     """Nota terakhir milik satu pelanggan ATAU satu user legacy.
 
     Satu fungsi untuk dua panel karena bedanya cuma satu kolom di WHERE, dan
@@ -591,15 +645,72 @@ def histori_nota(profile, kd_customer: str = "", kd_user: str = "",
         "ORDER BY n.tanggal DESC"
     )
     status = {0: "Kredit", 1: "Tunai", 2: "Lunas"}
-    with mssql.cursor(profile) as cur:
-        cur.execute(sql, params)
+    with _kursor(profile, cur) as c:
+        # kd_customer/kd_user varchar — lihat catatan di `piutang_customer`.
+        mssql.execute_varchar(c, sql, params)
         return [{
             "no_transaksi": (r[0] or "").strip(),
             "tanggal": r[1].strftime("%Y-%m-%d %H:%M") if r[1] else "",
             "status": status.get(int(r[2] or 0), ""),
             "nominal": float(r[3] or 0),
             "customer": (r[4] or "").strip(),
-        } for r in cur.fetchall()]
+        } for r in c.fetchall()]
+
+
+def rekap_hari_ini(profile, kd_user: str, tanggal=None, cur=None) -> dict:
+    """Penjualan HARI INI milik satu user legacy: jumlah nota + rupiah,
+    dipecah tunai/kredit.
+
+    Kasir bertanya "sudah berapa saya hari ini" — terutama saat menutup laci —
+    dan jawabannya selama ini cuma ada di /admin-panel, yang tertutup penjaga
+    Tailscale dari jaringan toko. Tab "Nota Saya" menampilkan 10 nota terakhir
+    SEPANJANG MASA; ia tak menjawab pertanyaan itu, dan menjumlahkan sepuluh
+    baris di kepala jelas bukan jawabannya juga.
+
+    Rumus uangnya `_nota_net()` yang sama dengan seluruh laporan penjualan —
+    tak ada definisi "total nota" kedua di berkas ini. Tunai/kredit dipecah dari
+    `status_raw` yang sudah dipulangkannya (0 Kredit / 1 Tunai / 2 Lunas), jadi
+    tanpa join dan tanpa kolom tambahan. `Lunas` ikut kolom kredit: ia nota
+    kredit yang sudah dibayar, bukan uang yang masuk laci hari ini.
+
+    Penyaringnya didorong ke DALAM `_nota_net` supaya
+    IX_tpenjualan_user_tanggal (kd_user, tanggal) dipakai untuk MENYARING,
+    bukan memindai seluruh t_penjualan lalu membuang hasilnya — alasan yang
+    sama dengan `histori_nota`.
+
+    Batas atasnya `< besok 00:00`, bukan `<= hari ini 23:59:59`: `tanggal` di
+    t_penjualan menyimpan jam, dan detik terakhir hari itu nota yang nyata.
+    """
+    from apps.transactions.reports import _nota_net
+
+    kosong = {"jml_nota": 0, "total": 0.0, "total_tunai": 0.0, "total_kredit": 0.0}
+    ku = (kd_user or "").strip()
+    if not ku:
+        return kosong
+    # localdate(), bukan date.today(): batas harinya mengikuti TIME_ZONE
+    # aplikasi, bukan zona jam sistem mesin yang kebetulan menjalankannya.
+    hari = tanggal or timezone.localdate()
+    params = [ku,
+              dt.datetime.combine(hari, dt.time.min),
+              dt.datetime.combine(hari + dt.timedelta(days=1), dt.time.min)]
+    sql = (
+        "SELECT COUNT(n.no_transaksi) AS jml_nota, "
+        "COALESCE(SUM(n.total_bersih), 0) AS total, "
+        "COALESCE(SUM(CASE WHEN n.status_raw = 1 THEN n.total_bersih ELSE 0 END), 0) AS total_tunai, "
+        "COALESCE(SUM(CASE WHEN n.status_raw <> 1 THEN n.total_bersih ELSE 0 END), 0) AS total_kredit "
+        f"FROM ({_nota_net('h.kd_user = ? AND h.tanggal >= ? AND h.tanggal < ?')}) n"
+    )
+    with _kursor(profile, cur) as c:
+        # Daftar parameter CAMPURAN (satu str + dua datetime) — execute_varchar,
+        # TAK PERNAH bind_varchar: memaksa datetime lewat VARCHAR menyerahkan
+        # penafsiran tanggal ke setelan bahasa server (lolos di `us_english`,
+        # DataError 22007 di `british`/`deutsch`).
+        mssql.execute_varchar(c, sql, params)
+        r = c.fetchone()
+    if not r:
+        return kosong
+    return {"jml_nota": int(r[0] or 0), "total": float(r[1] or 0),
+            "total_tunai": float(r[2] or 0), "total_kredit": float(r[3] or 0)}
 
 
 def barang_persis(profile, kode: str) -> dict | None:
@@ -614,7 +725,10 @@ def barang_persis(profile, kode: str) -> dict | None:
     if not kode:
         return None
     with mssql.cursor(profile) as cur:
-        cur.execute(
+        # Jalur pemindai menyala sekali PER BARANG yang dipindai, jadi seek di
+        # sini yang paling sering ditagih. kd_barang varchar — execute_varchar.
+        mssql.execute_varchar(
+            cur,
             "SELECT TOP 1 b.kd_barang, b.nama, bs.kd_satuan, s.nama, bs.harga_jual "
             "FROM m_barang b INNER JOIN m_barang_satuan bs ON bs.kd_barang = b.kd_barang "
             "LEFT JOIN m_satuan s ON s.kd_satuan = bs.kd_satuan "
@@ -702,7 +816,10 @@ def baca_nota(profile, no_transaksi: str) -> dict | None:
         # NULL di SETIAP nota server Testing). Versi sebelumnya menambal NULL itu
         # dengan pegawai di baris detail pertama, jadi struk mencetak nama SPG
         # di bawah label "Kasir". Lihat apps/auth_app/models.TautanUser.
-        cur.execute(
+        # no_transaksi varchar di kedua tabel — execute_varchar, supaya kedua
+        # predikat di bawah tetap seek dan bukan scan.
+        mssql.execute_varchar(
+            cur,
             "SELECT h.no_transaksi, h.tanggal, h.kd_customer, c.nama, "
             "h.kd_user, u.nama, h.kd_jenis, jb.nama, "
             "h.kd_divisi, dv.nama, h.no_bukti, h.keterangan, h.tanggal_jatuh_tempo, "
@@ -722,7 +839,8 @@ def baca_nota(profile, no_transaksi: str) -> dict | None:
         if not h:
             return None
 
-        cur.execute(
+        mssql.execute_varchar(
+            cur,
             "SELECT d.kd_barang, b.nama, d.kd_satuan, s.nama, d.qty, d.harga_jual, "
             "d.diskon1, d.diskon2, d.diskon3, d.diskon4, d.total, p.nama "
             "FROM t_penjualan_detail d "
@@ -806,6 +924,17 @@ def baca_nota(profile, no_transaksi: str) -> dict | None:
     # toko yang benar-benar ada di sana.
     nama_toko = _terisi(p_nama) or (h[9] or "").strip() or "NOTA PENJUALAN"
 
+    # Uang yang diterima kasir. Tak ada di legacy — ia dicatat di pangkal saat
+    # nota disimpan (`core.models.BayarNota`). Kembaliannya DIHITUNG di sini
+    # dari total versi server, tak pernah disimpan: itu yang membuat angka di
+    # struk tak bisa dikarang. Nota yang tak punya catatan bayar (nota lama,
+    # atau yang bayarnya tak diisi) tetap mencetak tanpa kedua baris itu —
+    # lebih baik kosong daripada "Kembali: 0" yang tidak benar.
+    bayar, kembali = None, None
+    if (b := _bayar_tercatat(profile, no_transaksi)) is not None:
+        bayar = b
+        kembali = max(0.0, b - total)
+
     return {
         "no_transaksi": (h[0] or "").strip(),
         "tanggal": h[1],
@@ -833,11 +962,29 @@ def baca_nota(profile, no_transaksi: str) -> dict | None:
         "pajak": pajak,
         "pajak_rp": pajak_rp,
         "total": total,
+        "bayar": bayar,
+        "kembali": kembali,
         "baris": baris,
         "toko": nama_toko,
         "alamat": _terisi(p_alamat),
         "telepon": _terisi(p_telp),
     }
+
+
+def _bayar_tercatat(profile, no_transaksi: str) -> float | None:
+    """Uang diterima untuk nota ini, dari pangkal. None kalau tak tercatat.
+
+    Kegagalan baca ditelan, bukan dilempar: pangkal yang bermasalah tak boleh
+    membuat struk gagal dicetak — ia cuma kehilangan dua baris.
+    """
+    from apps.core.models import BayarNota
+
+    try:
+        baris = BayarNota.objects.filter(
+            profile=profile, no_transaksi=no_transaksi).first()
+    except Exception:   # noqa: BLE001 — lihat docstring
+        return None
+    return float(baris.dibayar) if baris else None
 
 
 def daftar_order(profile, limit: int = 50) -> list[dict]:
@@ -867,7 +1014,10 @@ def baca_order(profile, no_order: str) -> dict | None:
     if not no_order:
         return None
     with mssql.cursor(profile) as cur:
-        cur.execute(
+        # no_order varchar di kedua tabel — execute_varchar supaya predikatnya
+        # tetap bisa seek.
+        mssql.execute_varchar(
+            cur,
             "SELECT o.no_order, o.kd_customer, c.nama, o.kd_jenis, o.kd_kas, "
             "o.kd_voucher, o.keterangan, o.diskon_uang, o.pajak "
             "FROM t_penjualan_order o "
@@ -876,7 +1026,8 @@ def baca_order(profile, no_order: str) -> dict | None:
         h = cur.fetchone()
         if not h:
             return None
-        cur.execute(
+        mssql.execute_varchar(
+            cur,
             "SELECT d.kd_barang, b.nama, d.kd_satuan, s.nama, d.qty, d.harga_jual, "
             "d.diskon1, d.diskon2, d.diskon3, d.diskon4 "
             "FROM t_penjualan_order_detail d "

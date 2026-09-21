@@ -41,6 +41,7 @@ from apps.transactions.penomoran import (
     urut_berikutnya,
 )
 from core import mssql
+from core.cache import invalidate_master_cache
 
 from apps.core.reporting import clean_rows as _bersih, dictify as _dictify
 
@@ -347,6 +348,18 @@ def _bersihkan(entitas: str, data) -> dict:
     return keluar
 
 
+def _buang_cache(profile) -> None:
+    """Buang cache master milik profil ini sesudah tulis berhasil.
+
+    Lewat `pk`, dan diam kalau tak ada: sebagian pemanggil (tes bentuk SQL)
+    mengoper profil tiruan yang tak pernah tersimpan — profil tanpa pk tak
+    mungkin punya entri cache, sedangkan `invalidate_master_cache(None)`
+    membuang cache SELURUH profil.
+    """
+    if pk := getattr(profile, "pk", None):
+        invalidate_master_cache(pk)
+
+
 def _kode_baru(cur, entitas: str) -> str:
     """Kode baru menurut skema entitasnya — bertanggal, atau keluarga berblok."""
     s = spec(entitas)
@@ -363,6 +376,11 @@ def simpan_master(profile, entitas: str, data) -> dict:
     Kode hanya dibuat untuk baris BARU. Mengubah kode baris yang sudah ada akan
     memutus setiap nota yang menunjuk ke situ, jadi kuncinya tak pernah diikutkan
     sebagai field yang bisa disunting.
+
+    `invalidate_master_cache` sesudah tiap commit, sama seperti jalur tulis di
+    services.py. Tanpa itu voucher/kas/pegawai yang baru dibuat di sini tak
+    muncul di dropdown layar kasir selama TTL cache (`penjualan.opsi_nota`) —
+    tabel yang disentuh mesin ini persis tabel yang dicache di sana.
     """
     s = spec(entitas)
     nilai = _bersihkan(entitas, data)
@@ -382,6 +400,7 @@ def simpan_master(profile, entitas: str, data) -> dict:
                 f"UPDATE {s['tabel']} SET {set_sql} WHERE {s['kunci']} = ?",
                 [nilai[k] for k in kolom] + [kode])
             cur.connection.commit()
+            _buang_cache(profile)
             return {"kode": kode, "baru": False}
 
         # SELURUH kolom NOT NULL di skema ini, jadi semuanya disebut — yang tak
@@ -396,4 +415,5 @@ def simpan_master(profile, entitas: str, data) -> dict:
 
         kode = simpan_dengan_nomor(cur, lambda: _kode_baru(cur, entitas), tulis)
         cur.connection.commit()
+        _buang_cache(profile)
         return {"kode": kode, "baru": True}
