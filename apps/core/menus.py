@@ -335,10 +335,15 @@ def tautan_lengkap(user) -> bool:
 def menus_for(user, abaikan_tautan: bool = False):
     """Return the menu list visible to `user` (PRD §4.3/§4.4).
 
-    `abaikan_tautan` melewati gerbang tautan legacy dan hanya dipakai oleh
-    `_pesan_tautan` di middleware, untuk membedakan "menunya memang tak
-    diberikan" dari "diberikan, tapi akunnya belum ditautkan". Jangan memakainya
-    untuk memutuskan akses: yang menjaga akses adalah pemanggilan tanpa argumen.
+    `abaikan_tautan` melewati gerbang tautan legacy. Dipakai `_pesan_tautan` di
+    middleware untuk membedakan "menunya memang tak diberikan" dari "diberikan,
+    tapi akunnya belum ditautkan" — dan dipakai juga di tempat lain yang
+    pertanyaannya WEWENANG, bukan akses lewat koneksi yang sedang aktif:
+    `wewenang_beri` (menghitung apa yang dipegang `pemberi` untuk memutuskan apa
+    yang boleh ia berikan — tak bergantung koneksi mana yang kebetulan aktif)
+    dan `_migrasi_tertunda` (penanda jumlah migrasi tertunda, bukan halaman
+    Pembaruan Database itu sendiri). Jangan memakainya untuk memutuskan akses
+    ke sebuah HALAMAN: yang menjaga akses adalah pemanggilan tanpa argumen.
     """
     from apps.auth_app.models import Role
 
@@ -414,6 +419,16 @@ def menu_baru(pemberi, target, dicentang) -> list[str]:
     menyimpan menulis ulang seluruh daftar, jadi tanpa ini admin diam-diam
     mencabut menu teknis yang bahkan tak bisa ia lihat (spec §3.5). Urutannya
     mengikuti ALL_MENUS, dan kunci yang tak dikenal terbuang.
+
+    Simpanan KOSONG dari pemberi non-superadmin disimpan sebagai `["bantuan"]`,
+    bukan `[]` (ruling R7). `menus_for` membaca `allowed_menu_keys` kosong
+    sebagai "pakai bawaan peran" — jadi admin yang mengosongkan target lewat
+    layar ini akan diam-diam MEMBERI target seluruh menu bawaan perannya,
+    termasuk yang admin itu sendiri tak pegang (lolos dari wewenang_beri).
+    Bantuan sendiri `always`, jadi menyimpannya eksplisit tak mengubah apa pun
+    yang terlihat — ia cuma mencegah kosong berarti penuh. Superadmin tetap
+    menyimpan `[]` apa adanya: itulah "kembali ke bawaan peran" yang dijanjikan
+    layar Kelola Menu kepadanya.
     """
     from apps.auth_app.models import Role
 
@@ -424,4 +439,7 @@ def menu_baru(pemberi, target, dicentang) -> list[str]:
     else:
         efektif = set(target.allowed_menu_keys or default_keys_for(target.role))
         baru = (efektif - wewenang) | dipilih
-    return [m["key"] for m in ALL_MENUS if m["key"] in baru]
+    hasil = [m["key"] for m in ALL_MENUS if m["key"] in baru]
+    if pemberi.role != Role.SUPERADMIN and not hasil:
+        return ["bantuan"]
+    return hasil

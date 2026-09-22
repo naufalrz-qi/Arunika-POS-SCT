@@ -59,6 +59,20 @@ class KoneksiBolehTests(TestCase):
         self.prod.save(update_fields=["lingkungan"])
         self.assertIsNone(profil_untuk_sesi(self.adm, None))
 
+    def test_default_nonproduksi_diabaikan_pakai_urutan_pertama(self):
+        """M2 — `is_default` kebetulan jatuh di profil non-produksi (mis. sehabis
+        migrasi data): admin tak boleh mendarat di sana. Jatuh ke produksi
+        pertama menurut Meta.ordering ["db_type", "name"], bukan sembarang."""
+        self.prod.is_default = False
+        self.prod.save(update_fields=["is_default"])
+        self.internal.is_default = True
+        self.internal.save(update_fields=["is_default"])
+        # Sama db_type (bawaan GROSIR) dengan self.prod ("PUSAT"), tapi lebih
+        # awal menurut abjad — jadi urutannya benar-benar diuji, bukan kebetulan
+        # profil pertama yang dibuat.
+        duluan = _profil("AAA-Duluan")
+        self.assertEqual(profil_untuk_sesi(self.adm, None), duluan.pk)
+
 
 class MigrasiTandaiHubTests(TestCase):
     def test_profil_hub_ditandai_internal(self):
@@ -159,3 +173,54 @@ class PenegakanKoneksiTests(TestCase):
         self.assertEqual(ids, {self.uji.pk, self.internal.pk})
         self.client.force_login(self.adm)
         self.assertEqual(_props(self.client, "/admin-panel/menus")["koneksi_nonprod"], [])
+
+
+class PergerakanHargaKoneksiTests(TestCase):
+    """F4/ruling R10 — Pergerakan Harga tak boleh membaca live dari, atau
+    menyebut nama, koneksi di luar `koneksi_boleh(request.user)`."""
+
+    def setUp(self):
+        self.prod = _profil("PUSAT", is_default=True)
+        self.internal = _profil("AMPHOREUS", Lingkungan.INTERNAL)
+        self.adm = User.objects.create_user(
+            "adm_ph", password=PW, role=Role.ADMIN,
+            allowed_menu_keys=["dashboard", "pergerakan_harga"])
+
+    def _url(self):
+        return f"/admin-panel/master/pergerakan-harga?profile={self.internal.pk}"
+
+    def _shell(self):
+        """Render awal (non-partial): berisi prop `profiles`, TANPA memicu
+        `load_data()` — itu prop deferred, dipanggil hanya lewat partial reload."""
+        self.client.force_login(self.adm)
+        return json.loads(self.client.get(
+            self._url(), HTTP_X_INERTIA="true", HTTP_X_INERTIA_VERSION="1.0").content)["props"]
+
+    def _partial(self):
+        """Partial reload prop `data` — inilah yang memanggil `master.saran_harga`."""
+        self.client.force_login(self.adm)
+        return self.client.get(
+            self._url(), HTTP_X_INERTIA="true", HTTP_X_INERTIA_VERSION="1.0",
+            HTTP_X_INERTIA_PARTIAL_DATA="data",
+            HTTP_X_INERTIA_PARTIAL_COMPONENT="Admin/MasterData/PergerakanHarga")
+
+    def test_profile_di_luar_wewenang_diabaikan(self):
+        props = self._shell()
+        # Diperlakukan seperti id tak dikenal: dropdown tak menyebut nama
+        # server internal ke admin yang tak berhak.
+        self.assertNotIn(self.internal.pk, [int(p["value"]) for p in props["profiles"]])
+
+        with patch("apps.monitoring.views.master.saran_harga",
+                   return_value={"rows": [], "sumber": "", "gudang": "", "pesan": ""}) as saran:
+            self._partial()
+        # Jatuh ke koneksi aktif (produksi), bukan dilempar ke server internal
+        # yang diminta lewat ?profile= di URL.
+        saran.assert_called_once_with(self.prod)
+
+    def test_profile_di_dalam_wewenang_tetap_dipakai(self):
+        """Perilaku yang ADA tak berubah untuk profil yang memang diizinkan."""
+        self.adm.koneksi_khusus.add(self.internal)
+        with patch("apps.monitoring.views.master.saran_harga",
+                   return_value={"rows": [], "sumber": "", "gudang": "", "pesan": ""}) as saran:
+            self._partial()
+        saran.assert_called_once_with(self.internal)

@@ -27,6 +27,7 @@ from apps.auth_app.models import (
     peran_terkelola,
 )
 from apps.auth_app.tautan import tautan_untuk, tautan_wajib
+from apps.connections.akses import koneksi_boleh
 from apps.connections.models import Lingkungan, ServerProfile
 from apps.core.http import get_data, redirect_aman as _redirect_back
 from apps.core.middleware import ditolak
@@ -408,6 +409,7 @@ def users_save(request):
         return redirect("/admin-panel/users")
 
     username = (data.get("username") or "").strip()
+    peran_berubah = False
     if user_id:
         user = get_object_or_404(_qs_terkelola(request.user), pk=user_id)
         if (err := _last_superadmin_guard(user, new_role=role)):
@@ -419,7 +421,15 @@ def users_save(request):
                 request.session["flash_error"] = "Username sudah dipakai."
                 return redirect("/admin-panel/users")
             user.username = username
+        peran_berubah = role != user.role
         user.first_name, user.last_name, user.role = first, last, role
+        if peran_berubah:
+            # Pemberian menu adalah penilaian PER PERAN; membawanya melintasi
+            # perubahan peran melewati aturan tulis_kritis/teknis (menus_for
+            # murni pemberian — lihat wewenang_beri). Koneksi khusus ikut
+            # dikosongkan di bawah, sesudah user.save(), dengan alasan yang sama
+            # (ruling R8).
+            user.allowed_menu_keys = []
     else:
         if not username:
             request.session["flash_error"] = "Username wajib diisi."
@@ -461,8 +471,11 @@ def users_save(request):
         return redirect("/admin-panel/users")
     user.server_profile_id = sp_baru
     user.save()
+    if peran_berubah:
+        user.koneksi_khusus.clear()
 
-    log_activity(request, "user", f"Simpan user {user.username}")
+    log_activity(request, "user", f"Simpan user {user.username}"
+                 + (" (peran diubah — pemberian menu & koneksi khusus direset)" if peran_berubah else ""))
     request.session["flash_success"] = "Data user disimpan."
     return redirect("/admin-panel/users")
 
@@ -1043,7 +1056,9 @@ def riwayat_update_barang_index(request):
         "Admin/MasterData/RiwayatUpdateBarang",
         props={
             "data": defer(load_riwayat),
-            "profiles": [{"value": str(p.id), "label": p.name} for p in ServerProfile.objects.all()],
+            # Hanya koneksi yang boleh dipakai user ini (ruling R10) — dropdown
+            # tak boleh menyebut nama server non-produksi ke yang tak berhak.
+            "profiles": [{"value": str(p.id), "label": p.name} for p in koneksi_boleh(request.user)],
             "filters": {"kd_barang": kd_barang, "field": field, "date_from": f.get("date_from") or "", "date_to": f.get("date_to") or "", "profile": profile_id},
         },
     )
@@ -1060,13 +1075,20 @@ def pergerakan_harga_index(request):
     kd_barang = (f.get("kd_barang") or "").strip()
     date_from = _parse_date(f.get("date_from"))
     date_to = _eod(_parse_date(f.get("date_to")))
+    # Koneksi yang boleh dipakai user ini (ruling R10) — dipakai untuk dropdown
+    # DAN untuk memvalidasi ?profile=. Id di luarnya diperlakukan seperti id
+    # tak dikenal (diabaikan), bukan ditolak keras: layar ini sudah begitu
+    # untuk id yang tak ada sama sekali.
+    profil_boleh = koneksi_boleh(request.user)
     profile_id = f.get("profile") or ""
+    if profile_id and not profil_boleh.filter(pk=profile_id).exists():
+        profile_id = ""
     scope = f.get("scope") or "hari"
 
     active = _active()
     # Saran harga dibaca dari server yang dipilih di filter; tanpa pilihan,
     # ikut koneksi aktif. Penerapan saran tetap hanya ke koneksi aktif.
-    saran_profile = ServerProfile.objects.filter(pk=profile_id).first() if profile_id else active
+    saran_profile = profil_boleh.filter(pk=profile_id).first() if profile_id else active
 
     def load_data():
         qs = BarangHargaChange.objects.all()
@@ -1133,7 +1155,7 @@ def pergerakan_harga_index(request):
             "active": active.as_dict() if active else None,
             "profile_type": active.db_type if active else None,
             "saran_profile": {"id": saran_profile.id, "name": saran_profile.name} if saran_profile else None,
-            "profiles": [{"value": str(p.id), "label": p.name} for p in ServerProfile.objects.all()],
+            "profiles": [{"value": str(p.id), "label": p.name} for p in profil_boleh],
             "filters": {
                 "kd_barang": kd_barang,
                 "date_from": f.get("date_from") or "",
@@ -1841,7 +1863,7 @@ def barang_histori_index(request):
     )
 
 
-# --- Kelola Menu (menu teknis) -----------------------------------------
+# --- Kode Nota, Transfer ke Arunika, Informasi Perusahaan ------------------
 
 def kode_nota_index(request):
     """Kode nota (m_divisi.kepala_nota) per divisi — awalan tiap nomor nota."""
@@ -2140,6 +2162,8 @@ def tautan_user_save(request):
     request.session["flash_success"] = pesan
     return redirect("/admin-panel/tautan-user")
 
+
+# --- Kelola Menu (menu teknis) -----------------------------------------
 
 def menus_index(request):
     if (denied := _wajib_menu(request)):

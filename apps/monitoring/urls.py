@@ -157,7 +157,7 @@ urlpatterns = [
     path("laporan/biaya-operasional/export", views.biaya_operasional_export, name="biaya_operasional_export"),
     path("laporan/biaya-kategori", views.biaya_kategori, name="biaya_kategori"),
     path("laporan/biaya-kategori/export", views.biaya_kategori_export, name="biaya_kategori_export"),
-    # Menu management (superadmin) + own profile
+    # Menu management (menu teknis) + own profile
     path("menus", views.menus_index, name="menus"),
     path("menus/save", views.menus_save, name="menus_save"),
     path("profile", views.profile_view, name="profile"),

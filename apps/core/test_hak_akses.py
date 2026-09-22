@@ -12,6 +12,7 @@ from apps.auth_app.models import (
     data_tersembunyi_baru,
     peran_terkelola,
 )
+from apps.connections.models import Lingkungan, ServerProfile
 from apps.core.menus import (
     ALL_MENUS,
     assignable_menus,
@@ -143,6 +144,12 @@ class WewenangBeriTests(TestCase):
         self.assertEqual(wewenang_beri(self.editor, Role.ADMIN),
                          {"dashboard", "products", "kasir_penjualan", "koreksi_stok"})
 
+    def test_admin_ke_supervisor(self):
+        # Sama seperti ke kasir: koreksi_stok (tulis_kritis) buang, menus &
+        # connections (teknis) buang, sisanya yang dipegang editor.
+        self.assertEqual(wewenang_beri(self.editor, Role.SUPERVISOR),
+                         {"dashboard", "products", "kasir_penjualan"})
+
     def test_yang_tak_dipegang_tak_bisa_diberikan(self):
         self.assertFalse(boleh_beri(self.editor, Role.KASIR, _menu("stock")))
 
@@ -174,6 +181,22 @@ class MenuBaruTests(TestCase):
         target = _u("t2", Role.ADMIN)
         self.assertEqual(menu_baru(self.boss, target, ["users", "dashboard"]),
                          ["dashboard", "users"])
+
+    def test_admin_simpan_kosong_jadi_bantuan(self):
+        """Ruling R7: kosong dari NON-superadmin bukan `[]` — `menus_for` membaca
+        `[]` sebagai "pakai bawaan peran", jadi editor yang mengosongkan target
+        akan diam-diam MEMBERI target menu yang editornya sendiri tak pegang."""
+        target = _u("t3", Role.ADMIN, allowed_menu_keys=["dashboard", "products"])
+        self.assertEqual(menu_baru(self.editor, target, []), ["bantuan"])
+        target.allowed_menu_keys = menu_baru(self.editor, target, [])
+        target.save(update_fields=["allowed_menu_keys"])
+        self.assertEqual({m["key"] for m in menus_for(target, abaikan_tautan=True)}, {"bantuan"})
+
+    def test_superadmin_simpan_kosong_tetap_kosong(self):
+        """Bagi superadmin `[]` memang berarti "kembali ke bawaan peran" — itu
+        yang dijanjikan layar Kelola Menu, jadi tetap `[]`, bukan `["bantuan"]`."""
+        target = _u("t4", Role.ADMIN, allowed_menu_keys=["dashboard"])
+        self.assertEqual(menu_baru(self.boss, target, []), [])
 
 
 class DataTersembunyiBaruTests(TestCase):
@@ -253,6 +276,24 @@ class KelolaMenuHttpTests(TestCase):
         self.client.force_login(self.admin2)
         self.assertNotEqual(self.client.get("/admin-panel/pengaturan/cadangan").status_code, 200)
 
+    def test_simpan_kosong_admin_jadi_bantuan(self):
+        """Ruling R7, lewat HTTP: editor tanpa keluarga keys di luar wewenangnya
+        di target — jadi simpanan kosongnya betul-betul kosong sebelum dijaga."""
+        editor = _u("editor3", Role.ADMIN, allowed_menu_keys=["menus", "dashboard", "products"])
+        target = _u("t5", Role.ADMIN, allowed_menu_keys=["dashboard", "products"])
+        self.client.force_login(editor)
+        self._simpan(target, [])
+        target.refresh_from_db()
+        self.assertEqual(target.allowed_menu_keys, ["bantuan"])
+        self.assertEqual({m["key"] for m in menus_for(target, abaikan_tautan=True)}, {"bantuan"})
+
+    def test_simpan_kosong_superadmin_tetap_kosong(self):
+        target = _u("t6", Role.ADMIN, allowed_menu_keys=["dashboard"])
+        self.client.force_login(self.boss)
+        self._simpan(target, [])
+        target.refresh_from_db()
+        self.assertEqual(target.allowed_menu_keys, [])
+
     def test_penanda_migrasi_ikut_menu(self):
         from apps.core.middleware import _migrasi_tertunda
 
@@ -261,3 +302,39 @@ class KelolaMenuHttpTests(TestCase):
             self.admin2.allowed_menu_keys = ["dashboard", "migrasi"]
             self.admin2.save(update_fields=["allowed_menu_keys"])
             self.assertEqual(_migrasi_tertunda(self.admin2), 2)
+
+
+class PerubahanPeranTests(TestCase):
+    """Ruling R8 — ganti peran lewat Manajemen User mengosongkan pemberian
+    menu & koneksi khusus, karena keduanya penilaian PER PERAN."""
+
+    def setUp(self):
+        self.boss = _u("boss_pp", Role.SUPERADMIN)
+        self.profil = ServerProfile.objects.create(
+            name="UJI-PP", host="h", db_name="d", username="u",
+            lingkungan=Lingkungan.UJI)
+        self.target = _u("naik_turun", Role.ADMIN,
+                         allowed_menu_keys=["dashboard", "koreksi_stok", "connections"])
+        self.target.koneksi_khusus.add(self.profil)
+
+    def _simpan(self, role):
+        self.client.force_login(self.boss)
+        return self.client.post("/admin-panel/users/save", {
+            "id": self.target.pk, "username": self.target.username,
+            "name": "Nama Sama", "role": role})
+
+    def test_ganti_peran_mengosongkan_menu_dan_koneksi_khusus(self):
+        self._simpan(Role.KASIR)
+        self.target.refresh_from_db()
+        self.assertEqual(self.target.allowed_menu_keys, [])
+        self.assertFalse(self.target.koneksi_khusus.exists())
+        self.assertNotIn(
+            "koreksi_stok",
+            {m["key"] for m in menus_for(self.target, abaikan_tautan=True)})
+
+    def test_tanpa_ganti_peran_menu_dan_koneksi_khusus_tetap(self):
+        self._simpan(Role.ADMIN)
+        self.target.refresh_from_db()
+        self.assertEqual(set(self.target.allowed_menu_keys),
+                         {"dashboard", "koreksi_stok", "connections"})
+        self.assertTrue(self.target.koneksi_khusus.filter(pk=self.profil.pk).exists())
