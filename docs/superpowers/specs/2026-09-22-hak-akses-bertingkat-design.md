@@ -146,6 +146,14 @@ Penanda `migrasi_tertunda` tampil bagi siapa pun yang memegang menu `migrasi`.
 - **Tidak ada admin produksi yang kehilangan akses saat deploy.** Per 2026-09-22 ke-11 admin
   di `TheScepter` sudah punya `allowed_menu_keys` eksplisit. Perubahan bawaan (§3.2) hanya
   mengenai akun admin baru, dan kunci teknis yang sudah ada di daftar mereka tetap berlaku.
+- **Memberi Manajemen User kepada admin berarti mempercayakan akun sesama admin kepadanya** —
+  ia bisa mereset password admin lain, dan dengan begitu memakai semua hak orang itu, termasuk
+  koneksi khusus.
+- **Admin tak bisa mencabut menu `tulis_kritis` yang diberikan superadmin kepada
+  kasir/supervisor** — disengaja: di luar wewenangnya, jadi dipertahankan `menu_baru()`.
+- **Simpanan kosong dari akun selain superadmin disimpan sebagai `["bantuan"]`, bukan `[]`**,
+  karena `[]` berarti menu bawaan peran. Perubahan peran mengosongkan pemberian menu dan
+  koneksi khusus.
 
 ## 4. Akses koneksi
 

@@ -243,7 +243,7 @@ Transaksi Barang · Opname Stok
 
 **Sinkronisasi:** Sinkronisasi Harga · Sinkronisasi Master Data · Riwayat Sinkronisasi
 
-**Administrasi:** Manajemen User · Koneksi Server · Log Aktivitas · Kelola Menu *(superadmin)*
+**Administrasi:** Manajemen User · Koneksi Server · Log Aktivitas · Kelola Menu *(bisa diberikan superadmin kepada admin; admin hanya bisa memberi menu non-teknis yang ia pegang sendiri)*
 
 ---
 
