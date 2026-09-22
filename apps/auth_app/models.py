@@ -98,6 +98,13 @@ class User(AbstractUser):
         on_delete=models.SET_NULL, related_name="pengguna",
     )
 
+    # Koneksi NON-produksi (uji coba / internal) yang boleh dipilih akun ini.
+    # Produksi tak perlu dicantumkan — semua akun tak terkunci boleh memakainya.
+    # Diatur superadmin di Kelola Menu; aturannya di apps/connections/akses.py.
+    koneksi_khusus = models.ManyToManyField(
+        "connections.ServerProfile", blank=True, related_name="pengguna_khusus",
+    )
+
     @property
     def koneksi_terkunci(self) -> bool:
         """Peran toko tak memilih koneksi; peran kantor memilih sendiri."""
