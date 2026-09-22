@@ -125,9 +125,9 @@ class HalamanDanPenanda(TestCase):
         self.admin = User.objects.create_user(
             "admin_m", password="rahasia-kuat-123", role=Role.ADMIN)
 
-    def test_menu_superadmin_saja(self):
+    def test_menu_teknis(self):
         m = next(m for m in ALL_MENUS if m["key"] == "migrasi")
-        self.assertTrue(m.get("superadmin_only"))
+        self.assertTrue(m.get("teknis"))
         self.assertEqual(m["href"], "/admin-panel/pengaturan/migrasi")
 
     def test_admin_tak_bisa_menjalankan(self):

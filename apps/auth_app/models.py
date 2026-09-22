@@ -48,6 +48,18 @@ DATA_KEYS = [
 DATA_KEY_SET = {d["key"] for d in DATA_KEYS}
 
 
+def data_tersembunyi_baru(pemberi, target, boleh) -> list[str]:
+    """`hidden_data_keys` baru untuk `target`. `boleh` = yang dicentang "boleh dilihat".
+
+    Kunci yang tersembunyi dari `pemberi` sendiri tak bisa ia ubah untuk orang
+    lain — nilainya di target dipertahankan (spec §3.5). Superadmin tak pernah
+    dibatasi, jadi baginya ini tetap "semua dikurangi yang dicentang"."""
+    boleh = {k for k in boleh if k in DATA_KEY_SET}
+    wewenang = DATA_KEY_SET - pemberi.hidden_data()
+    lama = {k for k in (target.hidden_data_keys or []) if k in DATA_KEY_SET}
+    return sorted((lama - wewenang) | (wewenang - boleh))
+
+
 class User(AbstractUser):
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.KASIR)
     # PRD §4.3 — Superadmin controls which menus an Admin may access.

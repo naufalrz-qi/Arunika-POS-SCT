@@ -58,7 +58,7 @@ class RuteBaru(TestCase):
 
     def test_layar_tulis_pendapatan_wajib_admin_dan_tautan(self):
         m = next(m for m in ALL_MENUS if m["key"] == "kas_pendapatan")
-        self.assertTrue(m.get("admin_only"))
+        self.assertTrue(m.get("tulis_kritis"))
         self.assertTrue(m.get("butuh_tautan"))
 
 

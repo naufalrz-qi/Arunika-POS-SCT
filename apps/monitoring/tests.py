@@ -87,7 +87,8 @@ class UsersSaveHardeningTests(TestCase):
     def test_admin_tak_bisa_bikin_superadmin(self):
         """Superadmin BOLEH membuat superadmin (_managed_roles memuat semua role
         untuknya). Yang harus ditolak: seorang admin menaikkan hak ke superadmin."""
-        admin = User.objects.create_user("adm", password="rahasia-kuat-123", role=Role.ADMIN)
+        admin = User.objects.create_user("adm", password="rahasia-kuat-123", role=Role.ADMIN,
+                                         allowed_menu_keys=["users"])
         self.client.force_login(admin)
         self.client.post(
             "/admin-panel/users/save",
@@ -114,7 +115,8 @@ class UsersSaveHardeningTests(TestCase):
         self.assertEqual(self.superadmin.role, Role.SUPERADMIN)
 
     def test_admin_tak_bisa_edit_superadmin(self):
-        admin = User.objects.create_user("adm2", password="rahasia-kuat-123", role=Role.ADMIN)
+        admin = User.objects.create_user("adm2", password="rahasia-kuat-123", role=Role.ADMIN,
+                                         allowed_menu_keys=["users"])
         self.client.force_login(admin)
         resp = self.client.post(
             "/admin-panel/users/save",
