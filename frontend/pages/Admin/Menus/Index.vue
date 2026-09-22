@@ -146,6 +146,8 @@ function save() {
         if (u) {
           u.allowed_menu_keys = menu_keys;
           u.allowed_data_keys = data_keys;
+          // Hanya dikirim saat tampilKoneksi true; jangan timpa dengan undefined.
+          if (payload.koneksi_khusus) u.koneksi_khusus = payload.koneksi_khusus;
         }
       },
       onFinish: () => (saving.value = false),
