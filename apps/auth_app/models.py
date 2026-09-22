@@ -10,6 +10,33 @@ class Role(models.TextChoices):
     SUPERADMIN = "superadmin", "Superadmin"
 
 
+# Urutan wewenang, dari yang paling sempit. Satu-satunya sumber untuk "siapa
+# boleh mengelola siapa" — dipakai Manajemen User DAN Kelola Menu. Dulu
+# Manajemen User punya aturannya sendiri (`_managed_roles`) yang memberi SETIAP
+# non-superadmin wewenang atas admin: supervisor yang diberi menu itu bisa
+# membuat akun admin.
+URUTAN_PERAN = [Role.KASIR, Role.SUPERVISOR, Role.ADMIN, Role.SUPERADMIN]
+
+
+def peringkat(role: str) -> int:
+    return URUTAN_PERAN.index(role) if role in URUTAN_PERAN else -1
+
+
+def peran_terkelola(pengelola) -> list[str]:
+    """Peran yang boleh DIJANGKAU dan DIBERIKAN `pengelola`: setara atau di bawahnya."""
+    batas = peringkat(pengelola.role)
+    return [r for r in URUTAN_PERAN if peringkat(r) <= batas]
+
+
+def bisa_kelola(pengelola, target) -> bool:
+    """Superadmin mengelola siapa pun. Selain itu: peran setara atau di bawahnya,
+    dan BUKAN dirinya sendiri — menyunting akun sendiri lewat layar pengelolaan
+    adalah jalan pintas menaikkan hak."""
+    if pengelola.role == Role.SUPERADMIN:
+        return True
+    return target.pk != pengelola.pk and peringkat(target.role) <= peringkat(pengelola.role)
+
+
 # Kelompok nilai uang yang bisa dicabut per user. Bukan nama kolom database:
 # satu kunci menutup beberapa field sekaligus (lihat _hidden_fields di
 # apps/monitoring/views.py untuk pemetaannya).

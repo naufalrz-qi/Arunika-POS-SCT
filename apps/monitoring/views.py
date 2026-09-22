@@ -15,7 +15,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 from inertia import defer, render
 
-from apps.auth_app.models import DATA_KEY_SET, DATA_KEYS, Role, TautanUser, User
+from apps.auth_app.models import DATA_KEY_SET, DATA_KEYS, Role, TautanUser, User, bisa_kelola, peran_terkelola
 from apps.auth_app.tautan import tautan_untuk, tautan_wajib
 from apps.connections.models import ServerProfile
 from apps.core.http import get_data, redirect_aman as _redirect_back
@@ -324,16 +324,21 @@ def _user_dict(u):
     }
 
 
-# PRD §4 — operational-account management.
-# Superadmin: kelola SEMUA user tanpa kecuali, termasuk mengangkat superadmin baru.
-# Admin: kelola kasir/supervisor/admin (termasuk sesama admin), tapi tidak bisa
-# membuat superadmin ataupun menyentuh akun superadmin. Set ini menjadi gerbang
-# ganda — role target yang boleh dijangkau DAN nilai role yang boleh diberikan —
-# sehingga eskalasi privilege via endpoint save/delete/reset tetap terblokir.
+# PRD §4 — siapa mengelola siapa. Aturannya satu, di
+# apps/auth_app/models.peran_terkelola/bisa_kelola, dipakai juga Kelola Menu.
+# Set ini tetap gerbang ganda: role target yang boleh dijangkau DAN nilai role
+# yang boleh diberikan, sehingga eskalasi via save/delete/reset terblokir.
 def _managed_roles(user):
-    if user.role == Role.SUPERADMIN:
-        return [Role.KASIR, Role.SUPERVISOR, Role.ADMIN, Role.SUPERADMIN]
-    return [Role.KASIR, Role.SUPERVISOR, Role.ADMIN]
+    return peran_terkelola(user)
+
+
+def _qs_terkelola(user):
+    """Akun yang boleh dijangkau `user` di Manajemen User. Bukan dirinya
+    sendiri, kecuali superadmin (yang dijaga `_last_superadmin_guard`)."""
+    qs = User.objects.filter(role__in=peran_terkelola(user))
+    if user.role != Role.SUPERADMIN:
+        qs = qs.exclude(pk=user.pk)
+    return qs
 
 
 def _last_superadmin_guard(target, new_role=None, deactivate=False):
@@ -349,7 +354,7 @@ def _last_superadmin_guard(target, new_role=None, deactivate=False):
 
 def users_index(request):
     roles = _managed_roles(request.user)
-    users = User.objects.filter(role__in=roles).order_by("role", "username")
+    users = _qs_terkelola(request.user).order_by("role", "username")
 
     # Pilihan user/divisi/pegawai legacy TIDAK dimuat di sini lagi: tautannya
     # per koneksi, jadi satu daftar dari koneksi yang kebetulan aktif akan
@@ -379,7 +384,7 @@ def users_save(request):
 
     username = (data.get("username") or "").strip()
     if user_id:
-        user = get_object_or_404(User, pk=user_id, role__in=managed)
+        user = get_object_or_404(_qs_terkelola(request.user), pk=user_id)
         if (err := _last_superadmin_guard(user, new_role=role)):
             request.session["flash_error"] = err
             return redirect("/admin-panel/users")
@@ -427,7 +432,7 @@ def users_save(request):
 
 
 def users_reset_password(request, user_id):
-    user = get_object_or_404(User, pk=user_id, role__in=_managed_roles(request.user))
+    user = get_object_or_404(_qs_terkelola(request.user), pk=user_id)
     data = get_data(request)
     password = data.get("password") or ""
     try:
@@ -444,7 +449,7 @@ def users_reset_password(request, user_id):
 
 def users_toggle(request, user_id):
     """Aktif/nonaktif (soft) — dulunya menempati endpoint 'delete'."""
-    user = get_object_or_404(User, pk=user_id, role__in=_managed_roles(request.user))
+    user = get_object_or_404(_qs_terkelola(request.user), pk=user_id)
     if user.pk == request.user.pk:
         request.session["flash_error"] = "Tidak bisa menonaktifkan akun sendiri."
         return redirect("/admin-panel/users")
@@ -462,7 +467,7 @@ def users_toggle(request, user_id):
 def users_delete(request, user_id):
     """Hapus PERMANEN (bug lama: endpoint ini cuma toggle nonaktif, hapus
     sungguhan tidak pernah ada)."""
-    user = get_object_or_404(User, pk=user_id, role__in=_managed_roles(request.user))
+    user = get_object_or_404(_qs_terkelola(request.user), pk=user_id)
     if user.pk == request.user.pk:
         request.session["flash_error"] = "Tidak bisa menghapus akun sendiri."
         return redirect("/admin-panel/users")
