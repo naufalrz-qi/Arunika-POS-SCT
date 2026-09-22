@@ -52,8 +52,11 @@ class MenuBawaanPeranTests(TestCase):
 
     def test_admin_tetap_dapat_sisanya_seperti_dulu(self):
         keys = _keys(self.admin)
-        for tetap in ("dashboard", "users", "connections", "logs", "stock"):
+        for tetap in ("dashboard", "logs", "stock"):
             self.assertIn(tetap, keys, f"{tetap} hilang dari admin")
+        # Menu teknis bukan bawaan peran mana pun (spec 2026-09-22 K2).
+        for teknis in ("users", "connections"):
+            self.assertNotIn(teknis, keys, f"{teknis} masih bawaan admin")
 
     def test_superadmin_melihat_semuanya(self):
         boss = User.objects.create_user("boss9", password="rahasia-kuat-123", role=Role.SUPERADMIN)
@@ -78,14 +81,12 @@ class MenuBawaanPeranTests(TestCase):
         self.assertEqual(_keys(self.kasir), {"kasir_stok", "stock", "bantuan"})
 
 
-class MenuKhususAdminTests(TestCase):
-    """`admin_only` — dicentang di Kelola Menu pun tak berlaku.
+class MenuTulisKritisTests(TestCase):
+    """`tulis_kritis` — bawaan admin; ke kasir/supervisor HANYA lewat superadmin.
 
-    Beda dari menu admin biasa: yang biasa memang BISA diberikan ke supervisor
-    (lihat test_kasir_bisa_diberi_menu_admin di atas). Kedua layar opname tidak,
-    karena Opname Stok kini juga menulis koreksi — satu baris di t_opname_stok
-    langsung menggeser stok lewat trigger dan terkirim ke pusat, dan tak ada
-    layar mana pun yang bisa menariknya kembali.
+    Dulu `admin_only`: dicentang pun dibuang untuk kasir/supervisor. Sekarang
+    superadmin yang memutuskan (spec 2026-09-22 K1/K5), dan yang dijaga adalah
+    siapa yang boleh MEMBERI — lihat apps/core/test_hak_akses.py.
     """
 
     # Empat layar tulis kas ikut di sini dengan alasan yang sama: uang bergerak
@@ -102,19 +103,17 @@ class MenuKhususAdminTests(TestCase):
         self.kasir = User.objects.create_user("kasir7", password="rahasia-kuat-123", role=Role.KASIR)
         self.admin = User.objects.create_user("admin7", password="rahasia-kuat-123", role=Role.ADMIN)
 
-    def test_ditandai_admin_only_di_registry(self):
-        ditandai = {m["key"] for m in ALL_MENUS if m.get("admin_only")}
+    def test_ditandai_tulis_kritis_di_registry(self):
+        ditandai = {m["key"] for m in ALL_MENUS if m.get("tulis_kritis")}
         self.assertEqual(ditandai, set(self.KUNCI))
 
-    def test_dicentang_pun_tidak_diberikan_ke_supervisor(self):
+    def test_pemberian_superadmin_ke_kasir_dan_supervisor_berlaku(self):
         for user in (self.spv, self.kasir):
             user.allowed_menu_keys = ["kasir_stok", *self.KUNCI]
             user.save(update_fields=["allowed_menu_keys"])
-            keys = _keys(user)
+            keys = {m["key"] for m in menus_for(user, abaikan_tautan=True)}
             for k in self.KUNCI:
-                self.assertNotIn(k, keys, f"{k} bocor ke {user.role}")
-            # Yang lain di daftar yang sama tetap berlaku — yang dibuang hanya
-            # yang ber-admin_only, bukan seluruh pemberiannya.
+                self.assertIn(k, keys, f"{k} tak berlaku untuk {user.role}")
             self.assertIn("kasir_stok", keys)
 
     def test_admin_dan_superadmin_tetap_mendapatkannya(self):
@@ -241,7 +240,7 @@ class LayarKelolaMenuTests(TestCase):
         self.assertIn("kasir_stok", default_keys_for(Role.KASIR))
         self.assertIn("kasir_stok", default_keys_for(Role.SUPERVISOR))
         self.assertNotIn("kasir_stok", default_keys_for(Role.ADMIN))
-        self.assertIn("users", default_keys_for(Role.ADMIN))
+        self.assertIn("dashboard", default_keys_for(Role.ADMIN))
         # Dan benar-benar sampai ke layar, bukan cuma benar di Python.
         isi = self.client.get("/admin-panel/menus").content.decode()
         self.assertIn("role_defaults", isi)

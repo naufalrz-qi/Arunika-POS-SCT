@@ -25,6 +25,8 @@ urlpatterns = [
     path("pengaturan/cadangan", views.cadangan_index, name="cadangan"),
     path("pengaturan/cadangan/jalankan", views.cadangan_jalankan, name="cadangan_jalankan"),
     path("pengaturan/cadangan/verifikasi", views.cadangan_verifikasi, name="cadangan_verifikasi"),
+    path("pengaturan/migrasi", views.migrasi_index, name="migrasi"),
+    path("pengaturan/migrasi/jalankan", views.migrasi_jalankan, name="migrasi_jalankan"),
     path("master/kelola-pelanggan", views.pelanggan, name="kelola_pelanggan"),
     path("master/kelola-pelanggan/save", views.pelanggan_save, name="kelola_pelanggan_save"),
     path("master/kelola-supplier", views.supplier, name="kelola_supplier"),
@@ -40,7 +42,7 @@ urlpatterns = [
     path("master/kode-nota/save", views.kode_nota_save, name="kode_nota_save"),
     path("master/transfer-arunika", views.transfer_arunika_index, name="transfer_arunika"),
     path("master/transfer-arunika/mulai", views.transfer_arunika_mulai, name="transfer_arunika_mulai"),
-    # Sub-path mewarisi `superadmin_only` milik `transfer_arunika` lewat
+    # Sub-path mewarisi flag `teknis` milik `transfer_arunika` lewat
     # pencocokan prefix di admin_network_guard — tak perlu entri menu sendiri.
     path("master/transfer-arunika/<int:pk>", views.transfer_arunika_detail,
          name="transfer_arunika_detail"),
@@ -155,7 +157,7 @@ urlpatterns = [
     path("laporan/biaya-operasional/export", views.biaya_operasional_export, name="biaya_operasional_export"),
     path("laporan/biaya-kategori", views.biaya_kategori, name="biaya_kategori"),
     path("laporan/biaya-kategori/export", views.biaya_kategori_export, name="biaya_kategori_export"),
-    # Menu management (superadmin) + own profile
+    # Menu management (menu teknis) + own profile
     path("menus", views.menus_index, name="menus"),
     path("menus/save", views.menus_save, name="menus_save"),
     path("profile", views.profile_view, name="profile"),

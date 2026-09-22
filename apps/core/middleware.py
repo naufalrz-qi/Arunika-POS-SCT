@@ -67,6 +67,34 @@ def _sumber_laporan() -> str:
         return "legacy"
 
 
+def _migrasi_tertunda(user) -> int:
+    """Jumlah migrasi pangkal yang belum diterapkan. 0 bagi yang tak memegang menu migrasi.
+
+    Ini yang membuat Pembaruan Database benar-benar menggantikan terminal: tanpa
+    penanda, superadmin harus INGAT membuka halamannya sesudah tiap rilis —
+    beban ingatan yang sama dengan mengetik `migrate`, dan lupa berarti halaman
+    yang gagal dengan "Invalid column name" tanpa penjelasan.
+
+    Hanya pangkal, sengaja: lokal dan ~11 ms (terukur; 137 ms sekali di awal
+    proses saat modul migrasi dimuat). DB Arunika TIDAK dihubungi di sini —
+    prop ini ikut di setiap halaman, dan satu server jauh yang mati akan menahan
+    setiap render lima detik. Migrasi `bisnis` baru tetap tertangkap, sebab
+    pangkal ikut mencatatnya (lihat apps/core/migrasi.py).
+    """
+    if not (user and getattr(user, "is_authenticated", False)):
+        return 0
+    # Ikut MENU, bukan peran: superadmin bisa memberikan Pembaruan Database ke
+    # admin, dan penandanya harus ikut ke sana (spec 2026-09-22 §3.6).
+    if "migrasi" not in {m["key"] for m in menus_for(user, abaikan_tautan=True)}:
+        return 0
+    try:
+        from apps.core.migrasi import tertunda
+
+        return len(tertunda())
+    except Exception:  # pragma: no cover — penanda tak boleh menjatuhkan halaman
+        return 0
+
+
 def _notif(user):
     """Isi lonceng untuk `user`. Lazy — hanya jalan pada render Inertia.
 
@@ -112,9 +140,23 @@ def inertia_share(get_response):
         # tak bisa berpindah lewat sesi. Koneksi menentukan ke server toko MANA
         # sebuah nota tertulis; nota yang masuk ke cabang salah tak bisa ditarik
         # karena trigger legacy langsung mengirimkannya ke pusat.
-        if user is not None and getattr(user, "is_authenticated", False) \
-                and getattr(user, "koneksi_terkunci", False):
+        masuk = user is not None and getattr(user, "is_authenticated", False)
+        if masuk and getattr(user, "koneksi_terkunci", False):
             mssql.set_request_profile_id(user.server_profile_id, strict=True)
+        elif masuk:
+            # Pilihan di sesi divalidasi setiap permintaan: izin koneksi bisa
+            # dicabut, atau profilnya berubah jadi non-produksi, sesudah dipilih
+            # (spec 2026-09-22 §4.3). Pilihan yang tak lagi boleh dibuang,
+            # bukan dipakai diam-diam.
+            from apps.connections.akses import profil_untuk_sesi
+
+            pilihan = session.get("active_profile_id") if session is not None else None
+            pid = profil_untuk_sesi(user, pilihan)
+            if session is not None and pilihan is not None and pid != pilihan:
+                session.pop("active_profile_id", None)
+            # None bagi non-superadmin = tak ada koneksi yang boleh: jangan
+            # jatuh ke is_default, yang bisa saja profil terbatas.
+            mssql.set_request_profile_id(pid, strict=pid is None and user.role != "superadmin")
         else:
             mssql.set_request_profile_id(session.get("active_profile_id") if session else None)
 
@@ -124,15 +166,13 @@ def inertia_share(get_response):
             return profile.as_dict() if profile else None
 
         def connections_list():
-            from apps.connections.models import ServerProfile
+            # Satu aturan untuk semua peran (apps/connections/akses.py): akun
+            # terkunci mendapat servernya sendiri, admin mendapat Produksi +
+            # pemberian superadmin, superadmin semuanya. Penjagaan sebenarnya
+            # tetap di server (connections_set_default + validasi sesi di atas).
+            from apps.connections.akses import koneksi_boleh
 
-            if user is not None and getattr(user, "is_authenticated", False)                     and getattr(user, "koneksi_terkunci", False):
-                # Hanya miliknya sendiri: pemilih koneksi di navbar jadi tak
-                # punya apa pun untuk dipindah. Penjagaan sebenarnya tetap di
-                # server (connections_set_default) — ini supaya layarnya jujur.
-                p = user.server_profile
-                return [p.as_dict()] if p else []
-            return [p.as_dict() for p in ServerProfile.objects.all()]
+            return [p.as_dict() for p in koneksi_boleh(user)]
 
         share(
             request,
@@ -150,6 +190,7 @@ def inertia_share(get_response):
             # isinya cuma membaca env + satu kolom SQLite — nol round-trip.
             sumber_laporan=lambda: _sumber_laporan(),
             notif=lambda: _notif(user),
+            migrasi_tertunda=lambda: _migrasi_tertunda(user),
             flash=lambda: {
                 "success": request.session.pop("flash_success", None),
                 "error": request.session.pop("flash_error", None),

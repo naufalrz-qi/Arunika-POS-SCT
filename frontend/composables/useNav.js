@@ -101,6 +101,7 @@ const LIPATAN = [
       kode_nota: "Awalan nomor nota tiap divisi.",
       transfer_arunika: "Salin data legacy ke database Arunika untuk pengujian.",
       cadangan: "Cadangan database aplikasi dan pemulihannya.",
+      migrasi: "Terapkan perubahan skema sesudah rilis, tanpa terminal.",
       informasi_perusahaan: "Nama, alamat, dan kontak perusahaan.",
       kelola_referensi: "Kategori, merk, jenis biaya, dan tabel referensi lain.",
     },

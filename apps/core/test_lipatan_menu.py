@@ -47,7 +47,8 @@ class LipatanMenuTests(TestCase):
     def test_blok_terbaca(self):
         """Pengurai yang tak menemukan apa-apa membuat semua test di bawah lolos."""
         self.assertGreaterEqual(len(self.lipatan), 9)
-        self.assertEqual(sum(len(l["anggota"]) for l in self.lipatan), 34)
+        # 35 = 34 + `migrasi` (Pembaruan Database) di lipatan Pengaturan.
+        self.assertEqual(sum(len(l["anggota"]) for l in self.lipatan), 35)
 
     def test_setiap_anggota_adalah_menu_yang_ada(self):
         for l in self.lipatan:

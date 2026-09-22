@@ -92,7 +92,7 @@ Kolom **Sumber baca**: `replica` = bisa membaca replica laporan bila dikonfigura
 | Manajemen User | `users` | khusus | pangkal | — | Siap |
 | Koneksi Server | `connections` | khusus | pangkal | — | Siap |
 | Log Aktivitas | `logs` | khusus | pangkal | — | Siap |
-| Kelola Menu | `menus` | khusus | pangkal | — | Siap (superadmin) |
+| Kelola Menu | `menus` | khusus | pangkal | — | Siap (bisa diberikan superadmin kepada admin; admin hanya bisa memberi menu non-teknis yang ia pegang sendiri) |
 
 ⚠ **Jebakan penamaan:** key `stok_akhir` menunjuk halaman **Mutasi Stok**, sedangkan halaman
 **Stok Akhir** ber-key `stock`. Hati-hati saat memberikan hak menu per key.

@@ -23,13 +23,17 @@ class Lingkungan(models.TextChoices):
     Nama bukan penanda: sebuah profil bisa diganti namanya, dan yang salah baca
     di sini menjalankan uji coba di atas data sungguhan.
 
-    Sengaja TIDAK menggerakkan izin apa pun. Ia label — supaya tak ada satu pun
-    jalur tulis yang bisa rusak karena penambahan ini — dan tugasnya membuat
-    operator selalu tahu sedang di mana.
+    Sejak 2026-09-22 label ini MENGGERAKKAN izin: semua yang bukan Produksi
+    hanya bisa dipilih superadmin, kecuali ia memberikannya per user lewat
+    `User.koneksi_khusus` di Kelola Menu (apps/connections/akses.py). `Internal`
+    untuk database milik kita sendiri yang bukan server POS — AMPHOREUS.
+    Jalur tulis tak ikut berubah: pemeriksaan `== UJI` di muat.py,
+    salin_legacy.py, dan transfer.py tetap persis seperti sebelumnya.
     """
 
     PRODUKSI = "produksi", "Produksi"
     UJI = "uji", "Uji coba"
+    INTERNAL = "internal", "Internal"
 
 
 class ConnStatus(models.TextChoices):

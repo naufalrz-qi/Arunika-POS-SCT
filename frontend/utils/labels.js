@@ -64,6 +64,7 @@ export const DB_TYPE_LABELS = {
 export const LINGKUNGAN_LABELS = {
   produksi: "Produksi",
   uji: "Uji coba",
+  internal: "Internal",
 };
 
 /** Label untuk sebuah slug, atau slug-nya sendiri kalau belum dipetakan. */

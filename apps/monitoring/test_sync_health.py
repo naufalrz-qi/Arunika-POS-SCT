@@ -339,15 +339,19 @@ class SyncHealthAksesTests(TestCase):
         self.assertEqual(r.status_code, 302)
 
     def test_admin_tanpa_batasan_pun_tetap_tak_bisa(self):
-        """Menu superadmin-only tak pernah masuk daftar yang bisa diberikan, jadi
-        admin dengan hak default penuh pun tetap tertutup."""
+        """Menu teknis bukan bawaan peran mana pun, jadi admin dengan hak bawaan pun tetap tertutup."""
         self.client.force_login(self.admin_penuh)
         self.assertEqual(self.client.get("/admin-panel/master/sync-health").status_code, 302)
 
-    def test_tak_muncul_di_daftar_yang_bisa_diberikan(self):
-        from apps.core.menus import assignable_menus
+    def test_teknis_hanya_superadmin_yang_memberi(self):
+        from apps.core.menus import ALL_MENUS, wewenang_beri
 
-        self.assertNotIn("sync_health", {m["key"] for m in assignable_menus()})
+        menu = next(m for m in ALL_MENUS if m["key"] == "sync_health")
+        self.assertTrue(menu.get("teknis"))
+        pemberi = User.objects.create_user(
+            "admin_km", password="rahasia-kuat-123", role=Role.ADMIN,
+            allowed_menu_keys=["menus", "sync_health"])
+        self.assertNotIn("sync_health", wewenang_beri(pemberi, Role.ADMIN))
 
     def test_superadmin_boleh(self):
         self.client.force_login(self.superadmin)

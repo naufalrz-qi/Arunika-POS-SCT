@@ -7,6 +7,7 @@ import Button from "@/components/ui/Button.vue";
 import Badge from "@/components/ui/Badge.vue";
 import Input from "@/components/ui/Input.vue";
 import Icon from "@/components/nav/Icon.vue";
+import { LINGKUNGAN_LABELS } from "@/utils/labels";
 
 const props = defineProps({
   // {id, username, name, role, allowed_menu_keys, allowed_data_keys}
@@ -15,6 +16,12 @@ const props = defineProps({
   sections: { type: Array, default: () => [] }, // [{key, label}] urut tampil
   data_keys: { type: Array, default: () => [] }, // [{key, label}] nilai uang
   role_defaults: { type: Object, default: () => ({}) }, // {peran: [menu_key]}
+  // Kunci menu yang boleh DIUBAH pemakai layar ini, per peran target
+  // (wewenang_beri di server). Server tetap menegakkannya sendiri.
+  boleh_beri: { type: Object, default: () => ({}) },
+  boleh_data: { type: Array, default: () => [] }, // kunci nilai uang yang boleh diubah
+  saya_superadmin: { type: Boolean, default: false },
+  koneksi_nonprod: { type: Array, default: () => [] }, // [{id, name, lingkungan}], superadmin saja
 });
 
 const ROLE_LABELS = { kasir: "Kasir", supervisor: "Supervisor", admin: "Admin" };
@@ -27,12 +34,21 @@ function bawaanUntuk(key) {
     .map(([role]) => ROLE_LABELS[role] || role);
 }
 
-// Menu ber-`admin_only` tak berlaku untuk kasir/supervisor — menus_for() akan
-// membuangnya berapa pun centang di sini. Kotaknya dimatikan supaya layar ini
-// tidak menjanjikan akses yang takkan pernah terjadi; penjagaan sebenarnya
-// tetap di server (apps/core/menus.py).
+// Centang yang TIDAK boleh diubah pemakai layar ini. Penjagaan sebenarnya di
+// server — menu_baru() mempertahankan yang di luar wewenang — jadi ini hanya
+// supaya layar tak menjanjikan perubahan yang takkan tersimpan.
 const terkunci = (m) =>
-  Boolean(m.admin_only) && Boolean(selected.value) && selected.value.role !== "admin";
+  Boolean(selected.value) && !(props.boleh_beri[selected.value.role] || []).includes(m.key);
+function alasanKunci(m) {
+  if (m.teknis) return "khusus superadmin";
+  if (m.tulis_kritis && selected.value?.role !== "admin") return "superadmin saja untuk peran ini";
+  return "tidak Anda pegang";
+}
+const dataTerkunci = (d) => !props.boleh_data.includes(d.key);
+const koneksiChecked = reactive({});
+const tampilKoneksi = computed(
+  () => props.saya_superadmin && selected.value?.role === "admin" && props.koneksi_nonprod.length > 0,
+);
 
 // Menu bawaan peran user yang sedang dipilih.
 const bawaanTerpilih = computed(() =>
@@ -72,13 +88,19 @@ function sectionState(s) {
   return { all: on === s.items.length, some: on > 0 && on < s.items.length, on };
 }
 function toggleSection(s) {
-  const target = !sectionState(s).all;
-  s.items.forEach((m) => (checked[m.key] = target));
+  const bisa = s.items.filter((m) => !terkunci(m));
+  const target = !bisa.every((m) => checked[m.key]);
+  bisa.forEach((m) => (checked[m.key] = target));
 }
 // `value` boleh boolean (semua/kosong) atau daftar kunci (mis. bawaan peran).
+// Kotak terkunci tak disentuh: tombol massal tak boleh tampak mengubah yang
+// memang tak bisa diubah.
 function setAll(value) {
   const daftar = Array.isArray(value) ? value : null;
-  props.menus.forEach((m) => (checked[m.key] = daftar ? daftar.includes(m.key) : value));
+  props.menus.forEach((m) => {
+    if (terkunci(m)) return;
+    checked[m.key] = daftar ? daftar.includes(m.key) : value;
+  });
 }
 
 function select(user) {
@@ -98,16 +120,24 @@ function select(user) {
   props.data_keys.forEach((d) => {
     dataChecked[d.key] = bolehData.includes(d.key);
   });
+  const khusus = user.koneksi_khusus || [];
+  props.koneksi_nonprod.forEach((k) => {
+    koneksiChecked[k.id] = khusus.includes(k.id);
+  });
 }
 
 function save() {
   if (!selected.value) return;
   const menu_keys = props.menus.filter((m) => checked[m.key]).map((m) => m.key);
   const data_keys = props.data_keys.filter((d) => dataChecked[d.key]).map((d) => d.key);
+  const payload = { user_id: selected.value.id, menu_keys, data_keys };
+  if (tampilKoneksi.value) {
+    payload.koneksi_khusus = props.koneksi_nonprod.filter((k) => koneksiChecked[k.id]).map((k) => k.id);
+  }
   saving.value = true;
   router.post(
     "/admin-panel/menus/save",
-    { user_id: selected.value.id, menu_keys, data_keys },
+    payload,
     {
       preserveScroll: true,
       onSuccess: () => {
@@ -116,6 +146,8 @@ function save() {
         if (u) {
           u.allowed_menu_keys = menu_keys;
           u.allowed_data_keys = data_keys;
+          // Hanya dikirim saat tampilKoneksi true; jangan timpa dengan undefined.
+          if (payload.koneksi_khusus) u.koneksi_khusus = payload.koneksi_khusus;
         }
       },
       onFinish: () => (saving.value = false),
@@ -130,6 +162,9 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
   <AdminLayout title="Kelola Menu">
     <p class="mb-4 text-sm text-ink-muted">
       Atur menu yang boleh diakses tiap user. <strong>Superadmin</strong> selalu punya akses penuh dan tidak muncul di daftar.
+      <template v-if="!saya_superadmin">
+        Anda hanya bisa mengubah menu yang Anda pegang sendiri; menu teknis hanya bisa diberikan superadmin.
+      </template>
     </p>
 
     <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -206,16 +241,48 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
                 v-for="d in data_keys"
                 :key="d.key"
                 :class="[
-                  'flex items-center gap-3 rounded-control border px-3 py-2.5 cursor-pointer transition-colors',
+                  'flex items-center gap-3 rounded-control border px-3 py-2.5 transition-colors',
+                  dataTerkunci(d) ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
                   dataChecked[d.key] ? 'border-brand-500/60 bg-brand-bg' : 'border-border-default hover:bg-surface-2',
                 ]"
               >
                 <input
                   type="checkbox"
                   v-model="dataChecked[d.key]"
+                  :disabled="dataTerkunci(d)"
                   class="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500"
                 />
                 <span class="text-sm text-ink-muted">{{ d.label }}</span>
+              </label>
+            </div>
+          </section>
+
+          <!-- Koneksi non-produksi: superadmin saja, dan hanya untuk admin —
+               kasir/supervisor dikunci ke satu server lewat Manajemen User. -->
+          <section v-if="tampilKoneksi" class="mb-5 rounded-control border border-border-default p-3">
+            <div class="mb-2 border-b border-border-default pb-1.5">
+              <h3 class="text-xs font-semibold uppercase tracking-wider text-ink-muted">Akses Koneksi Non-Produksi</h3>
+              <p class="mt-1 text-xs text-ink-subtle">
+                Koneksi uji coba dan internal (mis. AMPHOREUS) hanya muncul di pemilih koneksi
+                superadmin, kecuali dicentang di sini. Koneksi produksi selalu tersedia.
+              </p>
+            </div>
+            <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <label
+                v-for="k in koneksi_nonprod"
+                :key="k.id"
+                :class="[
+                  'flex cursor-pointer items-center gap-3 rounded-control border px-3 py-2.5 transition-colors',
+                  koneksiChecked[k.id] ? 'border-brand-500/60 bg-brand-bg' : 'border-border-default hover:bg-surface-2',
+                ]"
+              >
+                <input
+                  type="checkbox"
+                  v-model="koneksiChecked[k.id]"
+                  class="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500"
+                />
+                <span class="flex-1 text-sm text-ink-muted">{{ k.name }}</span>
+                <Badge variant="neutral" class="shrink-0 text-[10px]">{{ LINGKUNGAN_LABELS[k.lingkungan] || k.lingkungan }}</Badge>
               </label>
             </div>
           </section>
@@ -240,7 +307,7 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
                 <label
                   v-for="m in s.items"
                   :key="m.key"
-                  :title="terkunci(m) ? `${m.label} hanya untuk admin — mencentangnya di sini tidak berlaku.` : undefined"
+                  :title="terkunci(m) ? `${m.label}: ${alasanKunci(m)}.` : undefined"
                   :class="[
                     'flex items-center gap-3 rounded-control border px-3 py-2.5 transition-colors',
                     terkunci(m) ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
@@ -250,7 +317,7 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
                   <input type="checkbox" v-model="checked[m.key]" :disabled="terkunci(m)" class="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500" />
                   <Icon :name="m.icon" size="h-4 w-4" class="shrink-0 text-ink-subtle" />
                   <span class="flex-1 text-sm text-ink-muted">{{ m.label }}</span>
-                  <Badge v-if="terkunci(m)" variant="neutral" class="shrink-0 text-[10px]">admin saja</Badge>
+                  <Badge v-if="terkunci(m)" variant="neutral" class="shrink-0 text-[10px]">{{ alasanKunci(m) }}</Badge>
                   <!-- Penanda jatah peran: tanpa ini tak ada cara membedakan
                        menu yang memang bawaan kasir/supervisor dari menu admin
                        yang kebetulan sedang diberikan kepada mereka. -->

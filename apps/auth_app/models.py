@@ -10,6 +10,33 @@ class Role(models.TextChoices):
     SUPERADMIN = "superadmin", "Superadmin"
 
 
+# Urutan wewenang, dari yang paling sempit. Satu-satunya sumber untuk "siapa
+# boleh mengelola siapa" — dipakai Manajemen User DAN Kelola Menu. Dulu
+# Manajemen User punya aturannya sendiri (`_managed_roles`) yang memberi SETIAP
+# non-superadmin wewenang atas admin: supervisor yang diberi menu itu bisa
+# membuat akun admin.
+URUTAN_PERAN = [Role.KASIR, Role.SUPERVISOR, Role.ADMIN, Role.SUPERADMIN]
+
+
+def peringkat(role: str) -> int:
+    return URUTAN_PERAN.index(role) if role in URUTAN_PERAN else -1
+
+
+def peran_terkelola(pengelola) -> list[str]:
+    """Peran yang boleh DIJANGKAU dan DIBERIKAN `pengelola`: setara atau di bawahnya."""
+    batas = peringkat(pengelola.role)
+    return [r for r in URUTAN_PERAN if peringkat(r) <= batas]
+
+
+def bisa_kelola(pengelola, target) -> bool:
+    """Superadmin mengelola siapa pun. Selain itu: peran setara atau di bawahnya,
+    dan BUKAN dirinya sendiri — menyunting akun sendiri lewat layar pengelolaan
+    adalah jalan pintas menaikkan hak."""
+    if pengelola.role == Role.SUPERADMIN:
+        return True
+    return target.pk != pengelola.pk and peringkat(target.role) <= peringkat(pengelola.role)
+
+
 # Kelompok nilai uang yang bisa dicabut per user. Bukan nama kolom database:
 # satu kunci menutup beberapa field sekaligus (lihat _hidden_fields di
 # apps/monitoring/views.py untuk pemetaannya).
@@ -19,6 +46,18 @@ DATA_KEYS = [
     {"key": "nominal", "label": "Nominal & omset"},
 ]
 DATA_KEY_SET = {d["key"] for d in DATA_KEYS}
+
+
+def data_tersembunyi_baru(pemberi, target, boleh) -> list[str]:
+    """`hidden_data_keys` baru untuk `target`. `boleh` = yang dicentang "boleh dilihat".
+
+    Kunci yang tersembunyi dari `pemberi` sendiri tak bisa ia ubah untuk orang
+    lain — nilainya di target dipertahankan (spec §3.5). Superadmin tak pernah
+    dibatasi, jadi baginya ini tetap "semua dikurangi yang dicentang"."""
+    boleh = {k for k in boleh if k in DATA_KEY_SET}
+    wewenang = DATA_KEY_SET - pemberi.hidden_data()
+    lama = {k for k in (target.hidden_data_keys or []) if k in DATA_KEY_SET}
+    return sorted((lama - wewenang) | (wewenang - boleh))
 
 
 class User(AbstractUser):
@@ -57,6 +96,13 @@ class User(AbstractUser):
     server_profile = models.ForeignKey(
         "connections.ServerProfile", null=True, blank=True,
         on_delete=models.SET_NULL, related_name="pengguna",
+    )
+
+    # Koneksi NON-produksi (uji coba / internal) yang boleh dipilih akun ini.
+    # Produksi tak perlu dicantumkan — semua akun tak terkunci boleh memakainya.
+    # Diatur superadmin di Kelola Menu; aturannya di apps/connections/akses.py.
+    koneksi_khusus = models.ManyToManyField(
+        "connections.ServerProfile", blank=True, related_name="pengguna_khusus",
     )
 
     @property

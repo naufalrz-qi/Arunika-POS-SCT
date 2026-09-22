@@ -84,7 +84,7 @@ SPEC = {
         # Bertrigger `insert_temp_m_t_pendapatan` (aktif di GUDANG dan testgudang,
         # sama seperti t_biaya_operasional), jadi barisnya masuk antrean kirim ke
         # sink pusat SEKETIKA disimpan — bukan sesuatu yang bisa ditarik kembali.
-        # Itu alasan menunya admin_only + butuh_tautan seperti tiga saudaranya.
+        # Itu alasan menunya tulis_kritis + butuh_tautan seperti tiga saudaranya.
         "kolom": ["no_transaksi", "kd_divisi", "kd_pendapatan", "kd_jenis", "kd_kas",
                   "tanggal", "nominal", "no_bukti", "keterangan", "kd_user",
                   "tanggal_server"],

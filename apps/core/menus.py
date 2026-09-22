@@ -31,6 +31,15 @@ SECTION_LABELS = {
     "admin": "Administrasi",
 }
 
+# Flag yang menentukan siapa boleh MEMBERI (bukan siapa boleh punya — spec
+# docs/superpowers/specs/2026-09-22-hak-akses-bertingkat-design.md):
+#   "teknis"       — hanya superadmin yang memberikannya, dan bukan bawaan
+#                    peran mana pun. Layar yang menyentuh database, server,
+#                    atau hak akses orang lain.
+#   "tulis_kritis" — bawaan admin; ke kasir/supervisor hanya lewat superadmin.
+#   "always"       — tak bisa dicabut dan tak tampil di Kelola Menu.
+#   "butuh_tautan" — tertutup selama akun belum tertaut di koneksi aktif.
+# Aturan pemberiannya satu, di wewenang_beri().
 ALL_MENUS = [
     # --- Kasir & supervisor ---------------------------------------------------
     # "roles": menu ini BAWAAN peran yang disebut, dan sengaja BUKAN bawaan admin
@@ -115,23 +124,24 @@ ALL_MENUS = [
     {"key": "stok_akhir", "label": "Mutasi Stok", "icon": "refresh", "href": "/admin-panel/inventory/mutasi-stok", "section": "stok"},
     {"key": "stok_awal", "label": "Stok Awal Barang", "icon": "box", "href": "/admin-panel/inventory/stok-awal", "section": "stok"},
     {"key": "transaksi_barang", "label": "Transaksi Barang", "icon": "list", "href": "/admin-panel/inventory/transaksi", "section": "stok"},
-    # "admin_only": ketiga layar opname khusus admin/superadmin, dan itu bukan
-    # sekadar bawaan yang bisa dilonggarkan lewat Kelola Menu. Koreksi Stok
-    # MENULIS: satu baris di t_opname_stok langsung menggeser stok lewat trigger
-    # dan terkirim ke pusat, dan tak ada layar mana pun yang bisa menariknya
-    # kembali. Kedua layar laporannya ikut dikunci karena mereka memperlihatkan
-    # selisih yang jadi dasar koreksi itu.
-    {"key": "opname", "label": "Opname Stok", "icon": "clipboard", "href": "/admin-panel/inventory/opname", "section": "stok", "admin_only": True},
-    {"key": "koreksi_stok", "label": "Koreksi Stok", "icon": "pencil", "href": "/admin-panel/inventory/koreksi-stok", "section": "stok", "admin_only": True, "butuh_tautan": True},
+    # "tulis_kritis": bawaan admin, dan ke kasir/supervisor HANYA lewat
+    # superadmin (spec 2026-09-22 K5). Koreksi Stok MENULIS: satu baris di
+    # t_opname_stok langsung menggeser stok lewat trigger dan terkirim ke
+    # pusat, dan tak ada layar mana pun yang bisa menariknya kembali. Kedua
+    # layar laporannya ikut karena mereka memperlihatkan selisih yang jadi
+    # dasar koreksi itu. Yang dijaga adalah siapa yang boleh MEMBERI — lihat
+    # wewenang_beri().
+    {"key": "opname", "label": "Opname Stok", "icon": "clipboard", "href": "/admin-panel/inventory/opname", "section": "stok", "tulis_kritis": True},
+    {"key": "koreksi_stok", "label": "Koreksi Stok", "icon": "pencil", "href": "/admin-panel/inventory/koreksi-stok", "section": "stok", "tulis_kritis": True, "butuh_tautan": True},
     # Section "stok" sudah cukup: "Operasional" bukan section backend, melainkan
     # tab navbar (useNav.js) yang menggabungkan stok+promo+kas. Rute /export,
     # /detail, dan /save mewarisi menu key ini lewat pencocokan prefix di
     # menu_key_for_path — termasuk penjagaannya.
     # Analitik (FMI)
     # Menyebut NAMA PENGINPUT tiap dokumen, jadi setara `opname` yang juga
-    # admin_only. Bukan superadmin_only: ini pekerjaan yang mengelola toko,
+    # tulis_kritis. Bukan teknis: ini pekerjaan yang mengelola toko,
     # bukan yang memegang seluruh jaringan.
-    {"key": "nota_mundur", "label": "Nota Tanggal Mundur", "icon": "calendar", "href": "/admin-panel/analitik/nota-mundur", "section": "analitik", "admin_only": True},
+    {"key": "nota_mundur", "label": "Nota Tanggal Mundur", "icon": "calendar", "href": "/admin-panel/analitik/nota-mundur", "section": "analitik", "tulis_kritis": True},
     {"key": "fmi_penjualan", "label": "FMI Penjualan", "icon": "trending", "href": "/admin-panel/analitik/fmi-penjualan", "section": "analitik"},
     {"key": "fmi_stok", "label": "FMI Stok", "icon": "chart", "href": "/admin-panel/analitik/fmi-stok", "section": "analitik"},
     {"key": "klasifikasi_pelanggan", "label": "Klasifikasi Pelanggan", "icon": "user", "href": "/admin-panel/analitik/klasifikasi-pelanggan", "section": "analitik"},
@@ -143,14 +153,14 @@ ALL_MENUS = [
     {"key": "shift", "label": "Shift Kasir", "icon": "clock", "href": "/admin-panel/kas/shift", "section": "kas"},
     {"key": "biaya_operasional", "label": "Biaya Operasional", "icon": "cash", "href": "/admin-panel/laporan/biaya-operasional", "section": "kas"},
     {"key": "biaya_kategori", "label": "Biaya per Kategori", "icon": "chart", "href": "/admin-panel/laporan/biaya-kategori", "section": "kas"},
-    # Empat layar TULIS kas. `admin_only` + `butuh_tautan` dengan alasan yang
+    # Empat layar TULIS kas. `tulis_kritis` + `butuh_tautan` dengan alasan yang
     # sama persis seperti Koreksi Stok: uang bergerak begitu disimpan,
     # `kd_user` menentukan itu tercatat atas nama siapa, dan tak ada layar mana
     # pun di sini yang bisa menariknya kembali.
-    {"key": "kas_biaya_input", "label": "Input Biaya Operasional", "icon": "cash", "href": "/admin-panel/kas/input/biaya", "section": "kas", "admin_only": True, "butuh_tautan": True},
-    {"key": "kas_pendapatan", "label": "Pendapatan Lain-Lain", "icon": "cash", "href": "/admin-panel/kas/input/pendapatan", "section": "kas", "admin_only": True, "butuh_tautan": True},
-    {"key": "kas_penambahan", "label": "Penambahan Kas", "icon": "cash", "href": "/admin-panel/kas/input/penambahan", "section": "kas", "admin_only": True, "butuh_tautan": True},
-    {"key": "kas_mutasi", "label": "Mutasi Kas", "icon": "refresh", "href": "/admin-panel/kas/input/mutasi", "section": "kas", "admin_only": True, "butuh_tautan": True},
+    {"key": "kas_biaya_input", "label": "Input Biaya Operasional", "icon": "cash", "href": "/admin-panel/kas/input/biaya", "section": "kas", "tulis_kritis": True, "butuh_tautan": True},
+    {"key": "kas_pendapatan", "label": "Pendapatan Lain-Lain", "icon": "cash", "href": "/admin-panel/kas/input/pendapatan", "section": "kas", "tulis_kritis": True, "butuh_tautan": True},
+    {"key": "kas_penambahan", "label": "Penambahan Kas", "icon": "cash", "href": "/admin-panel/kas/input/penambahan", "section": "kas", "tulis_kritis": True, "butuh_tautan": True},
+    {"key": "kas_mutasi", "label": "Mutasi Kas", "icon": "refresh", "href": "/admin-panel/kas/input/mutasi", "section": "kas", "tulis_kritis": True, "butuh_tautan": True},
     # Master Data — sub-grup 1: data master
     # Master data adalah wewenang admin, bukan pekerjaan harian toko: satu salah
     # ketik di sini ikut terbawa ke SETIAP nota yang menunjuk ke baris itu, dan
@@ -186,38 +196,42 @@ ALL_MENUS = [
     {"key": "riwayat_update_barang", "label": "Riwayat Update Barang", "icon": "clock", "href": "/admin-panel/master/riwayat-update-barang", "section": "master_harga"},
     {"key": "pergerakan_harga", "label": "Pergerakan Harga", "icon": "trending", "href": "/admin-panel/master/pergerakan-harga", "section": "master_harga"},
     # Master Data — sub-grup 3: sinkronisasi antar-server
-    {"key": "sync_harga", "label": "Sinkronisasi Harga", "icon": "refresh", "href": "/admin-panel/master/sync-harga", "section": "master_sync"},
-    {"key": "sync_master", "label": "Sinkronisasi Master Data", "icon": "refresh", "href": "/admin-panel/master/sync-master", "section": "master_sync"},
+    {"key": "sync_harga", "label": "Sinkronisasi Harga", "icon": "refresh", "href": "/admin-panel/master/sync-harga", "section": "master_sync", "teknis": True},
+    {"key": "sync_master", "label": "Sinkronisasi Master Data", "icon": "refresh", "href": "/admin-panel/master/sync-master", "section": "master_sync", "teknis": True},
     # Label berubah jadi "Riwayat Operasi" karena isinya bukan lagi cuma sync
     # harga/master: hub_pull, feed_sync, harga_sync, transfer, dan cadangan
     # menulis ke tabel yang sama. `key` dan `href` sengaja TIDAK ikut berubah —
     # "sync_history" tersimpan di `allowed_menu_keys` tiap akun yang haknya
     # diatur satu per satu, dan menggantinya mencabut menu itu diam-diam dari
     # mereka semua.
-    {"key": "sync_history", "label": "Riwayat Operasi", "icon": "list", "href": "/admin-panel/master/sync-history", "section": "master_sync"},
-    # Superadmin-only: memperlihatkan kondisi seluruh armada server sekaligus
+    {"key": "sync_history", "label": "Riwayat Operasi", "icon": "list", "href": "/admin-panel/master/sync-history", "section": "master_sync", "teknis": True},
+    # Teknis (hanya superadmin yang memberi): memperlihatkan kondisi seluruh armada server sekaligus
     # (antrean menumpuk, sync yang mati), bukan data satu koneksi yang sedang
     # dipakai. Itu urusan yang memegang seluruh jaringan toko, bukan per-admin.
-    {"key": "sync_health", "label": "Kesehatan Sync", "icon": "power", "href": "/admin-panel/master/sync-health", "section": "master_sync", "superadmin_only": True},
-    # Superadmin-only: kepala_nota menentukan awalan SETIAP nomor nota yang
+    {"key": "sync_health", "label": "Kesehatan Sync", "icon": "power", "href": "/admin-panel/master/sync-health", "section": "master_sync", "teknis": True},
+    # Teknis (hanya superadmin yang memberi): kepala_nota menentukan awalan SETIAP nomor nota yang
     # dibuat sesudahnya, dan salah isi berarti nota tercatat atas nama cabang
     # lain — sekali tertulis, tak bisa ditarik.
-    {"key": "kode_nota", "label": "Kelola Kode Nota", "icon": "key", "href": "/admin-panel/master/kode-nota", "section": "master_sync", "superadmin_only": True},
+    {"key": "kode_nota", "label": "Kelola Kode Nota", "icon": "key", "href": "/admin-panel/master/kode-nota", "section": "master_sync", "teknis": True},
     # Membuat profil + database baru di instans lokal dan membaca server mana pun.
-    {"key": "transfer_arunika", "label": "Transfer ke Arunika", "icon": "refresh", "href": "/admin-panel/master/transfer-arunika", "section": "master_sync", "superadmin_only": True},
-    # Superadmin-only: tombolnya menjalankan BACKUP DATABASE di instans SQL
+    {"key": "transfer_arunika", "label": "Transfer ke Arunika", "icon": "refresh", "href": "/admin-panel/master/transfer-arunika", "section": "master_sync", "teknis": True},
+    # Teknis (hanya superadmin yang memberi): tombolnya menjalankan BACKUP DATABASE di instans SQL
     # Server, dan layar ini memuat path cadangan seluruh armada. Tidak ada
     # tombol restore di sini — lihat docstring apps/core/cadangan.py.
-    {"key": "cadangan", "label": "Cadangan & Pemulihan", "icon": "server", "href": "/admin-panel/pengaturan/cadangan", "section": "master_sync", "superadmin_only": True},
+    {"key": "cadangan", "label": "Cadangan & Pemulihan", "icon": "server", "href": "/admin-panel/pengaturan/cadangan", "section": "master_sync", "teknis": True},
+    # Menggantikan `manage.py migrate` di rilis rutin. Teknis: ia
+    # mengubah skema database aplikasi — dan salah langkah di sini bisa menutup
+    # halaman login untuk semua orang.
+    {"key": "migrasi", "label": "Pembaruan Database", "icon": "server", "href": "/admin-panel/pengaturan/migrasi", "section": "master_sync", "teknis": True},
     # Administrasi
-    {"key": "users", "label": "Manajemen User", "icon": "users", "href": "/admin-panel/users", "section": "admin"},
-    {"key": "connections", "label": "Koneksi Server", "icon": "server", "href": "/admin-panel/connections", "section": "admin"},
+    {"key": "users", "label": "Manajemen User", "icon": "users", "href": "/admin-panel/users", "section": "admin", "teknis": True},
+    {"key": "connections", "label": "Koneksi Server", "icon": "server", "href": "/admin-panel/connections", "section": "admin", "teknis": True},
     {"key": "logs", "label": "Log Aktivitas", "icon": "list", "href": "/admin-panel/logs", "section": "admin"},
-    # Superadmin-only: cannot be granted to a regular admin.
-    {"key": "menus", "label": "Kelola Menu", "icon": "key", "href": "/admin-panel/menus", "section": "admin", "superadmin_only": True},
-    # Superadmin saja, sama seperti Kelola Menu: tautan ini menentukan transaksi
+    # Teknis (hanya superadmin yang memberi):
+    {"key": "menus", "label": "Kelola Menu", "icon": "key", "href": "/admin-panel/menus", "section": "admin", "teknis": True},
+    # Teknis, sama seperti Kelola Menu: tautan ini menentukan transaksi
     # tercatat atas nama siapa di server mana, dan salah isi tak bisa ditarik.
-    {"key": "tautan_user", "label": "Kelola Tautan User", "icon": "users", "href": "/admin-panel/tautan-user", "section": "admin", "superadmin_only": True},
+    {"key": "tautan_user", "label": "Kelola Tautan User", "icon": "users", "href": "/admin-panel/tautan-user", "section": "admin", "teknis": True},
 ]
 
 
@@ -229,11 +243,12 @@ SECTIONS_POS = frozenset({"pos_jual", "pos_beli", "pos_lain"})
 
 
 def assignable_menus():
-    """Menus a superadmin may grant/revoke for other users.
+    """Menu yang tampil di Kelola Menu: semuanya kecuali `always` (Bantuan) —
+    menampilkan yang tak bisa dicabut cuma menyesatkan.
 
-    Excludes superadmin-only menus and `always` menus (Bantuan) — menampilkan
-    yang tak bisa dicabut di layar Kelola Menu cuma menyesatkan."""
-    return [m for m in ALL_MENUS if not m.get("superadmin_only") and not m.get("always")]
+    Menu `teknis` ikut di sini. SIAPA yang boleh memberikannya diputuskan
+    wewenang_beri(), bukan daftar ini."""
+    return [m for m in ALL_MENUS if not m.get("always")]
 
 
 def landing_for(user) -> str | None:
@@ -283,7 +298,10 @@ def default_keys_for(role) -> list[str]:
     # patokannya `roles`, menambahkan supervisor ke satu menu justru
     # MENCABUTNYA dari seluruh admin.
     if role in (Role.ADMIN, Role.SUPERADMIN):
-        return [m["key"] for m in assignable_menus() if m["section"] not in SECTIONS_POS]
+        # `teknis` bukan bawaan peran mana pun (spec K2): superadmin yang
+        # memberikannya, satu per satu, kepada yang memang memerlukannya.
+        return [m["key"] for m in assignable_menus()
+                if m["section"] not in SECTIONS_POS and not m.get("teknis")]
     return [m["key"] for m in ALL_MENUS if role in m.get("roles", ())]
 
 
@@ -317,10 +335,15 @@ def tautan_lengkap(user) -> bool:
 def menus_for(user, abaikan_tautan: bool = False):
     """Return the menu list visible to `user` (PRD §4.3/§4.4).
 
-    `abaikan_tautan` melewati gerbang tautan legacy dan hanya dipakai oleh
-    `_pesan_tautan` di middleware, untuk membedakan "menunya memang tak
-    diberikan" dari "diberikan, tapi akunnya belum ditautkan". Jangan memakainya
-    untuk memutuskan akses: yang menjaga akses adalah pemanggilan tanpa argumen.
+    `abaikan_tautan` melewati gerbang tautan legacy. Dipakai `_pesan_tautan` di
+    middleware untuk membedakan "menunya memang tak diberikan" dari "diberikan,
+    tapi akunnya belum ditautkan" — dan dipakai juga di tempat lain yang
+    pertanyaannya WEWENANG, bukan akses lewat koneksi yang sedang aktif:
+    `wewenang_beri` (menghitung apa yang dipegang `pemberi` untuk memutuskan apa
+    yang boleh ia berikan — tak bergantung koneksi mana yang kebetulan aktif)
+    dan `_migrasi_tertunda` (penanda jumlah migrasi tertunda, bukan halaman
+    Pembaruan Database itu sendiri). Jangan memakainya untuk memutuskan akses
+    ke sebuah HALAMAN: yang menjaga akses adalah pemanggilan tanpa argumen.
     """
     from apps.auth_app.models import Role
 
@@ -329,21 +352,12 @@ def menus_for(user, abaikan_tautan: bool = False):
     if user.role == Role.SUPERADMIN:
         dasar = ALL_MENUS  # full access, always
     else:
-        # Satu jalur untuk admin, kasir, dan supervisor. Yang membedakan hanya
-        # apa arti "belum diatur" bagi tiap peran — itu ada di default_keys_for().
-        keys = user.allowed_menu_keys or default_keys_for(user.role)
-        allowed = set(keys)
-        # Menu ber-`admin_only` tak bisa diberikan ke kasir/supervisor sama
-        # sekali — dicentang di Kelola Menu pun tak berlaku. Penjagaannya di
-        # SINI dan bukan cuma di sidebar: admin_network_guard._menu_allowed
-        # membaca fungsi yang sama, jadi mengetik URL-nya langsung ikut tertutup.
-        tier_admin = user.role in (Role.ADMIN, Role.SUPERADMIN)
-        dasar = [
-            m for m in ALL_MENUS
-            if not m.get("superadmin_only")
-            and (tier_admin or not m.get("admin_only"))
-            and (m.get("always") or m["key"] in allowed)
-        ]
+        # Murni pemberian: yang dicentang superadmin BERLAKU, apa pun peran
+        # akunnya. Dulu `admin_only` membuang menu tulis untuk kasir/supervisor
+        # walau dicentang — layar menjanjikan akses yang takkan terjadi.
+        # Batasnya kini ada di siapa yang boleh MEMBERI (wewenang_beri).
+        allowed = set(user.allowed_menu_keys or default_keys_for(user.role))
+        dasar = [m for m in ALL_MENUS if m.get("always") or m["key"] in allowed]
     # Gerbang tautan berlaku SESUDAH cabang peran, jadi superadmin pun ikut
     # digerbangi. Ia juga tak bisa menyimpan tanpa kd_user di koneksi itu;
     # membiarkan menunya terlihat cuma menunda penolakan sampai keranjang
@@ -368,3 +382,64 @@ def menu_key_for_path(path: str):
         if path == href or path.startswith(href + "/"):
             return m["key"]
     return None
+
+
+def wewenang_beri(pemberi, peran_target: str) -> set[str]:
+    """Kunci menu yang boleh DIUBAH `pemberi` untuk akun berperan `peran_target`.
+
+    Satu-satunya tempat aturan pemberian (spec 2026-09-22 §3.3). Layar Kelola
+    Menu, `menu_baru()`, dan test membaca fungsi ini — jangan menyalinnya.
+    """
+    from apps.auth_app.models import Role
+
+    bisa = assignable_menus()
+    if pemberi.role == Role.SUPERADMIN:
+        return {m["key"] for m in bisa}
+    # Gerbang tautan diabaikan: ia bergantung pada koneksi yang sedang aktif,
+    # sedangkan wewenang memberi tidak.
+    dipegang = {m["key"] for m in menus_for(pemberi, abaikan_tautan=True)}
+    if "menus" not in dipegang:
+        return set()
+    return {
+        m["key"] for m in bisa
+        if not m.get("teknis")
+        and (not m.get("tulis_kritis") or peran_target == Role.ADMIN)
+        and m["key"] in dipegang
+    }
+
+
+def boleh_beri(pemberi, peran_target: str, menu: dict) -> bool:
+    return menu["key"] in wewenang_beri(pemberi, peran_target)
+
+
+def menu_baru(pemberi, target, dicentang) -> list[str]:
+    """`allowed_menu_keys` baru untuk `target` sesudah `pemberi` menyimpan.
+
+    Yang di luar wewenang pemberi DIPERTAHANKAN dari keadaan efektif target:
+    menyimpan menulis ulang seluruh daftar, jadi tanpa ini admin diam-diam
+    mencabut menu teknis yang bahkan tak bisa ia lihat (spec §3.5). Urutannya
+    mengikuti ALL_MENUS, dan kunci yang tak dikenal terbuang.
+
+    Simpanan KOSONG dari pemberi non-superadmin disimpan sebagai `["bantuan"]`,
+    bukan `[]` (ruling R7). `menus_for` membaca `allowed_menu_keys` kosong
+    sebagai "pakai bawaan peran" — jadi admin yang mengosongkan target lewat
+    layar ini akan diam-diam MEMBERI target seluruh menu bawaan perannya,
+    termasuk yang admin itu sendiri tak pegang (lolos dari wewenang_beri).
+    Bantuan sendiri `always`, jadi menyimpannya eksplisit tak mengubah apa pun
+    yang terlihat — ia cuma mencegah kosong berarti penuh. Superadmin tetap
+    menyimpan `[]` apa adanya: itulah "kembali ke bawaan peran" yang dijanjikan
+    layar Kelola Menu kepadanya.
+    """
+    from apps.auth_app.models import Role
+
+    wewenang = wewenang_beri(pemberi, target.role)
+    dipilih = set(dicentang) & wewenang
+    if pemberi.role == Role.SUPERADMIN:
+        baru = dipilih
+    else:
+        efektif = set(target.allowed_menu_keys or default_keys_for(target.role))
+        baru = (efektif - wewenang) | dipilih
+    hasil = [m["key"] for m in ALL_MENUS if m["key"] in baru]
+    if pemberi.role != Role.SUPERADMIN and not hasil:
+        return ["bantuan"]
+    return hasil
