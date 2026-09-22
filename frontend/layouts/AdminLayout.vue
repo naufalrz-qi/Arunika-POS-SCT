@@ -1,9 +1,10 @@
 <script setup>
 import { computed } from "vue";
-import { Head, Link } from "@inertiajs/vue3";
+import { Head, Link, usePage } from "@inertiajs/vue3";
 import TopNav from "@/components/nav/TopNav.vue";
 import SideNav from "@/components/nav/SideNav.vue";
 import ToastContainer from "@/components/ui/ToastContainer.vue";
+import Banner from "@/components/ui/Banner.vue";
 import { useNav } from "@/composables/useNav";
 
 const props = defineProps({
@@ -17,6 +18,14 @@ const props = defineProps({
 const { lipatanAktif } = useNav();
 const tabHalaman = computed(() => (lipatanAktif.value && !lipatanAktif.value.hub ? lipatanAktif.value : null));
 const judul = computed(() => (tabHalaman.value ? tabHalaman.value.label : props.title));
+
+// Migrasi pangkal yang belum diterapkan sesudah rilis. Server mengirim 0 bagi
+// selain superadmin, jadi tak ada pengecekan peran di sini. Tak tampil di
+// halaman Pembaruan Database sendiri — di sana daftarnya sudah terpampang.
+const page = usePage();
+const URL_MIGRASI = "/admin-panel/pengaturan/migrasi";
+const migrasiTertunda = computed(() =>
+  page.url.startsWith(URL_MIGRASI) ? 0 : page.props.migrasi_tertunda || 0);
 </script>
 
 <template>
@@ -33,6 +42,11 @@ const judul = computed(() => (tabHalaman.value ? tabHalaman.value.label : props.
       <TopNav />
       <main class="scroll-slim min-h-0 flex-1 overflow-y-auto">
         <div class="page-enter mx-auto max-w-[1600px] px-3 py-4 sm:px-5 lg:px-8 lg:py-6">
+          <Banner v-if="migrasiTertunda" variant="warning">
+            {{ migrasiTertunda }} migrasi database belum diterapkan sejak rilis terakhir —
+            sebagian halaman bisa gagal sampai diterapkan.
+            <Link :href="URL_MIGRASI" class="font-medium underline">Terapkan sekarang</Link>
+          </Banner>
           <!-- Nama bagian tidak lagi ditulis di atas judul: sudah ada di jejak
                header, tepat di atasnya. -->
           <h1 v-if="judul" :class="['text-xl font-semibold tracking-tight text-ink sm:text-2xl', tabHalaman ? 'mb-3' : 'mb-5']">

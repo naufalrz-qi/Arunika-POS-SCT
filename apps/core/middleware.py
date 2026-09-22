@@ -67,6 +67,33 @@ def _sumber_laporan() -> str:
         return "legacy"
 
 
+def _migrasi_tertunda(user) -> int:
+    """Jumlah migrasi pangkal yang belum diterapkan. Selalu 0 bagi non-superadmin.
+
+    Ini yang membuat Pembaruan Database benar-benar menggantikan terminal: tanpa
+    penanda, superadmin harus INGAT membuka halamannya sesudah tiap rilis —
+    beban ingatan yang sama dengan mengetik `migrate`, dan lupa berarti halaman
+    yang gagal dengan "Invalid column name" tanpa penjelasan.
+
+    Hanya pangkal, sengaja: lokal dan ~11 ms (terukur; 137 ms sekali di awal
+    proses saat modul migrasi dimuat). DB Arunika TIDAK dihubungi di sini —
+    prop ini ikut di setiap halaman, dan satu server jauh yang mati akan menahan
+    setiap render lima detik. Migrasi `bisnis` baru tetap tertangkap, sebab
+    pangkal ikut mencatatnya (lihat apps/core/migrasi.py).
+    """
+    from apps.auth_app.models import Role
+
+    if not (user and getattr(user, "is_authenticated", False)
+            and user.role == Role.SUPERADMIN):
+        return 0
+    try:
+        from apps.core.migrasi import tertunda
+
+        return len(tertunda())
+    except Exception:  # pragma: no cover — penanda tak boleh menjatuhkan halaman
+        return 0
+
+
 def _notif(user):
     """Isi lonceng untuk `user`. Lazy — hanya jalan pada render Inertia.
 
@@ -150,6 +177,7 @@ def inertia_share(get_response):
             # isinya cuma membaca env + satu kolom SQLite — nol round-trip.
             sumber_laporan=lambda: _sumber_laporan(),
             notif=lambda: _notif(user),
+            migrasi_tertunda=lambda: _migrasi_tertunda(user),
             flash=lambda: {
                 "success": request.session.pop("flash_success", None),
                 "error": request.session.pop("flash_error", None),

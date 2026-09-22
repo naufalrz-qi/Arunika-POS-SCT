@@ -209,6 +209,10 @@ ALL_MENUS = [
     # Server, dan layar ini memuat path cadangan seluruh armada. Tidak ada
     # tombol restore di sini — lihat docstring apps/core/cadangan.py.
     {"key": "cadangan", "label": "Cadangan & Pemulihan", "icon": "server", "href": "/admin-panel/pengaturan/cadangan", "section": "master_sync", "superadmin_only": True},
+    # Menggantikan `manage.py migrate` di rilis rutin. Superadmin saja: ia
+    # mengubah skema database aplikasi — dan salah langkah di sini bisa menutup
+    # halaman login untuk semua orang.
+    {"key": "migrasi", "label": "Pembaruan Database", "icon": "server", "href": "/admin-panel/pengaturan/migrasi", "section": "master_sync", "superadmin_only": True},
     # Administrasi
     {"key": "users", "label": "Manajemen User", "icon": "users", "href": "/admin-panel/users", "section": "admin"},
     {"key": "connections", "label": "Koneksi Server", "icon": "server", "href": "/admin-panel/connections", "section": "admin"},

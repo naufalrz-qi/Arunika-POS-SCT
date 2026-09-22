@@ -30,6 +30,30 @@ npm run build  # rebuild frontend dist if needed
 
 Adjust `--threads=32` per machine CPU cores (rule of thumb: 2–4× cores).
 
+## Rilis rutin (sesudah pemasangan pertama)
+
+`manage.py migrate` tak perlu lagi diketik di terminal — skemanya diterapkan dari panel.
+Terminal hanya untuk menarik kode dan menjalankan ulang server:
+
+1. `git pull`, lalu `npm run build` dan `collectstatic --noinput`.
+2. **Jalankan ulang waitress.** Wajib, bukan cuma untuk kode Python: proses yang sedang
+   berjalan memegang manifest aset dari saat ia start, sedangkan `npm run build` menghapus
+   berkas aset lama — tanpa restart, halamannya tampil kosong dengan aset 404.
+3. Masuk sebagai superadmin. Kalau ada migrasi tertunda, **penanda kuning muncul di atas
+   setiap halaman**. Buka **Pengaturan › Pembaruan Database**, cadangkan pangkal dulu di
+   Cadangan & Pemulihan, lalu tekan **Terapkan migrasi**.
+4. Kalau rilisnya menambah indeks laporan: **Kelola Koneksi › Cek Indexing** per server, di
+   luar jam toko — `CREATE INDEX` di sana tidak ONLINE, jadi ia mengunci tabelnya selama dibuat.
+
+Pembaruan Database menerapkan `migrate` penuh ke pangkal, dan **hanya** `migrate bisnis` ke
+tiap database Arunika — bukan `init_arunika`, yang ikut memasang ulang view adapter menurut
+mode yang tak tersimpan di mana pun. DB Arunika yang belum dibuat dilewati, tidak dibuat.
+Rinciannya di `apps/core/migrasi.py`.
+
+**Kapan terminal tetap perlu:** kalau migrasi yang tertunda mengubah tabel yang dibaca setiap
+halaman (akun, sesi, log aktivitas), halaman login pun bisa gagal sebelum migrasinya sempat
+diterapkan dari panel. Untuk rilis seperti itu: `python manage.py migrate` di venv-nya.
+
 ## Environment Variables (prod)
 
 Set these in the shell or `.env` before running:

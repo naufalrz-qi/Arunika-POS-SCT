@@ -1462,6 +1462,53 @@ def cadangan_jalankan(request):
     return redirect("/admin-panel/pengaturan/cadangan")
 
 
+def migrasi_index(request):
+    """Pembaruan Database: migrasi yang tertunda di pangkal dan tiap DB Arunika.
+
+    Ada supaya rilis rutin tak butuh terminal — lihat `apps/core/migrasi.py`.
+    Daftarnya deferred: DB Arunika bisa berada di server lain, dan satu server
+    jauh yang mati tak boleh menahan cat pertama halamannya.
+    """
+    tolak = _deny_non_superadmin(request)
+    if tolak:
+        return tolak
+    from apps.core import migrasi
+
+    return render(request, "Admin/Pengaturan/Migrasi", props={
+        "data": defer(lambda: {"rows": migrasi.status()}),
+        # Hasil klik terakhir, tampil sekali lalu hilang — pola yang sama
+        # dengan `nota_terakhir` di layar kasir.
+        "hasil": request.session.pop("migrasi_hasil", None),
+    })
+
+
+@require_POST
+def migrasi_jalankan(request):
+    tolak = _deny_non_superadmin(request)
+    if tolak:
+        return tolak
+    from apps.core import migrasi
+
+    try:
+        hasil = migrasi.jalankan()
+    except Ditolak as exc:
+        request.session["flash_error"] = str(exc)
+        return redirect("/admin-panel/pengaturan/migrasi")
+
+    request.session["migrasi_hasil"] = hasil
+    n = sum(len(r["diterapkan"]) for r in hasil)
+    gagal = [r["sasaran"] for r in hasil if r["keadaan"] == "galat"]
+    log_activity(request, "migrasi",
+                 f"{n} migrasi diterapkan" + (f"; gagal: {', '.join(gagal)}" if gagal else ""))
+    if gagal:
+        request.session["flash_error"] = (
+            f"{n} migrasi diterapkan, tapi {len(gagal)} sasaran gagal: {', '.join(gagal)}.")
+    else:
+        request.session["flash_success"] = (
+            f"{n} migrasi diterapkan." if n else "Tak ada migrasi yang tertunda.")
+    return redirect("/admin-panel/pengaturan/migrasi")
+
+
 @require_POST
 def cadangan_verifikasi(request):
     tolak = _deny_non_superadmin(request)
