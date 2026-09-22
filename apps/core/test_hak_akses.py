@@ -1,4 +1,7 @@
 """Hak akses bertingkat — spec docs/superpowers/specs/2026-09-22-hak-akses-bertingkat-design.md."""
+import json
+from unittest.mock import patch
+
 from django.test import TestCase
 
 from apps.auth_app.models import (
@@ -189,3 +192,72 @@ class DataTersembunyiBaruTests(TestCase):
         adm = _u("a2", Role.ADMIN, hidden_data_keys=["harga_beli"])
         staf = _u("s3", Role.KASIR)
         self.assertEqual(data_tersembunyi_baru(adm, staf, []), ["harga_jual", "nominal"])
+
+
+class KelolaMenuHttpTests(TestCase):
+    def setUp(self):
+        self.boss = _u("boss", Role.SUPERADMIN)
+        self.editor = _u("editor", Role.ADMIN,
+                         allowed_menu_keys=["menus", "dashboard", "products", "koreksi_stok"])
+        self.admin2 = _u("admin2", Role.ADMIN, allowed_menu_keys=["dashboard", "connections"])
+        self.kasir = _u("kasir", Role.KASIR)
+
+    def _simpan(self, target, menu_keys, data_keys=None):
+        return self.client.post(
+            "/admin-panel/menus/save",
+            {"user_id": target.pk, "menu_keys": menu_keys,
+             "data_keys": sorted(DATA_KEY_SET) if data_keys is None else data_keys},
+            content_type="application/json")
+
+    def test_admin_dengan_kelola_menu_bisa_membuka(self):
+        self.client.force_login(self.editor)
+        self.assertEqual(self.client.get("/admin-panel/menus").status_code, 200)
+
+    def test_layar_mengirim_wewenang_per_peran(self):
+        self.client.force_login(self.editor)
+        r = self.client.get("/admin-panel/menus", HTTP_X_INERTIA="true",
+                            HTTP_X_INERTIA_VERSION="1.0")
+        props = json.loads(r.content)["props"]
+        self.assertEqual(set(props["boleh_beri"]["kasir"]), {"dashboard", "products"})
+        self.assertIn("koreksi_stok", props["boleh_beri"]["admin"])
+        self.assertFalse(props["saya_superadmin"])
+        self.assertNotIn(self.editor.pk, [u["id"] for u in props["users"]])
+
+    def test_simpan_admin_mempertahankan_menu_teknis_target(self):
+        self.client.force_login(self.editor)
+        self._simpan(self.admin2, ["products", "cadangan"])
+        self.admin2.refresh_from_db()
+        self.assertEqual(set(self.admin2.allowed_menu_keys), {"connections", "products"})
+
+    def test_tulis_kritis_ke_kasir_diabaikan_ke_admin_diterima(self):
+        self.client.force_login(self.editor)
+        self._simpan(self.kasir, ["koreksi_stok"])
+        self.kasir.refresh_from_db()
+        self.assertNotIn("koreksi_stok", self.kasir.allowed_menu_keys)
+        self._simpan(self.admin2, ["koreksi_stok"])
+        self.admin2.refresh_from_db()
+        self.assertIn("koreksi_stok", self.admin2.allowed_menu_keys)
+
+    def test_tak_bisa_menyunting_diri_sendiri(self):
+        self.client.force_login(self.editor)
+        self.assertEqual(self._simpan(self.editor, ["dashboard"]).status_code, 403)
+
+    def test_superadmin_memberi_menu_teknis_membuka_halamannya(self):
+        """Dulu _deny_non_superadmin menolak di dalam view walau menunya diberikan."""
+        self.client.force_login(self.boss)
+        self._simpan(self.admin2, ["dashboard", "cadangan"])
+        self.client.force_login(self.admin2)
+        self.assertEqual(self.client.get("/admin-panel/pengaturan/cadangan").status_code, 200)
+
+    def test_tanpa_pemberian_halaman_teknis_tetap_tertutup(self):
+        self.client.force_login(self.admin2)
+        self.assertNotEqual(self.client.get("/admin-panel/pengaturan/cadangan").status_code, 200)
+
+    def test_penanda_migrasi_ikut_menu(self):
+        from apps.core.middleware import _migrasi_tertunda
+
+        with patch("apps.core.migrasi.tertunda", return_value=["a", "b"]):
+            self.assertEqual(_migrasi_tertunda(self.admin2), 0)
+            self.admin2.allowed_menu_keys = ["dashboard", "migrasi"]
+            self.admin2.save(update_fields=["allowed_menu_keys"])
+            self.assertEqual(_migrasi_tertunda(self.admin2), 2)

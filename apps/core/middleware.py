@@ -68,7 +68,7 @@ def _sumber_laporan() -> str:
 
 
 def _migrasi_tertunda(user) -> int:
-    """Jumlah migrasi pangkal yang belum diterapkan. Selalu 0 bagi non-superadmin.
+    """Jumlah migrasi pangkal yang belum diterapkan. 0 bagi yang tak memegang menu migrasi.
 
     Ini yang membuat Pembaruan Database benar-benar menggantikan terminal: tanpa
     penanda, superadmin harus INGAT membuka halamannya sesudah tiap rilis —
@@ -81,10 +81,11 @@ def _migrasi_tertunda(user) -> int:
     setiap render lima detik. Migrasi `bisnis` baru tetap tertangkap, sebab
     pangkal ikut mencatatnya (lihat apps/core/migrasi.py).
     """
-    from apps.auth_app.models import Role
-
-    if not (user and getattr(user, "is_authenticated", False)
-            and user.role == Role.SUPERADMIN):
+    if not (user and getattr(user, "is_authenticated", False)):
+        return 0
+    # Ikut MENU, bukan peran: superadmin bisa memberikan Pembaruan Database ke
+    # admin, dan penandanya harus ikut ke sana (spec 2026-09-22 §3.6).
+    if "migrasi" not in {m["key"] for m in menus_for(user, abaikan_tautan=True)}:
         return 0
     try:
         from apps.core.migrasi import tertunda

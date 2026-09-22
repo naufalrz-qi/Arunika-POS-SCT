@@ -15,7 +15,16 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 from inertia import defer, render
 
-from apps.auth_app.models import DATA_KEY_SET, DATA_KEYS, Role, TautanUser, User, bisa_kelola, peran_terkelola
+from apps.auth_app.models import (
+    DATA_KEY_SET,
+    DATA_KEYS,
+    Role,
+    TautanUser,
+    User,
+    bisa_kelola,
+    data_tersembunyi_baru,
+    peran_terkelola,
+)
 from apps.auth_app.tautan import tautan_untuk, tautan_wajib
 from apps.connections.models import ServerProfile
 from apps.core.http import get_data, redirect_aman as _redirect_back
@@ -25,6 +34,10 @@ from apps.core.menus import (
     SECTIONS,
     assignable_menus,
     default_keys_for,
+    menu_baru,
+    menu_key_for_path,
+    menus_for,
+    wewenang_beri,
 )
 from apps.core.models import (
     ActivityLog,
@@ -1413,7 +1426,7 @@ def sync_health_index(request):
 # memindai seluruh kode untuk `RESTORE DATABASE` dan menolak kecuali di RUNBOOK.
 
 def cadangan_index(request):
-    tolak = _deny_non_superadmin(request)
+    tolak = _wajib_menu(request)
     if tolak:
         return tolak
     from apps.core import cadangan as cad
@@ -1437,7 +1450,7 @@ def cadangan_jalankan(request):
     tetap, dan sasaran AMPHOREUS ditentukan `HUB_NAME`, bukan input. Form yang
     dipalsukan pun tak bisa mengarahkannya ke salah satu dari 14 profil legacy.
     """
-    tolak = _deny_non_superadmin(request)
+    tolak = _wajib_menu(request)
     if tolak:
         return tolak
     from apps.core import cadangan as cad
@@ -1474,7 +1487,7 @@ def migrasi_index(request):
     Daftarnya deferred: DB Arunika bisa berada di server lain, dan satu server
     jauh yang mati tak boleh menahan cat pertama halamannya.
     """
-    tolak = _deny_non_superadmin(request)
+    tolak = _wajib_menu(request)
     if tolak:
         return tolak
     from apps.core import migrasi
@@ -1489,7 +1502,7 @@ def migrasi_index(request):
 
 @require_POST
 def migrasi_jalankan(request):
-    tolak = _deny_non_superadmin(request)
+    tolak = _wajib_menu(request)
     if tolak:
         return tolak
     from apps.core import migrasi
@@ -1516,7 +1529,7 @@ def migrasi_jalankan(request):
 
 @require_POST
 def cadangan_verifikasi(request):
-    tolak = _deny_non_superadmin(request)
+    tolak = _wajib_menu(request)
     if tolak:
         return tolak
     from apps.core import cadangan as cad
@@ -1539,12 +1552,12 @@ def cadangan_verifikasi(request):
 def sync_health_jalankan(request):
     """Picu satu tugas latar dari layar Kesehatan Sync.
 
-    `_deny_non_superadmin` dipanggil eksplisit walau menu `sync_health` sudah
-    `superadmin_only` dan `admin_network_guard` mencocokkan prefix: sebuah rute
-    yang MENULIS tidak boleh bergantung pada penjagaan tak langsung yang bisa
-    ikut berubah saat orang lain menata ulang menu.
+    `_wajib_menu` dipanggil eksplisit walau menu `sync_health` sudah `teknis`
+    dan `admin_network_guard` mencocokkan prefix: sebuah rute yang MENULIS
+    tidak boleh bergantung pada penjagaan tak langsung yang bisa ikut berubah
+    saat orang lain menata ulang menu.
     """
-    tolak = _deny_non_superadmin(request)
+    tolak = _wajib_menu(request)
     if tolak:
         return tolak
     from apps.connections.models import ServerProfile
@@ -1809,7 +1822,7 @@ def barang_histori_index(request):
 
 def kode_nota_index(request):
     """Kode nota (m_divisi.kepala_nota) per divisi — awalan tiap nomor nota."""
-    if (denied := _deny_non_superadmin(request)):
+    if (denied := _wajib_menu(request)):
         return denied
 
     def muat():
@@ -1827,7 +1840,7 @@ def kode_nota_index(request):
 
 @require_POST
 def kode_nota_save(request):
-    if (denied := _deny_non_superadmin(request)):
+    if (denied := _wajib_menu(request)):
         return denied
     data = get_data(request)
     profile = _active()
@@ -1887,7 +1900,7 @@ def transfer_arunika_index(request):
     membaca baris `TransferArunika`, jadi murah dimuat ulang tiap beberapa detik
     selama ada yang berjalan.
     """
-    if (denied := _deny_non_superadmin(request)):
+    if (denied := _wajib_menu(request)):
         return denied
     from apps.bisnis import transfer
     from apps.core.models import TransferArunika
@@ -1929,7 +1942,7 @@ def transfer_arunika_detail(request, pk: int):
 
     Tanpa `defer`: satu baris SQLite.
     """
-    if (denied := _deny_non_superadmin(request)):
+    if (denied := _wajib_menu(request)):
         return denied
     from apps.core.models import TransferArunika
 
@@ -1941,7 +1954,7 @@ def transfer_arunika_detail(request, pk: int):
 
 @require_POST
 def transfer_arunika_mulai(request):
-    if (denied := _deny_non_superadmin(request)):
+    if (denied := _wajib_menu(request)):
         return denied
     from apps.bisnis import transfer
     from apps.bisnis.siapkan import Ditolak
@@ -1993,15 +2006,22 @@ def informasi_perusahaan(request):
 
 
 
-def _deny_non_superadmin(request):
-    if request.user.role != Role.SUPERADMIN:
-        return ditolak(
-            request,
-            "Halaman ini hanya untuk pengelola utama",
-            "Pengaturan siapa boleh membuka apa hanya bisa diubah oleh pengelola "
-            "utama aplikasi.",
-        )
-    return None
+def _wajib_menu(request):
+    """Lapis kedua di atas `admin_network_guard`: tolak kalau menu pemilik path
+    ini tak dipegang.
+
+    Dulu `_deny_non_superadmin` — pengecekan PERAN yang membatalkan pemberian
+    superadmin: menu teknis yang dicentang untuk admin tetap ditolak di sini
+    (spec 2026-09-22 §3.6). Path tanpa menu ditolak, bukan diloloskan.
+    """
+    key = menu_key_for_path(request.path)
+    if key and key in {m["key"] for m in menus_for(request.user)}:
+        return None
+    return ditolak(
+        request,
+        "Halaman ini belum dibuka untuk Anda",
+        "Kalau Anda memang perlu membukanya, minta ke pengelola aplikasi.",
+    )
 
 
 # --- Kelola Tautan User ----------------------------------------------------
@@ -2015,7 +2035,7 @@ def _deny_non_superadmin(request):
 # tersimpan diam-diam dan baru ketahuan saat nota pertama gagal.
 
 def tautan_user_index(request):
-    if (denied := _deny_non_superadmin(request)):
+    if (denied := _wajib_menu(request)):
         return denied
     users = User.objects.order_by("role", "username")
     profiles = list(ServerProfile.objects.all().order_by("name"))
@@ -2055,7 +2075,7 @@ def tautan_user_opsi(request, profile_id):
     14 profil berarti 42 query MS SQL lintas Tailscale kalau dimuat di muka, dan
     kebanyakan takkan pernah dilihat.
     """
-    if (denied := _deny_non_superadmin(request)):
+    if (denied := _wajib_menu(request)):
         return denied
     profile = get_object_or_404(ServerProfile, pk=profile_id)
     try:
@@ -2073,7 +2093,7 @@ def tautan_user_opsi(request, profile_id):
 
 @require_POST
 def tautan_user_save(request):
-    if (denied := _deny_non_superadmin(request)):
+    if (denied := _wajib_menu(request)):
         return denied
     data = get_data(request)
     user = get_object_or_404(User, pk=data.get("user_id"))
@@ -2099,9 +2119,14 @@ def tautan_user_save(request):
 
 
 def menus_index(request):
-    if (denied := _deny_non_superadmin(request)):
+    if (denied := _wajib_menu(request)):
         return denied
-    users = User.objects.exclude(role=Role.SUPERADMIN).order_by("role", "username")
+    saya = request.user
+    users = [
+        u for u in User.objects.exclude(role=Role.SUPERADMIN).order_by("role", "username")
+        if bisa_kelola(saya, u)
+    ]
+    menus = assignable_menus()
     return render(
         request,
         "Admin/Menus/Index",
@@ -2120,7 +2145,7 @@ def menus_index(request):
                 }
                 for u in users
             ],
-            "menus": assignable_menus(),
+            "menus": menus,
             "data_keys": DATA_KEYS,
             # Menu bawaan tiap peran. Tanpa ini layar berbohong: user yang
             # `allowed_menu_keys`-nya kosong tampil tanpa satu centang pun,
@@ -2129,33 +2154,40 @@ def menus_index(request):
                 r: default_keys_for(r)
                 for r in (Role.KASIR, Role.SUPERVISOR, Role.ADMIN)
             },
-            # Urutan + label section untuk pengelompokan di UI (hanya section
-            # yang punya menu assignable).
+            # Kunci yang boleh DIUBAH pemakai layar ini, per peran target.
+            # Layar hanya membaca; aturannya di wewenang_beri(), dan
+            # menus_save menegakkannya sendiri lewat menu_baru().
+            "boleh_beri": {
+                r: sorted(wewenang_beri(saya, r))
+                for r in (Role.KASIR, Role.SUPERVISOR, Role.ADMIN)
+            },
+            "boleh_data": sorted(DATA_KEY_SET - saya.hidden_data()),
+            "saya_superadmin": saya.role == Role.SUPERADMIN,
+            # Urutan + label section untuk pengelompokan di UI.
             "sections": [
                 {"key": s, "label": SECTION_LABELS[s]}
                 for s in SECTIONS
-                if any(m["section"] == s for m in assignable_menus())
+                if any(m["section"] == s for m in menus)
             ],
         },
     )
 
 
 def menus_save(request):
-    if (denied := _deny_non_superadmin(request)):
+    if (denied := _wajib_menu(request)):
         return denied
     data = get_data(request)
     user = get_object_or_404(User, pk=data.get("user_id"))
     if user.role == Role.SUPERADMIN:
         return HttpResponseForbidden("Superadmin tidak dapat dibatasi.")
-    valid = {m["key"] for m in assignable_menus()}
-    keys = [k for k in (data.get("menu_keys") or []) if k in valid]
+    if not bisa_kelola(request.user, user):
+        return HttpResponseForbidden("Akun ini di luar wewenang Anda.")
+    # Yang di luar wewenang pemakai layar dipertahankan dari keadaan target —
+    # aturannya di menu_baru() dan data_tersembunyi_baru(), bukan di sini.
+    keys = menu_baru(request.user, user, data.get("menu_keys") or [])
     user.allowed_menu_keys = keys
-
-    # Layar mengirim yang BOLEH dilihat; yang disimpan kebalikannya. Konversi
-    # ini satu-satunya tempat kedua bentuk itu bertemu — lihat alasan memilih
-    # daftar larangan di apps/auth_app/models.py.
-    boleh = {k for k in (data.get("data_keys") or []) if k in DATA_KEY_SET}
-    user.hidden_data_keys = sorted(DATA_KEY_SET - boleh)
+    user.hidden_data_keys = data_tersembunyi_baru(
+        request.user, user, data.get("data_keys") or [])
 
     user.save(update_fields=["allowed_menu_keys", "hidden_data_keys"])
     log_activity(request, "menu", f"Set menu {user.username}: {','.join(keys) or '(kosong)'}")
@@ -3384,25 +3416,6 @@ nota_mundur_export = _report_export(_NOTA_MUNDUR)
 
 # Neraca Opname — mencocokkan selisih lintas sesi, yang tak bisa dilihat oleh
 # hitungan parsial. Lima kunci opsional dipakai, masing-masing dengan alasan:
-def _bukan_admin(request):
-    """Lapis kedua di atas penjaga menu.
-
-    Penjaga menu sudah menutup rute ini, tapi ia bergantung pada satu flag di
-    menus.py yang bisa hilang saat menu disusun ulang. Yang ditulis di sini
-    menggeser stok sungguhan dan langsung terkirim ke pusat, jadi ia layak
-    diperiksa dua kali.
-    """
-    if request.user.role in (Role.ADMIN, Role.SUPERADMIN):
-        return None
-    return ditolak(
-        request,
-        "Koreksi stok hanya untuk pengelola",
-        "Menggeser stok mengubah angka yang dipakai seluruh laporan, dan tak "
-        "bisa dibatalkan dari layar mana pun. Minta pengelola aplikasi yang "
-        "melakukannya.",
-    )
-
-
 def koreksi_stok_index(request):
     """Layar koreksi stok — grid ala aplikasi desktop.
 
@@ -3415,7 +3428,7 @@ def koreksi_stok_index(request):
     JSON, tak pernah selesai dimuat di Firefox Android); grid dengan kotak isian
     di tiap baris jauh lebih berat lagi. Barisnya masuk lewat pencarian.
     """
-    if (denied := _bukan_admin(request)):
+    if (denied := _wajib_menu(request)):
         return denied
 
     def muat():
@@ -3498,7 +3511,7 @@ def koreksi_stok_cari(request):
 
 @require_POST
 def koreksi_stok_save(request):
-    if (denied := _bukan_admin(request)):
+    if (denied := _wajib_menu(request)):
         return denied
     kembali = "/admin-panel/inventory/koreksi-stok"
     data = get_data(request)
@@ -4470,7 +4483,7 @@ def _jenis_kas(jenis: str) -> str:
 
 def kas_input_index(request, jenis: str):
     jenis = _jenis_kas(jenis)
-    if (denied := _bukan_admin(request)):
+    if (denied := _wajib_menu(request)):
         return denied
     s = kas_tulis.SPEC[jenis]
 
@@ -4509,7 +4522,7 @@ def kas_input_index(request, jenis: str):
 @require_POST
 def kas_input_save(request, jenis: str):
     jenis = _jenis_kas(jenis)
-    if (denied := _bukan_admin(request)):
+    if (denied := _wajib_menu(request)):
         return denied
     kembali = f"{_KAS_URL}/{jenis}"
     data = get_data(request)
