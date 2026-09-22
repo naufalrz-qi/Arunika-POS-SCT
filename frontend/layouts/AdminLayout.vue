@@ -20,7 +20,7 @@ const tabHalaman = computed(() => (lipatanAktif.value && !lipatanAktif.value.hub
 const judul = computed(() => (tabHalaman.value ? tabHalaman.value.label : props.title));
 
 // Migrasi pangkal yang belum diterapkan sesudah rilis. Server mengirim 0 bagi
-// selain superadmin, jadi tak ada pengecekan peran di sini. Tak tampil di
+// yang tak memegang menu Pembaruan Database, jadi tak ada pengecekan di sini. Tak tampil di
 // halaman Pembaruan Database sendiri — di sana daftarnya sudah terpampang.
 const page = usePage();
 const URL_MIGRASI = "/admin-panel/pengaturan/migrasi";

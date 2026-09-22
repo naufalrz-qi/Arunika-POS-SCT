@@ -153,7 +153,7 @@ ALL_MENUS = [
     {"key": "shift", "label": "Shift Kasir", "icon": "clock", "href": "/admin-panel/kas/shift", "section": "kas"},
     {"key": "biaya_operasional", "label": "Biaya Operasional", "icon": "cash", "href": "/admin-panel/laporan/biaya-operasional", "section": "kas"},
     {"key": "biaya_kategori", "label": "Biaya per Kategori", "icon": "chart", "href": "/admin-panel/laporan/biaya-kategori", "section": "kas"},
-    # Empat layar TULIS kas. `admin_only` + `butuh_tautan` dengan alasan yang
+    # Empat layar TULIS kas. `tulis_kritis` + `butuh_tautan` dengan alasan yang
     # sama persis seperti Koreksi Stok: uang bergerak begitu disimpan,
     # `kd_user` menentukan itu tercatat atas nama siapa, dan tak ada layar mana
     # pun di sini yang bisa menariknya kembali.

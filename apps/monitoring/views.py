@@ -1315,7 +1315,7 @@ def logs_index(request):
 
     Dulu halaman ini memperlihatkan jejak SEMUA orang kepada admin mana pun,
     dengan alasan "ini layar audit dan aksesnya sudah dijaga menu". Alasan itu
-    tidak berlaku: menu `logs` bukan superadmin_only, jadi ia bisa diberikan ke
+    tidak berlaku: menu `logs` bukan teknis, jadi ia bisa diberikan ke
     siapa saja, dan yang lolos ikut membaca pekerjaan seluruh kantor.
     Pengauditannya sekarang tetap utuh — di tangan superadmin.
     """
@@ -1358,7 +1358,7 @@ def logs_index(request):
     )
 
 
-# --- Kesehatan Sync (superadmin) ------------------------------------------
+# --- Kesehatan Sync (menu teknis) ------------------------------------------
 #
 # Sync antar-server dikerjakan SQL Agent job di msdb tiap server, bukan oleh
 # aplikasi ini, dan job itu tidak melapor ke mana pun. Halaman ini membaca jejak
@@ -1841,7 +1841,7 @@ def barang_histori_index(request):
     )
 
 
-# --- Kelola Menu (superadmin only) -----------------------------------------
+# --- Kelola Menu (menu teknis) -----------------------------------------
 
 def kode_nota_index(request):
     """Kode nota (m_divisi.kepala_nota) per divisi — awalan tiap nomor nota."""
