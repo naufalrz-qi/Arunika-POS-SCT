@@ -3,12 +3,19 @@ import { computed } from "vue";
 import { DB_TYPE_LABELS, LINGKUNGAN_LABELS } from "@/utils/labels";
 import { storeToRefs } from "pinia";
 import { useConnectionStore } from "@/stores/connection";
+import { useUserStore } from "@/stores/user";
 import { useDismissable } from "@/composables/useDismissable";
 import Icon from "./Icon.vue";
 
 const store = useConnectionStore();
 const { active, list, switching } = storeToRefs(store);
+const { allowedMenus } = storeToRefs(useUserStore());
 const { open, root, close, toggle } = useDismissable();
+
+// "Kelola Koneksi…" menuju /admin-panel/connections, yang di balik menu
+// `connections` (teknis) — menampilkan tautan ke akun yang tak diberi menu
+// itu cuma mengantarnya ke tembok 403.
+const bolehKelolaKoneksi = computed(() => allowedMenus.value.some((m) => m.key === "connections"));
 
 const typeName = DB_TYPE_LABELS;
 
@@ -103,6 +110,7 @@ function choose(c) {
         <p v-else class="px-4 py-4 text-sm text-ink-muted">Belum ada profil koneksi.</p>
 
         <a
+          v-if="bolehKelolaKoneksi"
           href="/admin-panel/connections"
           class="flex items-center gap-2 border-t border-border-default px-4 py-2.5 text-sm text-ink-muted hover:bg-surface-3"
         >
