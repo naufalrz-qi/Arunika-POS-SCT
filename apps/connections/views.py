@@ -10,6 +10,7 @@ from apps.core.models import log_activity
 from apps.transactions import indexes
 from core import mssql
 
+from .akses import boleh_pakai
 from .models import ConnStatus, DbType, Lingkungan, ServerProfile
 
 
@@ -109,6 +110,14 @@ def connections_set_default(request, conn_id):
     # connection no longer changes it for everyone. The global is_default remains
     # the fallback for background jobs (scheduler / manage.py) that have no session.
     profile = get_object_or_404(ServerProfile, pk=conn_id)
+    # Rute ini dikecualikan dari pemeriksaan menu (_MENU_EXEMPT_RE), jadi
+    # izinnya harus dicek DI SINI — kalau tidak, profil non-produksi tetap bisa
+    # dipilih dengan memanggil URL-nya langsung.
+    if not boleh_pakai(request.user, profile):
+        request.session["flash_error"] = (
+            f"Koneksi {profile.name} bukan untuk akun Anda. "
+            "Minta superadmin membukanya di Kelola Menu.")
+        return redirect_aman(get_data(request), "/admin-panel/connections")
     request.session["active_profile_id"] = profile.pk
     log_activity(request, "konfigurasi", f"Pilih koneksi {profile.db_type}: {profile.name}")
     # Cek dulu, lalu katakan apa adanya. Sebelumnya selalu flash "berhasil"

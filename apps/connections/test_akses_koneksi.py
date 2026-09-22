@@ -71,3 +71,91 @@ class MigrasiTandaiHubTests(TestCase):
         lain.refresh_from_db()
         self.assertEqual(hub.lingkungan, Lingkungan.INTERNAL)
         self.assertEqual(lain.lingkungan, Lingkungan.PRODUKSI)
+
+
+def _props(client, url="/admin-panel/profile"):
+    r = client.get(url, HTTP_X_INERTIA="true", HTTP_X_INERTIA_VERSION="1.0")
+    return json.loads(r.content)["props"]
+
+
+class PenegakanKoneksiTests(TestCase):
+    def setUp(self):
+        self.prod = _profil("PUSAT", is_default=True)
+        self.uji = _profil("Testing", Lingkungan.UJI)
+        self.internal = _profil("AMPHOREUS", Lingkungan.INTERNAL)
+        self.boss = User.objects.create_user("boss", password=PW, role=Role.SUPERADMIN)
+        self.adm = User.objects.create_user("adm", password=PW, role=Role.ADMIN,
+                                            allowed_menu_keys=["dashboard", "users", "menus"])
+        self.kasir = User.objects.create_user("kasir", password=PW, role=Role.KASIR,
+                                              server_profile=self.prod)
+
+    def test_daftar_koneksi_tersaring(self):
+        self.client.force_login(self.adm)
+        self.assertEqual({c["id"] for c in _props(self.client)["connections"]}, {self.prod.pk})
+        self.client.force_login(self.boss)
+        self.assertEqual(len(_props(self.client)["connections"]), 3)
+
+    def test_pilihan_sesi_ilegal_diganti_default_dan_dibuang(self):
+        self.client.force_login(self.adm)
+        s = self.client.session
+        s["active_profile_id"] = self.internal.pk
+        s.save()
+        self.assertEqual(_props(self.client)["active_connection"]["id"], self.prod.pk)
+        self.assertNotIn("active_profile_id", self.client.session)
+
+    def test_set_default_ditolak_tanpa_izin(self):
+        self.client.force_login(self.adm)
+        with patch("apps.connections.views.mssql.test_profile") as tes:
+            self.client.post(f"/admin-panel/connections/{self.uji.pk}/set-default")
+        tes.assert_not_called()
+        self.assertNotEqual(self.client.session.get("active_profile_id"), self.uji.pk)
+
+    def test_set_default_diterima_setelah_diberi(self):
+        self.adm.koneksi_khusus.add(self.uji)
+        self.client.force_login(self.adm)
+        with patch("apps.connections.views.mssql.test_profile",
+                   return_value={"ok": True, "message": ""}):
+            self.client.post(f"/admin-panel/connections/{self.uji.pk}/set-default")
+        self.assertEqual(self.client.session.get("active_profile_id"), self.uji.pk)
+
+    def test_admin_tak_bisa_mengunci_kasir_ke_uji(self):
+        self.client.force_login(self.adm)
+        self.client.post("/admin-panel/users/save", {
+            "id": self.kasir.pk, "username": "kasir", "name": "Kasir", "role": "kasir",
+            "server_profile_id": str(self.uji.pk)})
+        self.kasir.refresh_from_db()
+        self.assertEqual(self.kasir.server_profile_id, self.prod.pk)
+
+    def test_nilai_nonprod_yang_tak_berubah_diterima(self):
+        self.kasir.server_profile = self.uji
+        self.kasir.save(update_fields=["server_profile"])
+        self.client.force_login(self.adm)
+        self.client.post("/admin-panel/users/save", {
+            "id": self.kasir.pk, "username": "kasir", "name": "Ganti Nama", "role": "kasir",
+            "server_profile_id": str(self.uji.pk)})
+        self.kasir.refresh_from_db()
+        self.assertEqual(self.kasir.first_name, "Ganti")
+        self.assertEqual(self.kasir.server_profile_id, self.uji.pk)
+
+    def test_superadmin_memberi_koneksi_khusus_lewat_kelola_menu(self):
+        self.client.force_login(self.boss)
+        self.client.post("/admin-panel/menus/save", {
+            "user_id": self.adm.pk, "menu_keys": ["dashboard"], "data_keys": [],
+            "koneksi_khusus": [self.internal.pk, self.prod.pk]}, content_type="application/json")
+        self.assertEqual(set(self.adm.koneksi_khusus.values_list("pk", flat=True)),
+                         {self.internal.pk})
+
+    def test_admin_tak_bisa_memberi_koneksi_khusus(self):
+        adm2 = User.objects.create_user("adm2", password=PW, role=Role.ADMIN)
+        self.client.force_login(self.adm)
+        self.client.post("/admin-panel/menus/save", {
+            "user_id": adm2.pk, "menu_keys": [], "data_keys": [],
+            "koneksi_khusus": [self.internal.pk]}, content_type="application/json")
+        self.assertFalse(adm2.koneksi_khusus.exists())
+
+    def test_kelola_menu_mengirim_koneksi_nonprod_hanya_ke_superadmin(self):
+        self.client.force_login(self.boss)
+        ids = {k["id"] for k in _props(self.client, "/admin-panel/menus")["koneksi_nonprod"]}
+        self.assertEqual(ids, {self.uji.pk, self.internal.pk})
+        self.client.force_login(self.adm)
+        self.assertEqual(_props(self.client, "/admin-panel/menus")["koneksi_nonprod"], [])

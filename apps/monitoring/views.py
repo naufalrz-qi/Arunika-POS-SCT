@@ -9,6 +9,7 @@ import pyodbc
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.db.models import Q
 from django.http import Http404, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
@@ -26,7 +27,7 @@ from apps.auth_app.models import (
     peran_terkelola,
 )
 from apps.auth_app.tautan import tautan_untuk, tautan_wajib
-from apps.connections.models import ServerProfile
+from apps.connections.models import Lingkungan, ServerProfile
 from apps.core.http import get_data, redirect_aman as _redirect_back
 from apps.core.middleware import ditolak
 from apps.core.menus import (
@@ -365,6 +366,20 @@ def _last_superadmin_guard(target, new_role=None, deactivate=False):
     return "Tidak bisa: ini superadmin aktif terakhir." if others == 0 else None
 
 
+def _pilihan_server(pengelola, users):
+    """Server yang boleh ditetapkan `pengelola` untuk akun terkunci.
+
+    Selain superadmin: hanya Produksi — mengunci kasir ke server uji berarti
+    notanya tertulis ke salinan, bukan ke toko. Server non-produksi yang SUDAH
+    terpasang di akun yang tampil ikut dimuat supaya dropdown tidak kosong
+    (dan tidak diam-diam mengosongkannya saat disimpan)."""
+    qs = ServerProfile.objects.all().order_by("name")
+    if pengelola.role != Role.SUPERADMIN:
+        terpasang = {u.server_profile_id for u in users if u.server_profile_id}
+        qs = qs.filter(Q(lingkungan=Lingkungan.PRODUKSI) | Q(pk__in=terpasang))
+    return [{"value": p.pk, "label": f"{p.name} ({p.db_type})"} for p in qs]
+
+
 def users_index(request):
     roles = _managed_roles(request.user)
     users = _qs_terkelola(request.user).order_by("role", "username")
@@ -376,10 +391,7 @@ def users_index(request):
         "users": [_user_dict(u) for u in users],
         "assignable_roles": roles,
         "me": request.user.id,
-        "server_profiles": [
-            {"value": p.pk, "label": f"{p.name} ({p.db_type})"}
-            for p in ServerProfile.objects.all().order_by("name")
-        ],
+        "server_profiles": _pilihan_server(request.user, users),
     })
 
 
@@ -436,7 +448,18 @@ def users_save(request):
     # Server yang boleh dipakai. Untuk kasir/supervisor ini mengunci ke mana
     # nota mereka tertulis; salah isi berarti nota masuk ke cabang lain.
     sp = data.get("server_profile_id")
-    user.server_profile_id = int(sp) if str(sp or "").isdigit() else None
+    sp_baru = int(sp) if str(sp or "").isdigit() else None
+    # Hanya superadmin yang boleh mengunci akun ke server non-produksi. Nilai
+    # yang tidak berubah tetap diterima, supaya admin masih bisa menyunting nama
+    # kasir yang oleh superadmin dikunci ke server uji.
+    if (sp_baru and sp_baru != user.server_profile_id
+            and request.user.role != Role.SUPERADMIN
+            and not ServerProfile.objects.filter(
+                pk=sp_baru, lingkungan=Lingkungan.PRODUKSI).exists()):
+        request.session["flash_error"] = (
+            "Server uji coba/internal hanya bisa ditetapkan superadmin.")
+        return redirect("/admin-panel/users")
+    user.server_profile_id = sp_baru
     user.save()
 
     log_activity(request, "user", f"Simpan user {user.username}")
@@ -2123,9 +2146,11 @@ def menus_index(request):
         return denied
     saya = request.user
     users = [
-        u for u in User.objects.exclude(role=Role.SUPERADMIN).order_by("role", "username")
+        u for u in User.objects.exclude(role=Role.SUPERADMIN)
+        .prefetch_related("koneksi_khusus").order_by("role", "username")
         if bisa_kelola(saya, u)
     ]
+    superadmin = saya.role == Role.SUPERADMIN
     menus = assignable_menus()
     return render(
         request,
@@ -2142,6 +2167,10 @@ def menus_index(request):
                     # larangan: layar pengaturan tak boleh memaksa siapa pun
                     # berpikir terbalik saat mencentang.
                     "allowed_data_keys": sorted(DATA_KEY_SET - u.hidden_data()),
+                    # Hanya untuk superadmin: pemberian koneksi non-produksi
+                    # bukan wewenang admin (spec K6/K7).
+                    "koneksi_khusus": (
+                        [p.pk for p in u.koneksi_khusus.all()] if superadmin else []),
                 }
                 for u in users
             ],
@@ -2162,7 +2191,12 @@ def menus_index(request):
                 for r in (Role.KASIR, Role.SUPERVISOR, Role.ADMIN)
             },
             "boleh_data": sorted(DATA_KEY_SET - saya.hidden_data()),
-            "saya_superadmin": saya.role == Role.SUPERADMIN,
+            "saya_superadmin": superadmin,
+            "koneksi_nonprod": [
+                {"id": p.pk, "name": p.name, "lingkungan": p.lingkungan}
+                for p in ServerProfile.objects.exclude(
+                    lingkungan=Lingkungan.PRODUKSI).order_by("name")
+            ] if superadmin else [],
             # Urutan + label section untuk pengelompokan di UI.
             "sections": [
                 {"key": s, "label": SECTION_LABELS[s]}
@@ -2188,6 +2222,15 @@ def menus_save(request):
     user.allowed_menu_keys = keys
     user.hidden_data_keys = data_tersembunyi_baru(
         request.user, user, data.get("data_keys") or [])
+
+    # Izin koneksi non-produksi: HANYA superadmin. Kunci yang dikirim akun lain
+    # diabaikan, bukan ditolak — layar admin memang tak menampilkannya.
+    if request.user.role == Role.SUPERADMIN and "koneksi_khusus" in data:
+        ids = [int(x) for x in (data.get("koneksi_khusus") or []) if str(x).isdigit()]
+        user.koneksi_khusus.set(ServerProfile.objects.filter(pk__in=ids)
+                                .exclude(lingkungan=Lingkungan.PRODUKSI))
+        log_activity(request, "menu", f"Koneksi khusus {user.username}: "
+                     f"{','.join(str(i) for i in sorted(user.koneksi_khusus.values_list('pk', flat=True))) or '(tidak ada)'}")
 
     user.save(update_fields=["allowed_menu_keys", "hidden_data_keys"])
     log_activity(request, "menu", f"Set menu {user.username}: {','.join(keys) or '(kosong)'}")
