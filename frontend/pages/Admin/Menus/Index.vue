@@ -34,17 +34,29 @@ function bawaanUntuk(key) {
     .map(([role]) => ROLE_LABELS[role] || role);
 }
 
-// Centang yang TIDAK boleh diubah pemakai layar ini. Penjagaan sebenarnya di
-// server — menu_baru() mempertahankan yang di luar wewenang — jadi ini hanya
-// supaya layar tak menjanjikan perubahan yang takkan tersimpan.
+// Yang TIDAK boleh diubah pemakai layar ini tidak ditampilkan sama sekali.
+// Dulu ia tampil dalam keadaan terkunci; hasilnya layar penuh kotak mati yang
+// tak bisa diapa-apakan, dan badge alasannya menabrak judul menu. Penjagaan
+// sebenarnya tetap di server — menu_baru() mempertahankan yang di luar
+// wewenang, jadi menyembunyikannya di sini tidak menghilangkan apa pun dari
+// akun target (lihat keterangan "menu lain" di bawah toolbar).
 const terkunci = (m) =>
   Boolean(selected.value) && !(props.boleh_beri[selected.value.role] || []).includes(m.key);
-function alasanKunci(m) {
-  if (m.teknis) return "khusus superadmin";
-  if (m.tulis_kritis && selected.value?.role !== "admin") return "superadmin saja untuk peran ini";
-  return "tidak Anda pegang";
-}
-const dataTerkunci = (d) => !props.boleh_data.includes(d.key);
+const menusTampil = computed(() => props.menus.filter((m) => !terkunci(m)));
+const dataTampil = computed(() => props.data_keys.filter((d) => props.boleh_data.includes(d.key)));
+
+// Menu yang DIPEGANG target tapi tak tampil karena di luar wewenang pemakai
+// layar. Disebut jumlahnya saja: layar tak boleh berbohong bahwa target hanya
+// punya yang terlihat di sini.
+const tersembunyiDipegang = computed(() => {
+  if (!selected.value) return 0;
+  const tampil = new Set(menusTampil.value.map((m) => m.key));
+  const bawaan = props.role_defaults[selected.value.role] || [];
+  const punya = (selected.value.allowed_menu_keys || []).length
+    ? selected.value.allowed_menu_keys
+    : bawaan;
+  return punya.filter((k) => !tampil.has(k)).length;
+});
 const koneksiChecked = reactive({});
 const tampilKoneksi = computed(
   () => props.saya_superadmin && selected.value?.role === "admin" && props.koneksi_nonprod.length > 0,
@@ -77,28 +89,26 @@ const filteredUsers = computed(() => {
 // Menu dikelompokkan per section supaya mudah dipindai (dulu grid flat tanpa pembeda).
 const grouped = computed(() =>
   props.sections
-    .map((s) => ({ ...s, items: props.menus.filter((m) => m.section === s.key) }))
+    .map((s) => ({ ...s, items: menusTampil.value.filter((m) => m.section === s.key) }))
     .filter((s) => s.items.length),
 );
 
-const checkedCount = computed(() => props.menus.filter((m) => checked[m.key]).length);
+const checkedCount = computed(() => menusTampil.value.filter((m) => checked[m.key]).length);
 
 function sectionState(s) {
   const on = s.items.filter((m) => checked[m.key]).length;
   return { all: on === s.items.length, some: on > 0 && on < s.items.length, on };
 }
 function toggleSection(s) {
-  const bisa = s.items.filter((m) => !terkunci(m));
-  const target = !bisa.every((m) => checked[m.key]);
-  bisa.forEach((m) => (checked[m.key] = target));
+  const target = !s.items.every((m) => checked[m.key]);
+  s.items.forEach((m) => (checked[m.key] = target));
 }
 // `value` boleh boolean (semua/kosong) atau daftar kunci (mis. bawaan peran).
-// Kotak terkunci tak disentuh: tombol massal tak boleh tampak mengubah yang
-// memang tak bisa diubah.
+// Hanya menu yang TAMPIL yang disentuh: yang di luar wewenang tak ada di layar,
+// dan server mempertahankannya apa adanya.
 function setAll(value) {
   const daftar = Array.isArray(value) ? value : null;
-  props.menus.forEach((m) => {
-    if (terkunci(m)) return;
+  menusTampil.value.forEach((m) => {
     checked[m.key] = daftar ? daftar.includes(m.key) : value;
   });
 }
@@ -199,7 +209,7 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
           <!-- Toolbar global -->
           <div class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-control bg-surface-2 px-3 py-2">
             <p class="text-sm text-ink-muted">
-              <strong class="text-ink">{{ checkedCount }}</strong> / {{ menus.length }} menu dipilih
+              <strong class="text-ink">{{ checkedCount }}</strong> / {{ menusTampil.length }} menu dipilih
             </p>
             <div class="flex gap-2">
               <Button variant="secondary" size="sm" @click="setAll(bawaanTerpilih)">
@@ -209,6 +219,19 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
               <Button variant="secondary" size="sm" @click="setAll(false)">Kosongkan</Button>
             </div>
           </div>
+
+          <!-- Yang tak tampil bukan berarti tak dipegang: menu di luar wewenang
+               pemakai layar ini disembunyikan, tapi tetap melekat pada akun
+               target dan tak berubah saat disimpan. -->
+          <p
+            v-if="tersembunyiDipegang"
+            class="mb-4 rounded-control border border-border-default bg-surface-2 px-3 py-2 text-xs text-ink-muted"
+          >
+            Akun ini juga memegang
+            <strong class="text-ink">{{ tersembunyiDipegang }} menu lain</strong> yang di luar
+            wewenang Anda — tidak ditampilkan di sini, dan tetap seperti semula saat Anda
+            menyimpan. Hanya pengelola utama yang bisa mengubahnya.
+          </p>
 
           <!-- Yang belum pernah diatur memakai bawaan perannya. Tanpa keterangan
                ini, centang yang tampil terbaca seperti pilihan yang pernah
@@ -226,7 +249,7 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
           <!-- Nilai uang: berdiri sendiri di atas daftar menu, bukan sebagai
                salah satu section, karena cakupannya berbeda — ini menyaring ISI
                halaman, bukan menentukan halaman mana yang terbuka. -->
-          <section class="mb-5 rounded-control border border-border-default p-3">
+          <section v-if="dataTampil.length" class="mb-5 rounded-control border border-border-default p-3">
             <div class="mb-2 border-b border-border-default pb-1.5">
               <h3 class="text-xs font-semibold uppercase tracking-wider text-ink-muted">Nilai Uang</h3>
               <p class="mt-1 text-xs text-ink-subtle">
@@ -238,18 +261,16 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
             </div>
             <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
               <label
-                v-for="d in data_keys"
+                v-for="d in dataTampil"
                 :key="d.key"
                 :class="[
-                  'flex items-center gap-3 rounded-control border px-3 py-2.5 transition-colors',
-                  dataTerkunci(d) ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
+                  'flex cursor-pointer items-center gap-3 rounded-control border px-3 py-2.5 transition-colors',
                   dataChecked[d.key] ? 'border-brand-500/60 bg-brand-bg' : 'border-border-default hover:bg-surface-2',
                 ]"
               >
                 <input
                   type="checkbox"
                   v-model="dataChecked[d.key]"
-                  :disabled="dataTerkunci(d)"
                   class="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500"
                 />
                 <span class="text-sm text-ink-muted">{{ d.label }}</span>
@@ -304,30 +325,32 @@ const roleVariant = { admin: "brand", supervisor: "warning", kasir: "neutral" };
                 </label>
               </div>
               <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                <!-- Judul dan penanda peran dibungkus satu blok yang boleh
+                     melipat: nama menu dua baris di samping tiga badge dulu
+                     saling menimpa di kolom sempit. -->
                 <label
                   v-for="m in s.items"
                   :key="m.key"
-                  :title="terkunci(m) ? `${m.label}: ${alasanKunci(m)}.` : undefined"
                   :class="[
-                    'flex items-center gap-3 rounded-control border px-3 py-2.5 transition-colors',
-                    terkunci(m) ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
+                    'flex cursor-pointer items-start gap-3 rounded-control border px-3 py-2.5 transition-colors',
                     checked[m.key] ? 'border-brand-500/60 bg-brand-bg' : 'border-border-default hover:bg-surface-2',
                   ]"
                 >
-                  <input type="checkbox" v-model="checked[m.key]" :disabled="terkunci(m)" class="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500" />
-                  <Icon :name="m.icon" size="h-4 w-4" class="shrink-0 text-ink-subtle" />
-                  <span class="flex-1 text-sm text-ink-muted">{{ m.label }}</span>
-                  <Badge v-if="terkunci(m)" variant="neutral" class="shrink-0 text-[10px]">{{ alasanKunci(m) }}</Badge>
-                  <!-- Penanda jatah peran: tanpa ini tak ada cara membedakan
-                       menu yang memang bawaan kasir/supervisor dari menu admin
-                       yang kebetulan sedang diberikan kepada mereka. -->
-                  <Badge
-                    v-for="peran in bawaanUntuk(m.key)"
-                    :key="peran"
-                    variant="neutral"
-                    class="shrink-0 text-[10px]"
-                    >{{ peran }}</Badge
-                  >
+                  <input type="checkbox" v-model="checked[m.key]" class="mt-0.5 h-4 w-4 shrink-0 rounded border-border-strong text-brand-600 focus:ring-brand-500" />
+                  <Icon :name="m.icon" size="h-4 w-4" class="mt-0.5 shrink-0 text-ink-subtle" />
+                  <span class="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+                    <span class="min-w-0 break-words text-sm text-ink-muted">{{ m.label }}</span>
+                    <!-- Penanda jatah peran: tanpa ini tak ada cara membedakan
+                         menu yang memang bawaan kasir/supervisor dari menu admin
+                         yang kebetulan sedang diberikan kepada mereka. -->
+                    <Badge
+                      v-for="peran in bawaanUntuk(m.key)"
+                      :key="peran"
+                      variant="neutral"
+                      class="shrink-0 text-[10px]"
+                      >{{ peran }}</Badge
+                    >
+                  </span>
                 </label>
               </div>
             </section>
