@@ -11,6 +11,7 @@ Piutang Pelanggan adalah alasan berkas ini ada: ia mengirim `total_penjualan`,
 dan baru ketahuan ketika Hutang Supplier — cerminannya, persis di bawahnya di
 `views.py` — ternyata sudah menutupnya.
 """
+import datetime as dt
 import json
 import pathlib
 from contextlib import ExitStack, contextmanager
@@ -295,3 +296,99 @@ class UangBespoke(TestCase):
         teks = (pathlib.Path(settings.BASE_DIR) / "frontend" / "pages" / "Admin"
                 / "Inventory" / "MutasiStok.vue").read_text(encoding="utf-8")
         self.assertNotIn('format: "rupiah"', teks)
+
+
+class NotaMundurDetail(TestCase):
+    """Panel detail Nota Tanggal Mundur: rute JSON ketiga di layar itu, dan
+    satu-satunya yang memajang harga barang, total nota, dan perubahan diskon
+    dari log. Diuji lewat HTTP sungguhan — tes yang memanggil penyaringnya
+    langsung akan tetap hijau kalau view berhenti memakainya."""
+
+    HEADER = {"no_transaksi": "SC1", "tanggal": dt.datetime(2026, 9, 20, 12, 0),
+              "tanggal_server": dt.datetime(2026, 9, 21, 9, 0), "kd_divisi": "DAA000",
+              "kd_customer": "CAA000", "keterangan": "-", "kd_user": "UAA032"}
+    BARANG = {"kd_barang": "A", "kd_satuan": "SAA000", "kd_pegawai": "PAA000", "jenis": 1,
+              "barang": "Mainan", "satuan": "PCS", "qty": 2, "harga_jual": 5000.0, "subtotal": 10000.0}
+    RIWAYAT = {"peristiwa": [
+        {"waktu": dt.datetime(2026, 9, 20, 12, 0), "aksi": "Dibuat", "kd_user": "UAA009",
+         "tanggal": "2026-9-20 12:00:00", "perubahan": [],
+         "barang": {"isi": [{"kd_barang": "A", "kd_satuan": "SAA000", "qty": 1.0, "harga_jual": 5000.0}]}},
+        {"waktu": dt.datetime(2026, 9, 21, 9, 0), "aksi": "Diedit", "kd_user": "UAA032",
+         "tanggal": "2026-9-20 12:00:00",
+         "perubahan": [{"kolom": "diskon_uang", "dari": "0", "ke": "2000"},
+                       {"kolom": "keterangan", "dari": "-", "ke": "TF BCA"}],
+         "barang": {"ditambah": [], "dihapus": [], "diubah": [
+             {"kd_barang": "A", "kd_satuan": "SAA000", "qty": 2.0, "harga_jual": 5000.0,
+              "qty_dari": 1.0, "harga_jual_dari": 4000.0}]}},
+    ], "barang_akhir": {}}
+
+    def _cursor(self):
+        uji = self
+
+        @contextmanager
+        def c(profile, autocommit=True, query_timeout=None):
+            class C:
+                description, _baris, _satu = (), [], None
+
+                def setinputsizes(self, _):
+                    pass
+
+                def execute(self, sql, params=()):
+                    self.description, self._baris, self._satu = (), [], None
+                    if sql.startswith("SELECT TOP 1 * FROM t_penjualan"):
+                        isi = [uji.HEADER]
+                    elif "FROM t_penjualan_detail d" in sql:
+                        isi = [uji.BARANG]
+                    elif sql.startswith("SELECT total_bersih"):
+                        self._satu = (8000.0,)
+                        return
+                    else:
+                        isi = []
+                    if isi:
+                        self.description = [(k,) for k in isi[0]]
+                        self._baris = [tuple(r.values()) for r in isi]
+
+                def fetchall(self):
+                    return self._baris
+
+                def fetchone(self):
+                    return self._satu
+
+            yield C()
+        return c
+
+    def _detail(self, **kw):
+        u = User.objects.create_user(
+            f"nm{User.objects.count()}", password="rahasia-kuat-123",
+            role=Role.ADMIN, allowed_menu_keys=["nota_mundur"], **kw)
+        self.client.force_login(u)
+        with patch.object(v, "_active", lambda: object()), \
+             patch.object(v, "_log_siap", lambda p, cur=None: True), \
+             patch.object(v.mssql, "report_cursor", self._cursor()), \
+             patch.object(v.riwayat_log, "riwayat", lambda *a: self.RIWAYAT), \
+             patch.object(v.riwayat_log, "cocok_dengan_sekarang", lambda *a: True):
+            r = self.client.get("/admin-panel/analitik/nota-mundur/detail", {"jenis": "Penjualan", "no": "SC1"})
+        self.assertEqual(r.status_code, 200)
+        return json.loads(r.content)
+
+    def test_tanpa_izin_uang_tak_ada_rupiah_di_respons(self):
+        d = self._detail(hidden_data_keys=["nominal", "harga_jual"])
+        teks = json.dumps(d)
+        for bocor in ("harga_jual", "harga_jual_dari", "subtotal", "5000", "4000", "8000", "Diskon"):
+            self.assertNotIn(bocor, teks, bocor)
+        self.assertIsNone(d["total_bersih"])
+        # Yang bukan uang tetap utuh: qty, dan perubahan keterangan.
+        self.assertEqual(d["barang"][0]["qty"], 2)
+        self.assertEqual([c["label"] for c in d["riwayat"][1]["perubahan"]], ["Keterangan"])
+
+    def test_dengan_izin_semua_tampil(self):
+        d = self._detail()
+        self.assertEqual(d["total_bersih"], 8000.0)
+        self.assertEqual(d["barang"][0]["subtotal"], 10000.0)
+        self.assertEqual(d["riwayat"][1]["barang"]["diubah"][0]["harga_jual_dari"], 4000.0)
+        self.assertEqual([c["label"] for c in d["riwayat"][1]["perubahan"]], ["Diskon (Rp)", "Keterangan"])
+
+    def test_pembuat_dan_kasir_nota_dipisah(self):
+        d = self._detail()
+        self.assertEqual([p["aksi"] for p in d["riwayat"]], ["Dibuat", "Diedit"])
+        self.assertEqual(d["riwayat"][1]["tanggal_nota"], "2026-09-20 12:00")

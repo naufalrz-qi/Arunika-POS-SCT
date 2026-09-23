@@ -14,7 +14,8 @@ Dua hal yang dijaga di sini tidak akan terlihat sampai produksi:
 """
 import datetime as dt
 
-from django.test import SimpleTestCase
+from django.db import connection
+from django.test import SimpleTestCase, TestCase
 
 from apps.transactions import reports as rpt
 
@@ -123,6 +124,102 @@ class AmbangSelisih(SimpleTestCase):
         saringan; hanya nilai yang DIPAJANG yang bertanda."""
         sql, _ = rpt.nota_mundur(_f(min_selisih=7))
         self.assertIn(f"ABS({rpt._SELISIH}) >= ?", sql)
+
+
+class JejakLog(SimpleTestCase):
+    """Penyebab (diedit / diinput mundur) dibaca dari tbl_log_transaksi.
+
+    Yang dijaga di sini semuanya soal ONGKOS, dan tak satu pun akan merah di
+    tes lain: tabel log berisi jutaan baris tanpa index selain `id`, jadi satu
+    bentuk yang salah berarti scan jutaan baris PER BARIS laporan.
+    """
+
+    def test_tanpa_index_log_tidak_disentuh(self):
+        """Tanpa `log_siap`, tabel log tak boleh muncul sama sekali — dan
+        pembuat TIDAK ditebak dari kd_user, yang justru sudah ditimpa pengedit."""
+        sql, params = rpt.nota_mundur(_f())
+        self.assertNotIn("tbl_log_transaksi", sql)
+        self.assertIn("'Belum dicek' AS penyebab", sql)
+        self.assertIn("CAST(NULL AS varchar(50)) AS dibuat_oleh", sql)
+        self.assertEqual(len(params), len(rpt._DOK_MUNDUR) * 3)
+
+    def test_tiap_pencarian_seek_pada_aksi_dan_waktu(self):
+        """Kunci index adalah (table_aksi, waktu). Pencarian yang tak menyaring
+        keduanya dengan = / rentang tak bisa seek."""
+        sql, _ = rpt.nota_mundur(_f(log_siap=True))
+        pencarian = sql.split("OUTER APPLY (SELECT TOP 1")[1:]
+        self.assertEqual(len(pencarian), 4)
+        for p in pencarian:
+            self.assertRegex(p, r"l\.table_aksi = x\.aksi_(ins|upd) AND l\.waktu >= .+ AND l\.waktu < ")
+            self.assertIn("ORDER BY l.waktu", p)
+            # LIKE dengan nomor dokumen butuh escape `_`; LEFT(...) = tidak.
+            self.assertNotIn("LIKE", p)
+
+    def test_pencarian_mahal_hanya_untuk_yang_membutuhkan(self):
+        """Predikat yang hanya merujuk kolom luar jadi predikat startup: insert
+        dicari hanya kalau tak ada update, pembuat asli hanya untuk yang diedit,
+        jendela lebar hanya kalau jendela sempit kosong."""
+        sql, _ = rpt.nota_mundur(_f(log_siap=True))
+        self.assertIn("WHERE su.id IS NULL AND l.table_aksi = x.aksi_ins", sql)
+        self.assertIn("WHERE su.id IS NOT NULL AND l.table_aksi = x.aksi_ins", sql)
+        self.assertIn("WHERE su.id IS NOT NULL AND a1.fd IS NULL AND l.table_aksi = x.aksi_ins", sql)
+
+    def test_tiap_arm_membawa_alamat_jejaknya(self):
+        sql, _ = rpt.nota_mundur(_f(log_siap=True))
+        for _label, tabel, nokol in rpt._DOK_MUNDUR:
+            self.assertIn(f"'{tabel}__insert' AS aksi_ins, '{tabel}__update' AS aksi_upd", sql)
+            self.assertIn(f"'val__{nokol}__' + RTRIM({nokol}) + ';' AS kunci_ins", sql)
+            self.assertIn(f"'key__{nokol}__' + RTRIM({nokol}) + ';' AS kunci_upd", sql)
+
+    def test_jejak_tidak_menambah_parameter(self):
+        """Semua nilai pencarian log berasal dari kolom baris, bukan `?` — kalau
+        ada yang lolos jadi parameter, urutan `?` bergeser dan pyodbc diam saja."""
+        _, tanpa = rpt.nota_mundur(_f())
+        _, dengan = rpt.nota_mundur(_f(log_siap=True))
+        self.assertEqual(tanpa, dengan)
+
+
+class KolomLog(TestCase):
+    """`kolom_log` dijalankan di SQL Server sungguhan (pangkal uji), bukan
+    dibaca teksnya: CHARINDEX/SUBSTRING yang meleset satu karakter tetap
+    menghasilkan string yang tampak masuk akal."""
+
+    def _ambil(self, payload, kolom):
+        with connection.cursor() as cur:
+            cur.execute(f"SELECT {rpt.kolom_log('p.fd', kolom)} FROM (SELECT %s AS fd) p", [payload])
+            return cur.fetchone()[0]
+
+    def test_nilai_di_tengah_dan_di_ujung(self):
+        fd = "val__no_transaksi__SC1;val__kd_user__UAA009;val__divisi_id__DAA004"
+        self.assertEqual(self._ambil(fd, "kd_user"), "UAA009")
+        self.assertEqual(self._ambil(fd, "divisi_id"), "DAA004")
+
+    def test_kolom_tak_ada_jadi_null(self):
+        self.assertIsNone(self._ambil("val__no_transaksi__SC1;val__keterangan__-", "kd_user"))
+
+    def test_tak_tertukar_dengan_kolom_berakhiran_sama(self):
+        """`;val__` di depan mencegah `x_kd_user` terbaca sebagai `kd_user`."""
+        fd = "val__no_transaksi__SC1;val__x_kd_user__SALAH;val__kd_user__BENAR"
+        self.assertEqual(self._ambil(fd, "kd_user"), "BENAR")
+
+
+class FilterPenyebab(SimpleTestCase):
+    def test_penyebab_disaring_di_luar_dengan_parameter_terakhir(self):
+        sql, params = rpt.nota_mundur(_f(log_siap=True, penyebab="Diedit", kd_divisi="DAA001"))
+        self.assertTrue(sql.endswith("WHERE p.penyebab = ?"))
+        self.assertEqual(params[-2:], ["DAA001", "Diedit"])
+
+    def test_penyebab_tak_dikenal_diabaikan(self):
+        sql, params = rpt.nota_mundur(_f(log_siap=True, penyebab="'; DROP TABLE x --"))
+        self.assertNotIn("p.penyebab", sql)
+        self.assertEqual(len(params), len(rpt._DOK_MUNDUR) * 3)
+
+    def test_pilihan_penyebab_sama_dengan_yang_dihasilkan_sql(self):
+        """Dropdown diisi PENYEBAB_MUNDUR; nilai yang tak pernah dihasilkan SQL
+        berarti pilihan yang selalu kosong."""
+        sql, _ = rpt.nota_mundur(_f(log_siap=True))
+        for p in rpt.PENYEBAB_MUNDUR:
+            self.assertIn(f"'{p}'", sql)
 
 
 class UrutanParameter(SimpleTestCase):

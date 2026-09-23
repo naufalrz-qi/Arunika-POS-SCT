@@ -66,6 +66,7 @@ from apps.core import scheduler
 from apps.bisnis.siapkan import Ditolak
 from apps.monitoring import tugas
 from apps.transactions import reports as rpt
+from apps.transactions import riwayat_log
 from core import mssql
 
 
@@ -147,7 +148,8 @@ _UANG_MODAL = {"harga_pokok", "total_harga_pokok", "laba", "total_laba",
 # Satu kunci izin menutup beberapa field. `harga_average` ikut harga_beli
 # karena ia rata-rata harga perolehan — modal, bukan harga jual.
 _FIELDS_BY_DATA_KEY = {
-    "harga_jual": {"harga_jual", "harga_bersih", "harga_promo"},
+    # `harga_jual_dari` = harga sebelum diedit, di riwayat panel Nota Tanggal Mundur.
+    "harga_jual": {"harga_jual", "harga_bersih", "harga_promo", "harga_jual_dari"},
     "harga_beli": {"harga_average", "harga_beli_akhir"} | _UANG_MODAL,
     # `nilai` = kolom Nilai di kartu Fast Moving dashboard. Sempat terlewat pada
     # rilis pertama: omset di kartu ringkasan sudah hilang, tapi rupiah per
@@ -2433,6 +2435,10 @@ def _report_view(spec):
                 try:
                     lewat_arunika = _pakai_bentuk_arunika(spec, profile)
                     bangun = spec["inner_arunika"] if lewat_arunika else spec["inner"]
+                    # Opsional: spec yang bentuk SQL-nya bergantung pada keadaan
+                    # server (Nota Tanggal Mundur: ada index log atau tidak).
+                    if spec.get("siapkan"):
+                        spec["siapkan"](profile, f)
                     inner, params = bangun(f)
                     inner, params = reporting.apply_column_filters(inner, params, f)
                     # Bentuk Arunika tak punya replica: ia dibaca dari database
@@ -2512,6 +2518,8 @@ def _report_export(spec):
         # dipercaya orang justru yang dicetak.
         lewat_arunika = _pakai_bentuk_arunika(spec, profile)
         bangun = spec["inner_arunika"] if lewat_arunika else spec["inner"]
+        if spec.get("siapkan"):
+            spec["siapkan"](profile, f)
         inner, params = bangun(f)
         inner, params = reporting.apply_column_filters(inner, params, f)
 
@@ -3452,6 +3460,51 @@ opname_export = _report_export(_OPNAME)
 # asal sama sekali (`dibuat_pada` adalah waktu baris masuk Arunika, bukan jam
 # server legacy). Memberinya kembaran sekarang berarti memajang angka yang
 # terlihat benar dan tidak benar.
+
+# Profil yang sudah terbukti punya index log. Hanya hasil POSITIF yang diingat:
+# index tak pernah hilang sendiri, tapi yang belum ada bisa dibuat kapan saja
+# lewat Cek Index — dan layar harus langsung ikut tanpa restart.
+_LOG_SIAP: set = set()
+
+_PESAN_LOG_BELUM = (
+    "Kolom Penyebab, Dibuat oleh, dan Diedit oleh belum bisa diisi: server ini belum "
+    "punya index jejak log. Buat lewat Koneksi Server → Cek Index, sebaiknya di luar "
+    "jam toko (selama dibangun, simpan nota di kasir tertahan beberapa detik)."
+)
+
+
+def _log_siap(profile, cur=None) -> bool:
+    if profile.pk in _LOG_SIAP:
+        return True
+
+    def cek(c):
+        c.execute("SELECT 1 FROM sys.indexes WHERE name = ? AND object_id = OBJECT_ID('tbl_log_transaksi')",
+                  [rpt.LOG_INDEX])
+        return c.fetchone() is not None
+
+    try:
+        if cur is not None:
+            ada = cek(cur)
+        else:
+            with mssql.report_cursor(profile) as c:
+                ada = cek(c)
+    except pyodbc.Error:
+        # Server tak terjangkau: kueri utamanya akan gagal juga dan memberi
+        # pesan yang benar. Di sini cukup jangan menyalakan pencarian log.
+        return False
+    if ada:
+        _LOG_SIAP.add(profile.pk)
+    return ada
+
+
+def _siapkan_nota_mundur(profile, f):
+    """Nyalakan pencarian log hanya kalau index-nya ada — tanpa index, tiap
+    baris laporan men-scan jutaan baris log dan layar tak pernah selesai."""
+    f["log_siap"] = _log_siap(profile)
+    if not f["log_siap"]:
+        f["warning"] = " ".join(filter(None, [f.get("warning"), _PESAN_LOG_BELUM]))
+
+
 _NOTA_MUNDUR = {
     "component": "Admin/Analytics/NotaMundur",
     "url": "/admin-panel/analitik/nota-mundur",
@@ -3463,7 +3516,11 @@ _NOTA_MUNDUR = {
     # `jenis` dan `min_selisih` disaring DI DALAM inner, bukan sebagai filter
     # kolom di luar: yang pertama membuang seluruh arm UNION, yang kedua
     # memangkas tiap arm sebelum digabung. Keduanya mustahil dari luar.
-    "filter_keys": ["kd_divisi", "jenis", "min_selisih"],
+    # `penyebab` ikut di sini (bukan filter kolom `f_…`) supaya nilainya
+    # dipantulkan balik ke `filters` dan kotak pilihannya tak tampil kosong
+    # sementara saringannya berlaku.
+    "filter_keys": ["kd_divisi", "jenis", "min_selisih", "penyebab"],
+    "siapkan": _siapkan_nota_mundur,
     # Tanpa ini kotak "min. selisih" tampil kosong sementara nilainya diam-diam
     # berlaku — pelajaran dari Klasifikasi Pelanggan.
     "filter_defaults": {"min_selisih": 1},
@@ -3483,22 +3540,178 @@ _NOTA_MUNDUR = {
     # apa-apa alih-alih melebarkan rentangnya.
     "default_from_days": 365,
     "options": lambda p: {"divisi": _opt_divisi(p),
-                          "jenis": [{"value": j, "label": j} for j in rpt.JENIS_MUNDUR]},
+                          "jenis": [{"value": j, "label": j} for j in rpt.JENIS_MUNDUR],
+                          "penyebab": [{"value": j, "label": j} for j in rpt.PENYEBAB_MUNDUR]},
     "filename": "nota-tanggal-mundur",
     "columns": [
         {"key": "jenis", "label": "Jenis Dokumen"},
         {"key": "no_dokumen", "label": "No. Dokumen"},
         {"key": "tanggal", "label": "Tanggal", "format": "date"},
-        {"key": "tanggal_server", "label": "Tanggal Server", "format": "date"},
+        # Waktu TERAKHIR disimpan, bukan waktu dibuat — lihat rpt.nota_mundur.
+        {"key": "tanggal_server", "label": "Terakhir Disimpan", "format": "date"},
         {"key": "selisih_hari", "label": "Selisih (hari)", "format": "number"},
         {"key": "arah", "label": "Arah"},
+        {"key": "penyebab", "label": "Penyebab"},
         {"key": "divisi", "label": "Divisi"},
-        {"key": "petugas", "label": "Petugas"},
+        {"key": "dibuat_oleh", "label": "Dibuat oleh"},
+        {"key": "diedit_oleh", "label": "Diedit oleh"},
         {"key": "keterangan", "label": "Keterangan"},
     ],
 }
 nota_mundur = _report_view(_NOTA_MUNDUR)
 nota_mundur_export = _report_export(_NOTA_MUNDUR)
+
+# Kolom header yang berisi uang. Perubahan di kolom ini disembunyikan dari akun
+# yang dicabut izin `nominal`-nya, sama seperti total nota di bawahnya.
+_UANG_HEADER_NOTA = {"diskon1", "diskon2", "diskon3", "diskon4", "diskon_uang", "pajak",
+                     "total", "total_bayar", "bayar", "nominal", "jumlah"}
+_LABEL_KOLOM_NOTA = {
+    "kd_customer": "Pelanggan", "kd_supplier": "Supplier", "kd_divisi": "Divisi",
+    "kd_jenis": "Jenis bayar", "kd_kas": "Kas", "kd_voucher": "Voucher", "no_bukti": "No. bukti",
+    "tanggal": "Tanggal nota", "tanggal_jatuh_tempo": "Jatuh tempo", "tanggal_setor": "Tanggal setor",
+    "status": "Status", "diskon_uang": "Diskon (Rp)", "pajak": "Pajak", "keterangan": "Keterangan",
+    "diskon1": "Diskon 1", "diskon2": "Diskon 2", "diskon3": "Diskon 3", "diskon4": "Diskon 4",
+}
+
+
+def _nilai_log(v: str) -> str:
+    """Tanggal payload trigger ("2026-9-20 12:28:33", tak berpadding) ke bentuk
+    yang sama dengan kolom tanggal lain; nilai lain apa adanya."""
+    try:
+        return reporting._clean(dt.datetime.strptime(v, "%Y-%m-%d %H:%M:%S"))
+    except (TypeError, ValueError):
+        return v
+
+
+def _peta_nama(cur, tabel: str, kolom: str, kode: set) -> dict:
+    """{kode ter-normalisasi: nama} untuk sekumpulan kode master."""
+    kode = sorted({k for k in kode if k})
+    if not kode:
+        return {}
+    mssql.execute_varchar(cur, f"SELECT {kolom}, nama FROM {tabel} WHERE {kolom} IN ({','.join('?' * len(kode))})",
+                          kode)
+    return {inv._k(a): (b or "").strip() for a, b in cur.fetchall()}
+
+
+def nota_mundur_detail(request):
+    """JSON: satu dokumen — isinya sekarang dan riwayat versinya dari log.
+
+    Pola sama dengan klasifikasi_pelanggan_detail: JSON biasa, satu dokumen per
+    klik. Riwayat hanya dibaca kalau index log ada (lihat `_log_siap`); tanpa
+    index, isi sekarang tetap tampil dan riwayat diganti penjelasan.
+    """
+    jenis = (request.GET.get("jenis") or "").strip()
+    no = (request.GET.get("no") or "").strip()
+    if jenis not in rpt.DOK_MUNDUR or not no:
+        return JsonResponse({"error": "Dokumen tidak disebutkan."}, status=400)
+    profile = _active()
+    if not profile:
+        return JsonResponse({"error": CONN_ERROR}, status=503)
+    tabel, nokol = rpt.DOK_MUNDUR[jenis]
+    hidden = _hidden_fields(request)
+    uang_header = _uang_bespoke(request, _UANG_HEADER_NOTA, kunci="nominal")
+
+    try:
+        with mssql.report_cursor(profile, query_timeout=60) as cur:
+            sql, prm = rpt.nota_mundur_header(jenis, no)
+            mssql.execute_varchar(cur, sql, prm)
+            baris = reporting.dictify(cur)
+            if not baris:
+                return JsonResponse({"error": "Dokumen tidak ditemukan di server ini."}, status=404)
+            h = baris[0]
+
+            barang, total = None, None
+            if tabel in riwayat_log.DETAIL:
+                (sql, prm), (sql_total, prm_total) = rpt.nota_mundur_barang(no)
+                mssql.execute_varchar(cur, sql, prm)
+                barang = reporting.dictify(cur)
+                mssql.execute_varchar(cur, sql_total, prm_total)
+                total = (cur.fetchone() or [None])[0]
+
+            log_siap = _log_siap(profile, cur)
+            jejak = (riwayat_log.riwayat(cur, tabel, nokol, no, h["tanggal"], h["tanggal_server"])
+                     if log_siap and h.get("tanggal") and h.get("tanggal_server") else None)
+
+            # Satu putaran nama untuk semua kode yang akan dipajang.
+            peristiwa = jejak["peristiwa"] if jejak else []
+            kd_user = {h.get("kd_user")} | {p["kd_user"] for p in peristiwa}
+            kd_pihak = {h.get("kd_customer"), h.get("kd_supplier")}
+            kd_barang, kd_satuan = set(), set()
+            for p in peristiwa:
+                for c in p["perubahan"]:
+                    if c["kolom"] in ("kd_customer", "kd_supplier"):
+                        kd_pihak |= {c["dari"], c["ke"]}
+                for daftar in (p["barang"] or {}).values():
+                    for b in daftar:
+                        kd_barang.add(b["kd_barang"])
+                        kd_satuan.add(b["kd_satuan"])
+            nama_user = _peta_nama(cur, "m_userx", "kd_user", {k.strip() for k in kd_user if k})
+            nama_pihak = {**_peta_nama(cur, "m_customer", "kd_customer", {k.strip() for k in kd_pihak if k}),
+                          **(_peta_nama(cur, "m_supplier", "kd_supplier", {k.strip() for k in kd_pihak if k})
+                             if "kd_supplier" in h else {})}
+            nama_barang = _peta_nama(cur, "m_barang", "kd_barang", kd_barang)
+            nama_satuan = _peta_nama(cur, "m_satuan", "kd_satuan", kd_satuan)
+            divisi = _peta_nama(cur, "m_divisi", "kd_divisi", {(h.get("kd_divisi") or "").strip()})
+    except pyodbc.Error as exc:
+        return JsonResponse({"error": mssql.friendly_error(exc, "Gagal membaca detail")}, status=502)
+
+    def orang(kd):
+        kd = (kd or "").strip()
+        return nama_user.get(inv._k(kd)) or kd or "—"
+
+    def pihak(kd):
+        kd = (kd or "").strip()
+        nama = nama_pihak.get(inv._k(kd))
+        return f"{nama} ({kd})" if nama else kd
+
+    def barang_tampil(b):
+        out = {k: v for k, v in b.items() if k not in hidden}
+        out["barang"] = nama_barang.get(inv._k(b["kd_barang"]), "")
+        out["satuan"] = nama_satuan.get(inv._k(b["kd_satuan"]), b["kd_satuan"])
+        return out
+
+    def tampil(kolom, v):
+        return pihak(v) if kolom in ("kd_customer", "kd_supplier") else _nilai_log(v)
+
+    riwayat = None
+    if jejak is not None:
+        riwayat = []
+        for p in peristiwa:
+            perubahan = [
+                {"label": _LABEL_KOLOM_NOTA.get(c["kolom"], c["kolom"]),
+                 "dari": tampil(c["kolom"], c["dari"]), "ke": tampil(c["kolom"], c["ke"])}
+                for c in p["perubahan"] if c["kolom"] not in uang_header
+            ]
+            barang_p = ({k: [barang_tampil(b) for b in v] for k, v in p["barang"].items()}
+                        if p["barang"] is not None else None)
+            riwayat.append({"aksi": p["aksi"], "waktu": reporting._clean(p["waktu"]), "oleh": orang(p["kd_user"]),
+                            "tanggal_nota": _nilai_log(p["tanggal"]), "perubahan": perubahan, "barang": barang_p})
+
+    barang_bersih = None
+    if barang is not None:
+        barang_bersih = [{k: v for k, v in r.items() if k not in hidden}
+                         for r in reporting.clean_rows(barang)]
+    return JsonResponse({
+        "jenis": jenis,
+        "no": no,
+        "header": {
+            "tanggal": reporting._clean(h.get("tanggal")),
+            "tanggal_server": reporting._clean(h.get("tanggal_server")),
+            "divisi": divisi.get(inv._k((h.get("kd_divisi") or "").strip()), ""),
+            "pihak": pihak(h.get("kd_customer") or h.get("kd_supplier")),
+            "keterangan": (h.get("keterangan") or "").strip(),
+            # Yang tercatat DI NOTA sekarang: pembuat, atau pengedit terakhir
+            # kalau nota pernah diedit. Riwayat di bawah yang membedakannya.
+            "kasir_nota": orang(h.get("kd_user")),
+        },
+        "barang": barang_bersih,
+        "total_bersih": None if "total_bersih" in hidden else reporting._clean(total),
+        "riwayat": riwayat,
+        "log_siap": log_siap,
+        "barang_cocok": (riwayat_log.cocok_dengan_sekarang(jejak["barang_akhir"], barang or [],
+                                                           riwayat_log.DETAIL[tabel][1])
+                         if jejak and barang is not None else None),
+    })
 
 
 # Neraca Opname — mencocokkan selisih lintas sesi, yang tak bisa dilihat oleh

@@ -130,6 +130,7 @@ urlpatterns = [
     # Analitik (FMI)
     path("analitik/nota-mundur", views.nota_mundur, name="nota_mundur"),
     path("analitik/nota-mundur/export", views.nota_mundur_export, name="nota_mundur_export"),
+    path("analitik/nota-mundur/detail", views.nota_mundur_detail, name="nota_mundur_detail"),
     path("analitik/fmi-penjualan", views.fmi_penjualan, name="fmi_penjualan"),
     path("analitik/fmi-penjualan/export", views.fmi_penjualan_export, name="fmi_penjualan_export"),
     path("analitik/fmi-stok", views.fmi_stok, name="fmi_stok"),

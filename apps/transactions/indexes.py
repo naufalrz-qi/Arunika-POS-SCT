@@ -153,6 +153,19 @@ INDEXES = {
         # _purchase_prices (both in apps/inventory/services.py).
         "CREATE NONCLUSTERED INDEX IX_mbarangsatuan_barang_satuan ON m_barang_satuan (kd_barang, kd_satuan)"
     ),
+    # --- jejak trigger legacy (Nota Tanggal Mundur) ----------------------------
+    # Tanpa ini satu-satunya index di tbl_log_transaksi adalah PK `id`, dan
+    # mencari "siapa membuat / mengedit nota X" berarti men-scan 4,3 juta baris
+    # (PUSAT) PER NOTA. Dengan (table_aksi, waktu) pencariannya jadi seek sempit
+    # di sekitar `tanggal_server` — lihat `rpt.nota_mundur`.
+    #
+    # Bangun DI LUAR JAM TOKO: build offline memegang shared lock atas tabel log,
+    # dan setiap simpan nota menulis ke tabel ini lewat trigger — kasir tertahan
+    # selama build berjalan. Layar Nota Tanggal Mundur tetap jalan tanpa index
+    # ini (kolom penyebab kosong + pemberitahuan), jadi tak ada yang mendesak.
+    "IX_tbl_log_transaksi_aksi_waktu": (
+        "CREATE NONCLUSTERED INDEX IX_tbl_log_transaksi_aksi_waktu ON tbl_log_transaksi (table_aksi, waktu)"
+    ),
 }
 
 

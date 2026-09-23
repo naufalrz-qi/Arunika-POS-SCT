@@ -1,20 +1,25 @@
 <script setup>
 /**
- * Nota Tanggal Mundur — dokumen yang tanggalnya berbeda hari dari cap server.
+ * Nota Tanggal Mundur — dokumen yang tanggalnya berbeda hari dari waktu simpan
+ * terakhirnya, beserta PENYEBABNYA menurut jejak log server.
  *
- * Di aplikasi POS legacy, `tanggal` dokumen dirakit dari jam PC kasir dan bisa
- * diubah operator; `tanggal_server` tidak. Seluruh laporan lain bersumbu
- * `tanggal`, jadi dokumen yang dimundurkan ke periode yang sudah dilaporkan
- * tidak terlihat di mana pun. Layar ini satu-satunya yang membandingkannya.
+ * Di aplikasi POS legacy, `tanggal` dokumen dirakit dari jam PC kasir;
+ * `tanggal_server` adalah waktu dokumen TERAKHIR disimpan. Saat nota diedit,
+ * legacy menimpa waktu simpan DAN kasir di nota dengan waktu dan akun
+ * pengedit. Karena itu selisih tanggal punya dua penyebab yang tampak identik
+ * di tabel — nota yang diedit belakangan, dan nota yang memang diinput dengan
+ * tanggal lama — dan layar ini memisahkannya lewat jejak log
+ * (apps/transactions/reports.py::nota_mundur).
  *
  * Nada layar ini sengaja NETRAL. Di data nyata 83% pembelian testGudang masuk
  * daftar ini secara sah (faktur pemasok bertanggal mundur itu normal). Layar
  * yang menuduh akan diabaikan dalam seminggu, dan bersamanya ekor yang benar-
  * benar layak diperiksa ikut hilang.
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import ReportPage from "@/components/report/ReportPage.vue";
+import DetailNotaMundur from "@/components/report/DetailNotaMundur.vue";
 import FilterPanel from "@/components/ui/FilterPanel.vue";
 import FilterSection from "@/components/ui/FilterSection.vue";
 import DateRangeField from "@/components/ui/DateRangeField.vue";
@@ -36,30 +41,41 @@ const columns = [
   { key: "jenis", label: "Jenis Dokumen" },
   { key: "no_dokumen", label: "No. Dokumen" },
   { key: "tanggal", label: "Tanggal", format: "datetime" },
-  { key: "tanggal_server", label: "Tanggal Server", format: "datetime" },
+  { key: "tanggal_server", label: "Terakhir Disimpan", format: "datetime" },
   { key: "selisih_hari", label: "Selisih (hari)", align: "right", format: "number" },
-  { key: "arah", label: "Arah" },
+  { key: "penyebab", label: "Penyebab" },
+  { key: "dibuat_oleh", label: "Dibuat oleh" },
+  { key: "diedit_oleh", label: "Diedit oleh" },
   { key: "divisi", label: "Divisi" },
-  { key: "petugas", label: "Petugas" },
   { key: "keterangan", label: "Keterangan" },
 ];
 
 const divisiOptions = computed(() => props.report?.options?.divisi || []);
 const jenisOptions = computed(() => props.report?.options?.jenis || []);
+const penyebabOptions = computed(() => props.report?.options?.penyebab || []);
 
 const summaryItems = computed(() => {
   const s = props.report?.summary || {};
   const nf = new Intl.NumberFormat("id-ID");
   return [
     { label: "Dokumen", value: nf.format(s.jml_dokumen || 0) },
-    { label: "Bertanggal Mundur", value: nf.format(s.jml_mundur || 0) },
+    { label: "Diedit Belakangan", value: nf.format(s.jml_diedit || 0) },
+    { label: "Diinput Mundur", value: nf.format(s.jml_input_mundur || 0) },
     // Dipisah, bukan digabung: bertanggal MAJU jauh lebih jarang dan jauh lebih
     // aneh — 49 baris dari 3.483 di testGudang. Menjumlahkannya dengan yang
     // mundur akan menguburnya.
     { label: "Bertanggal Maju", value: nf.format(s.jml_maju || 0) },
+    { label: "Tak Tercatat di Log", value: nf.format(s.jml_tak_tercatat || 0) },
     { label: "Selisih Terjauh", value: `${nf.format(s.selisih_terjauh || 0)} hari` },
   ];
 });
+
+// "Diedit" diberi warna karena ia temuan utamanya: tanggal nota tak berubah,
+// yang berubah adalah isinya dan orang yang tercatat. "Maju" tetap kuning —
+// jarang dan tak punya penjelasan wajar.
+const WARNA_PENYEBAB = { Diedit: "brand", "Diinput maju": "warning" };
+
+const dipilih = ref(null);
 </script>
 
 <template>
@@ -67,14 +83,14 @@ const summaryItems = computed(() => {
     <Banner
       variant="info"
       class="mb-4"
-      message="Selisih tanggal BUKAN dengan sendirinya penyimpangan. Faktur pemasok yang bertanggal minggu lalu dan baru diinput hari ini akan selalu muncul di sini — pada data nyata, mayoritas baris pembelian memang begitu. Yang layak diperiksa: selisih besar pada dokumen PENJUALAN (yang seharusnya diinput saat transaksinya terjadi), dan dokumen bertanggal MAJU, yaitu bertanggal masa depan saat ia disimpan."
+      message="Selisih tanggal BUKAN dengan sendirinya penyimpangan. Penyebabnya dua: (1) nota DIEDIT belakangan — aplikasi kasir lama mengganti waktu simpan dan nama kasir di nota dengan waktu dan akun pengedit, sementara tanggal nota tetap; (2) nota memang DIINPUT dengan tanggal lama, misalnya faktur pemasok atau nota komplain. Klik nomor dokumen untuk melihat isinya dan riwayat siapa mengubah apa."
     />
 
     <ReportPage
       deferred-key="report"
       :data="report"
       :columns="columns"
-      row-key="no_dokumen"
+      row-key="_rid"
       :page="Number(form.page)"
       :per-page="Number(form.per_page)"
       :sort-key="form.sort"
@@ -90,6 +106,7 @@ const summaryItems = computed(() => {
           <FilterSection title="Periode & Pencarian">
             <DateRangeField class="sm:col-span-2" v-model:from="form.date_from" v-model:to="form.date_to" />
             <SelectSearch v-model="form.jenis" :options="jenisOptions" label="Jenis Dokumen" />
+            <SelectSearch v-model="form.penyebab" :options="penyebabOptions" label="Penyebab" />
             <SelectSearch v-model="form.kd_divisi" :options="divisiOptions" label="Divisi" />
             <!-- Wajib ada, dan bawaannya 1. Tanpa ambang, pembelian testGudang
                  menyumbang 13.021 baris dan menenggelamkan ekornya. -->
@@ -99,10 +116,26 @@ const summaryItems = computed(() => {
         </FilterPanel>
       </template>
 
-      <template #cell-arah="{ row }">
-        <!-- Netral, bukan merah: 'Mundur' mayoritasnya sah. Yang diberi warna
-             justru 'Maju', yang jarang dan tak punya penjelasan wajar. -->
-        <Badge :variant="row.arah === 'Maju' ? 'warning' : 'neutral'">{{ row.arah }}</Badge>
+      <!-- Nomor jadi tombol pembuka panel detail, bukan seluruh baris: bisa
+           dijangkau keyboard, dan tak merebut aksi saat orang cuma ingin
+           menyeleksi teks. -->
+      <template #cell-no_dokumen="{ row }">
+        <button
+          type="button"
+          class="text-left text-brand-fg underline underline-offset-2 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+          @click="dipilih = row"
+        >
+          {{ row.no_dokumen }}
+        </button>
+      </template>
+      <template #cell-penyebab="{ row }">
+        <Badge :variant="WARNA_PENYEBAB[row.penyebab] || 'neutral'">{{ row.penyebab }}</Badge>
+      </template>
+      <template #cell-dibuat_oleh="{ row }">
+        <span :class="row.dibuat_oleh ? '' : 'text-ink-subtle'">{{ row.dibuat_oleh || "—" }}</span>
+      </template>
+      <template #cell-diedit_oleh="{ row }">
+        <span :class="row.diedit_oleh ? '' : 'text-ink-subtle'">{{ row.diedit_oleh || "—" }}</span>
       </template>
       <template #cell-selisih_hari="{ row }">
         <span :class="Math.abs(row.selisih_hari) > 30 ? 'font-semibold text-warning-fg' : ''">
@@ -110,5 +143,7 @@ const summaryItems = computed(() => {
         </span>
       </template>
     </ReportPage>
+
+    <DetailNotaMundur :baris="dipilih" @close="dipilih = null" />
   </AdminLayout>
 </template>
