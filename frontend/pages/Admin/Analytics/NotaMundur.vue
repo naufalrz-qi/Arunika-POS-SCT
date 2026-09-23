@@ -17,6 +17,7 @@
  * benar layak diperiksa ikut hilang.
  */
 import { computed, ref } from "vue";
+import { Link } from "@inertiajs/vue3";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import ReportPage from "@/components/report/ReportPage.vue";
 import DetailNotaMundur from "@/components/report/DetailNotaMundur.vue";
@@ -58,14 +59,14 @@ const summaryItems = computed(() => {
   const s = props.report?.summary || {};
   const nf = new Intl.NumberFormat("id-ID");
   return [
-    { label: "Dokumen", value: nf.format(s.jml_dokumen || 0) },
+    { label: "Jumlah Nota", value: nf.format(s.jml_dokumen || 0) },
     { label: "Diedit Belakangan", value: nf.format(s.jml_diedit || 0) },
     { label: "Diinput Mundur", value: nf.format(s.jml_input_mundur || 0) },
     // Dipisah, bukan digabung: bertanggal MAJU jauh lebih jarang dan jauh lebih
     // aneh — 49 baris dari 3.483 di testGudang. Menjumlahkannya dengan yang
     // mundur akan menguburnya.
     { label: "Bertanggal Maju", value: nf.format(s.jml_maju || 0) },
-    { label: "Tak Tercatat di Log", value: nf.format(s.jml_tak_tercatat || 0) },
+    { label: "Tak Tercatat", value: nf.format(s.jml_tak_tercatat || 0) },
     { label: "Selisih Terjauh", value: `${nf.format(s.selisih_terjauh || 0)} hari` },
   ];
 });
@@ -80,11 +81,13 @@ const dipilih = ref(null);
 
 <template>
   <AdminLayout title="Nota Tanggal Mundur">
-    <Banner
-      variant="info"
-      class="mb-4"
-      message="Selisih tanggal BUKAN dengan sendirinya penyimpangan. Penyebabnya dua: (1) nota DIEDIT belakangan — aplikasi kasir lama mengganti waktu simpan dan nama kasir di nota dengan waktu dan akun pengedit, sementara tanggal nota tetap; (2) nota memang DIINPUT dengan tanggal lama, misalnya faktur pemasok atau nota komplain. Klik nomor dokumen untuk melihat isinya dan riwayat siapa mengubah apa."
-    />
+    <!-- Pendek dan tanpa istilah teknis; penjelasan lengkapnya di Bantuan. -->
+    <Banner variant="info" class="mb-4">
+      Tanggal nota di sini berbeda dengan hari nota itu terakhir disimpan. Biasanya karena notanya
+      <strong>diedit belakangan</strong>, atau memang sengaja <strong>dibuat dengan tanggal lama</strong>.
+      Klik nomor nota untuk melihat isinya dan siapa yang mengubahnya.
+      <Link href="/admin-panel/bantuan#nota-mundur" class="underline underline-offset-2 hover:no-underline">Penjelasan lengkap</Link>
+    </Banner>
 
     <ReportPage
       deferred-key="report"

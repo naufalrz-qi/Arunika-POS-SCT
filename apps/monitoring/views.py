@@ -3466,10 +3466,11 @@ opname_export = _report_export(_OPNAME)
 # lewat Cek Index — dan layar harus langsung ikut tanpa restart.
 _LOG_SIAP: set = set()
 
+# Untuk pengguna biasa: apa yang terjadi, bukan kenapa. Langkah teknisnya
+# (Cek Index, di luar jam toko) ada di halaman Bantuan § Nota Tanggal Mundur.
 _PESAN_LOG_BELUM = (
-    "Kolom Penyebab, Dibuat oleh, dan Diedit oleh belum bisa diisi: server ini belum "
-    "punya index jejak log. Buat lewat Koneksi Server → Cek Index, sebaiknya di luar "
-    "jam toko (selama dibangun, simpan nota di kasir tertahan beberapa detik)."
+    "Penyebab dan nama kasir belum bisa ditampilkan untuk server ini. "
+    "Minta admin mengaktifkannya — caranya ada di halaman Bantuan."
 )
 
 
@@ -3568,7 +3569,7 @@ _UANG_HEADER_NOTA = {"diskon1", "diskon2", "diskon3", "diskon4", "diskon_uang", 
 _LABEL_KOLOM_NOTA = {
     "kd_customer": "Pelanggan", "kd_supplier": "Supplier", "kd_divisi": "Divisi",
     "kd_jenis": "Jenis bayar", "kd_kas": "Kas", "kd_voucher": "Voucher", "no_bukti": "No. bukti",
-    "tanggal": "Tanggal nota", "tanggal_jatuh_tempo": "Jatuh tempo", "tanggal_setor": "Tanggal setor",
+    "tanggal": "Tanggal nota", "tanggal_jatuh_tempo": "Jatuh tempo",
     "status": "Status", "diskon_uang": "Diskon (Rp)", "pajak": "Pajak", "keterangan": "Keterangan",
     "diskon1": "Diskon 1", "diskon2": "Diskon 2", "diskon3": "Diskon 3", "diskon4": "Diskon 4",
 }
@@ -3603,7 +3604,7 @@ def nota_mundur_detail(request):
     jenis = (request.GET.get("jenis") or "").strip()
     no = (request.GET.get("no") or "").strip()
     if jenis not in rpt.DOK_MUNDUR or not no:
-        return JsonResponse({"error": "Dokumen tidak disebutkan."}, status=400)
+        return JsonResponse({"error": "Nota tidak disebutkan."}, status=400)
     profile = _active()
     if not profile:
         return JsonResponse({"error": CONN_ERROR}, status=503)
@@ -3617,7 +3618,7 @@ def nota_mundur_detail(request):
             mssql.execute_varchar(cur, sql, prm)
             baris = reporting.dictify(cur)
             if not baris:
-                return JsonResponse({"error": "Dokumen tidak ditemukan di server ini."}, status=404)
+                return JsonResponse({"error": "Nota ini tidak ada di server yang sedang dipilih."}, status=404)
             h = baris[0]
 
             barang, total = None, None
@@ -3653,7 +3654,7 @@ def nota_mundur_detail(request):
             nama_satuan = _peta_nama(cur, "m_satuan", "kd_satuan", kd_satuan)
             divisi = _peta_nama(cur, "m_divisi", "kd_divisi", {(h.get("kd_divisi") or "").strip()})
     except pyodbc.Error as exc:
-        return JsonResponse({"error": mssql.friendly_error(exc, "Gagal membaca detail")}, status=502)
+        return JsonResponse({"error": mssql.friendly_error(exc, "Nota gagal dimuat")}, status=502)
 
     def orang(kd):
         kd = (kd or "").strip()

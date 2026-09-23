@@ -96,9 +96,73 @@ const istilah = [
       </ul>
     </Card>
 
+    <!-- Layar Nota Tanggal Mundur sengaja hanya memuat satu-dua kalimat dan
+         menautkan ke sini (#nota-mundur). Penjelasan dan langkah teknisnya
+         tinggal di satu tempat ini. -->
+    <Card id="nota-mundur" class="mb-4 scroll-mt-24">
+      <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-muted">3. Nota Tanggal Mundur</h3>
+      <p class="mb-3 text-sm text-ink-muted">
+        Layar ini menampilkan nota yang tanggalnya berbeda dengan hari nota itu terakhir disimpan.
+        Tidak semuanya salah. Yang penting adalah tahu penyebabnya.
+      </p>
+      <dl class="mb-4 space-y-2 text-sm">
+        <div>
+          <dt class="font-semibold text-ink">Diedit</dt>
+          <dd class="text-ink-muted">
+            Nota dibuat di hari yang benar, lalu diubah di hari lain. Setiap kali nota diedit, aplikasi kasir
+            mencatat waktu edit dan nama orang yang mengedit, tapi tanggal notanya tetap. Itulah yang membuat
+            nota terlihat mundur. Nama kasir yang membuatnya ada di kolom <em>Dibuat oleh</em>.
+          </dd>
+        </div>
+        <div>
+          <dt class="font-semibold text-ink">Diinput mundur</dt>
+          <dd class="text-ink-muted">
+            Nota memang dibuat dengan tanggal yang sudah lewat, misalnya nota komplain atau faktur pemasok
+            yang baru dimasukkan.
+          </dd>
+        </div>
+        <div>
+          <dt class="font-semibold text-ink">Diinput maju</dt>
+          <dd class="text-ink-muted">Nota dibuat dengan tanggal yang belum tiba. Jarang terjadi dan patut dicek.</dd>
+        </div>
+        <div>
+          <dt class="font-semibold text-ink">Tak tercatat</dt>
+          <dd class="text-ink-muted">Catatan riwayat nota ini tidak ditemukan, biasanya karena notanya sudah terlalu lama.</dd>
+        </div>
+        <div>
+          <dt class="font-semibold text-ink">Belum dicek</dt>
+          <dd class="text-ink-muted">Fitur ini belum diaktifkan untuk server yang sedang dipilih. Lihat bagian untuk admin di bawah.</dd>
+        </div>
+      </dl>
+      <ul class="space-y-2 text-sm text-ink-muted">
+        <li>
+          <strong class="text-ink">Nama kasir di nota bisa bukan pembuatnya.</strong> Kalau nota diedit, nama
+          di nota berganti menjadi nama orang yang mengedit. Untuk tahu siapa yang membuat dan siapa yang
+          mengubah, lihat kolom <em>Dibuat oleh</em> dan <em>Diedit oleh</em>.
+        </li>
+        <li>
+          <strong class="text-ink">Klik nomor nota</strong> untuk melihat isi nota dan riwayatnya: kapan dibuat,
+          setiap kali diedit, oleh siapa, dan apa yang berubah. Barang yang ditambah ditandai +, yang dihapus
+          −, dan yang jumlahnya diubah ~.
+        </li>
+        <li>
+          <strong class="text-ink">"Riwayat barang mungkin tidak lengkap"</strong> muncul kalau ada perubahan barang
+          yang tidak tercatat. Ini biasanya terjadi pada nota toko retail yang ikut tersalin ke server grosir.
+          Siapa yang mengedit dan kapan tetap benar.
+        </li>
+        <li>
+          <strong class="text-ink">Untuk admin: kalau Penyebab berisi "Belum dicek"</strong>, server itu perlu
+          disiapkan sekali. Buka
+          <Link href="/admin-panel/connections" class="text-brand-400 hover:underline">Koneksi Server</Link>,
+          lalu tekan <em>Cek Index</em> pada server tersebut. Lakukan di luar jam toko: selama prosesnya
+          berjalan (beberapa detik), kasir di toko itu tidak bisa menyimpan nota.
+        </li>
+      </ul>
+    </Card>
+
     <Card class="mb-4">
       <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-muted">
-        3. Aksi yang mengubah data di server
+        4. Aksi yang mengubah data di server
       </h3>
       <Banner
         variant="warning"
@@ -120,7 +184,7 @@ const istilah = [
     </Card>
 
     <Card>
-      <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-muted">4. Kalau bermasalah</h3>
+      <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-muted">5. Kalau bermasalah</h3>
       <ul class="space-y-2 text-sm text-ink-muted">
         <li><strong class="text-ink">Banner kuning</strong> = ada yang gagal (server tak terhubung, data tak terbaca). <strong class="text-ink">Banner biru</strong> = pemberitahuan biasa, data tetap benar.</li>
         <li><strong class="text-ink">Tiba-tiba diminta masuk lagi</strong> = sesi berakhir. Sesi berlaku 4 jam sejak Anda masuk, dan tidak diperpanjang oleh aktivitas. Masuk kembali, lalu ulangi perubahan terakhir.</li>

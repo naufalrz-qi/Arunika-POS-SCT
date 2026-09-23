@@ -11,6 +11,7 @@
  * server), jadi tampilannya harus tahan kalau field itu tak pernah datang.
  */
 import { computed, ref, watch } from "vue";
+import { Link } from "@inertiajs/vue3";
 import axios from "axios";
 import Modal from "@/components/ui/Modal.vue";
 import Spinner from "@/components/ui/Spinner.vue";
@@ -49,7 +50,7 @@ watch(
       if (res.error) error.value = res.error;
       else data.value = res;
     } catch (e) {
-      error.value = e?.response?.data?.error || "Gagal memuat detail dokumen. Coba lagi.";
+      error.value = e?.response?.data?.error || "Nota gagal dimuat. Coba lagi.";
     } finally {
       loading.value = false;
     }
@@ -65,7 +66,7 @@ const judul = computed(() => (props.baris ? `${props.baris.jenis} ${props.baris.
 <template>
   <Modal :show="!!baris" size="lg" :title="judul" @close="emit('close')">
     <div v-if="loading" class="flex items-center justify-center gap-2 py-10 text-ink-muted">
-      <Spinner /> <span class="text-sm">Mengambil isi dan riwayat dokumen…</span>
+      <Spinner /> <span class="text-sm">Memuat nota…</span>
     </div>
 
     <Banner v-else-if="error" variant="warning" :message="error" />
@@ -90,7 +91,7 @@ const judul = computed(() => (props.baris ? `${props.baris.jenis} ${props.baris.
         </div>
         <div>
           <!-- Pembuat ATAU pengedit terakhir — riwayat di bawah yang membedakan. -->
-          <dt class="text-xs text-ink-subtle">Kasir tercatat di nota</dt>
+          <dt class="text-xs text-ink-subtle">Nama kasir di nota</dt>
           <dd class="text-ink">{{ data.header.kasir_nota }}</dd>
         </div>
         <div v-if="data.total_bersih !== undefined && data.total_bersih !== null">
@@ -134,21 +135,20 @@ const judul = computed(() => (props.baris ? `${props.baris.jenis} ${props.baris.
 
       <section>
         <h4 class="mb-2 text-sm font-semibold text-ink">Riwayat</h4>
-        <Banner
-          v-if="!data.log_siap"
-          variant="info"
-          message="Riwayat belum bisa dibaca: server ini belum punya index jejak log. Buat lewat Koneksi Server → Cek Index, di luar jam toko."
-        />
+        <Banner v-if="!data.log_siap" variant="info">
+          Riwayat nota belum bisa ditampilkan di server ini.
+          <Link href="/admin-panel/bantuan#nota-mundur" class="underline underline-offset-2 hover:no-underline">Cara mengaktifkannya</Link>
+        </Banner>
         <EmptyState
           v-else-if="!data.riwayat || !data.riwayat.length"
-          message="Tidak ada jejak dokumen ini di log server — lognya sudah dipangkas, atau tabel ini tak punya trigger log."
+          message="Tidak ada catatan riwayat untuk nota ini. Biasanya karena notanya sudah terlalu lama."
         />
         <template v-else>
           <Banner
             v-if="data.barang_cocok === false"
             variant="warning"
             class="mb-3"
-            message="Riwayat barang tidak lengkap: isi nota sekarang berbeda dari hasil memutar ulang log. Ada perubahan barang yang tercatat di luar waktu edit nota (sering terjadi pada nota retail yang disalin ke server ini). Perubahan kolom nota di bawah tetap akurat."
+            message="Riwayat barang untuk nota ini mungkin tidak lengkap. Siapa yang mengedit dan kapan tetap benar."
           />
           <ol class="space-y-3">
             <li v-for="(p, i) in data.riwayat" :key="i" class="rounded-lg border border-border-default p-3">
@@ -196,7 +196,7 @@ const judul = computed(() => (props.baris ? `${props.baris.jenis} ${props.baris.
                 </p>
               </div>
               <p v-else-if="p.aksi === 'Diedit' && !p.perubahan.length && p.barang" class="mt-2 text-sm text-ink-subtle">
-                Disimpan ulang tanpa perubahan kolom nota maupun barang.
+                Disimpan ulang tanpa ada yang berubah.
               </p>
             </li>
           </ol>

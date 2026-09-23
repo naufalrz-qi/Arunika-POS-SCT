@@ -61,13 +61,15 @@ def _log_edit():
     no = "SC1"
     edit = T0 + dt.timedelta(hours=21)
     return no, edit, [
-        (100, T0, "t_penjualan__insert", _hdr("insert", no, "UAA009", tanggal="2026-9-20 12:28:33", kd_customer="CAA000")),
+        (100, T0, "t_penjualan__insert", _hdr("insert", no, "UAA009", tanggal="2026-9-20 12:28:33", kd_customer="CAA000",
+                                               tanggal_setor="2026-9-19 07:56:20")),
         (101, T0, "t_penjualan_detail__insert", _det_ins(no, "A", 1)),
         (102, T0, "t_penjualan_detail__insert", _det_ins(no, "B", 2)),
         (103, T0, "t_penjualan_detail__insert", _det_ins(no, "C", 1)),
         # nota lain di sela-sela — tak boleh ikut
         (104, T0, "t_penjualan_detail__insert", _det_ins("SC2", "Z", 9)),
-        (200, edit, "t_penjualan__update", _hdr("update", no, "UAA032", tanggal="2026-9-20 12:28:33", kd_customer="CAA025")),
+        (200, edit, "t_penjualan__update", _hdr("update", no, "UAA032", tanggal="2026-9-20 12:28:33", kd_customer="CAA025",
+                                                tanggal_setor="2026-9-19 12:28:33")),
         (201, edit, "t_penjualan_detail", _det_del(no, "A")),
         (202, edit, "t_penjualan_detail", _det_del(no, "B")),
         (203, edit, "t_penjualan_detail", _det_del(no, "C")),
@@ -86,7 +88,9 @@ class Riwayat(SimpleTestCase):
 
     def test_perubahan_kolom_nota_tanpa_waktu_simpan_dan_kasir(self):
         """`tanggal_server`/`kd_user` SELALU berubah saat edit — itu sudah
-        tampil sebagai "kapan" dan "oleh", bukan sebagai perubahan."""
+        tampil sebagai "kapan" dan "oleh", bukan sebagai perubahan. Begitu pula
+        `tanggal_setor`, yang diisi ulang aplikasi tiap simpan (data di atas
+        meniru pasangan nilai nyata SC2609200054 di PUSAT)."""
         no, edit, log = _log_edit()
         r = rl.riwayat(LogPalsu(log), "t_penjualan", "no_transaksi", no, T0, edit)
         self.assertEqual(r["peristiwa"][1]["perubahan"],

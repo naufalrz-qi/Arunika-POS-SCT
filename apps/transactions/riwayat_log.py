@@ -30,7 +30,11 @@ from core import mssql
 # Kolom yang TIDAK dipajang sebagai "perubahan": `tanggal_server` dan `kd_user`
 # SELALU berubah saat edit (itu justru inti masalahnya) dan sudah tampil
 # sebagai "kapan" dan "oleh"; `divisi_id` adalah penanda asal milik trigger.
-_BUKAN_PERUBAHAN = {"tanggal_server", "kd_user", "divisi_id"}
+# `tanggal_setor` diisi ulang OLEH APLIKASI setiap nota disimpan (= tanggal
+# nota − 1 hari, jam nota) — berubah di 227 dari 314 edit di grosirPusat 2025+,
+# bukan karena ada yang mengetiknya. Memajangnya membuat tiap edit tampak
+# mengubah sesuatu yang tak disentuh siapa pun.
+_BUKAN_PERUBAHAN = {"tanggal_server", "kd_user", "divisi_id", "tanggal_setor"}
 
 # Detail yang riwayat barangnya bisa diputar ulang: (tabel, kolom kunci baris).
 # Kuncinya persis kolom `key__` di trigger hapus/update tabel itu — dengan kunci
