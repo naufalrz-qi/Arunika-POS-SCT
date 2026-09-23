@@ -224,3 +224,73 @@ class PergerakanHargaKoneksiTests(TestCase):
                    return_value={"rows": [], "sumber": "", "gudang": "", "pesan": ""}) as saran:
             self._partial()
         saran.assert_called_once_with(self.internal)
+class BarisLintasKoneksiTests(TestCase):
+    """Ruling R14/R15 — dua layar lintas-koneksi tak boleh menyebut isi server
+    non-produksi kepada yang tak berhak memilihnya.
+
+    Menyaring dropdown dan `?profile=` saja tidak cukup: daftar bawaan kedua
+    layar ini memuat nama server beserta harga lama/barunya, jadi barisnya
+    ikut disaring. Superadmin tetap melihat semuanya.
+    """
+
+    def setUp(self):
+        from apps.core.models import BarangHargaChange, BarangUpdateLog
+
+        self.prod = _profil("PUSAT", is_default=True)
+        self.internal = _profil("AMPHOREUS", Lingkungan.INTERNAL)
+        self.adm = User.objects.create_user(
+            "adm_lintas", password=PW, role=Role.ADMIN,
+            allowed_menu_keys=["pergerakan_harga", "riwayat_update_barang"])
+        self.boss = User.objects.create_user("boss_lintas", password=PW, role=Role.SUPERADMIN)
+        for profil in (self.prod, self.internal):
+            BarangHargaChange.objects.create(
+                profile=profil, profile_name=profil.name, kd_barang=f"B{profil.pk}",
+                nama_barang="Barang", kd_satuan="PCS", harga_lama=1000, harga_baru=1200)
+            BarangUpdateLog.objects.create(
+                profile=profil, profile_name=profil.name, kd_barang=f"B{profil.pk}",
+                nama_barang="Barang", field="harga", nilai_lama="1000", nilai_baru="1200")
+
+    def _baris(self, user, url, komponen):
+        self.client.force_login(user)
+        r = self.client.get(
+            url, HTTP_X_INERTIA="true", HTTP_X_INERTIA_VERSION="1.0",
+            HTTP_X_INERTIA_PARTIAL_DATA="data", HTTP_X_INERTIA_PARTIAL_COMPONENT=komponen)
+        return json.loads(r.content)["props"]["data"]["rows"]
+
+    def _harga(self, user, query=""):
+        with patch("apps.monitoring.views.master.saran_harga",
+                   return_value={"rows": [], "sumber": "", "gudang": "", "pesan": ""}):
+            return self._baris(
+                user, "/admin-panel/master/pergerakan-harga?scope=semua" + query,
+                "Admin/MasterData/PergerakanHarga")
+
+    def _riwayat(self, user, query=""):
+        return self._baris(user, "/admin-panel/master/riwayat-update-barang" + query,
+                           "Admin/MasterData/RiwayatUpdateBarang")
+
+    def test_pergerakan_harga_menyembunyikan_baris_nonproduksi(self):
+        nama = {b["profile_name"] for b in self._harga(self.adm)}
+        self.assertEqual(nama, {"PUSAT"})
+
+    def test_riwayat_update_menyembunyikan_baris_nonproduksi(self):
+        nama = {b["profile_name"] for b in self._riwayat(self.adm)}
+        self.assertEqual(nama, {"PUSAT"})
+
+    def test_riwayat_update_profile_di_luar_wewenang_diabaikan(self):
+        """Dulu `?profile=` di sini dipakai apa adanya — penyaring bertarget ke
+        satu server non-produksi."""
+        nama = {b["profile_name"] for b in self._riwayat(self.adm, f"?profile={self.internal.pk}")}
+        self.assertEqual(nama, {"PUSAT"})
+
+    def test_superadmin_tetap_melihat_semuanya(self):
+        self.assertEqual({b["profile_name"] for b in self._harga(self.boss)},
+                         {"PUSAT", "AMPHOREUS"})
+        self.assertEqual({b["profile_name"] for b in self._riwayat(self.boss)},
+                         {"PUSAT", "AMPHOREUS"})
+
+    def test_setelah_diberi_izin_barisnya_muncul(self):
+        self.adm.koneksi_khusus.add(self.internal)
+        self.assertEqual({b["profile_name"] for b in self._harga(self.adm)},
+                         {"PUSAT", "AMPHOREUS"})
+        self.assertEqual({b["profile_name"] for b in self._riwayat(self.adm)},
+                         {"PUSAT", "AMPHOREUS"})

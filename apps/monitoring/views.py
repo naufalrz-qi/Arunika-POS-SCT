@@ -1018,10 +1018,24 @@ def riwayat_update_barang_index(request):
     field = (f.get("field") or "").strip()
     date_from = _parse_date(f.get("date_from"))
     date_to = _eod(_parse_date(f.get("date_to")))
+    # Koneksi yang boleh dipakai user ini — sama seperti Pergerakan Harga
+    # (ruling R10/R14): dipakai untuk dropdown, untuk memvalidasi ?profile=,
+    # DAN untuk menyaring barisnya. Menyaring dropdown saja tidak cukup:
+    # ?profile= bisa diketik langsung di URL, dan daftarnya menyebut nama
+    # server beserta harga lama/barunya.
+    profil_boleh = koneksi_boleh(request.user)
     profile_id = f.get("profile") or ""
+    if profile_id and not profil_boleh.filter(pk=profile_id).exists():
+        profile_id = ""
 
     def load_riwayat():
         qs = BarangUpdateLog.objects.select_related("profile").all()
+        # Superadmin melihat semuanya, termasuk baris milik profil yang sudah
+        # dihapus (profile NULL) — baris begitu tak bisa dikaitkan ke koneksi
+        # mana pun, jadi ia tak boleh hilang dari satu-satunya yang berhak
+        # melihat seluruh jejak.
+        if request.user.role != Role.SUPERADMIN:
+            qs = qs.filter(profile__in=profil_boleh)
         if kd_barang:
             qs = qs.filter(kd_barang__icontains=kd_barang)
         if field:
@@ -1092,6 +1106,12 @@ def pergerakan_harga_index(request):
 
     def load_data():
         qs = BarangHargaChange.objects.all()
+        # Barisnya menyebut nama server + pergerakan harganya, jadi menyaring
+        # dropdown dan ?profile= saja meninggalkan isi server non-produksi
+        # tetap terbaca di daftar bawaan (ruling R14). Superadmin melihat
+        # semuanya, termasuk baris berprofil NULL (profilnya sudah dihapus).
+        if request.user.role != Role.SUPERADMIN:
+            qs = qs.filter(profile__in=profil_boleh)
         if kd_barang:
             qs = qs.filter(kd_barang__icontains=kd_barang)
         if date_from:
