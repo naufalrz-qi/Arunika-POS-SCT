@@ -179,7 +179,8 @@ def one_row(cur) -> dict:
 
 
 def run_paged(cur, inner_sql, params, f):
-    """COUNT + OFFSET/FETCH over `inner_sql` (a full SELECT without ORDER BY).
+    """COUNT + one page of `inner_sql` (a full SELECT without ORDER BY) — via
+    OFFSET/FETCH on SQL Server 2012+, ROW_NUMBER on older (see `sql_halaman`).
 
     ORDER BY references the subquery's output aliases (f["order_by"] was built
     from the whitelist in parse_report_params). Returns (rows, total); every row
@@ -194,16 +195,39 @@ def run_paged(cur, inner_sql, params, f):
     mssql.execute_varchar(cur, f"SELECT COUNT(*) FROM ({inner_sql}) AS q", params)
     total = int(cur.fetchone()[0] or 0)
     offset = (f["page"] - 1) * f["per_page"]
-    mssql.execute_varchar(
-        cur,
-        f"SELECT * FROM ({inner_sql}) AS q ORDER BY {f['order_by']} "
-        "OFFSET ? ROWS FETCH NEXT ? ROWS ONLY",
-        list(params) + [offset, f["per_page"]],
-    )
+    sql, batas = sql_halaman(inner_sql, f["order_by"], offset, f["per_page"], mssql.versi_server(cur))
+    mssql.execute_varchar(cur, sql, list(params) + batas)
     rows = clean_rows(dictify(cur))
     for i, r in enumerate(rows):
+        r.pop("_rn", None)
         r["_rid"] = offset + i + 1
     return rows, total
+
+
+# SQL Server 2012 (versi utama 11) yang pertama punya OFFSET … FETCH.
+VERSI_OFFSET_FETCH = 11
+
+
+def sql_halaman(inner_sql, order_by, offset, per_page, versi):
+    """(sql, parameter batas) untuk satu halaman `inner_sql` menurut `order_by`.
+
+    Dua bentuk, dipilih menurut versi server:
+    - 2012+: `ORDER BY … OFFSET ? ROWS FETCH NEXT ? ROWS ONLY` — bentuk yang
+      dipakai sejak awal, tak berubah untuk 11 server yang sudah 2012/2022.
+    - 2008 R2 ke bawah (DRAGON): `ROW_NUMBER() OVER (ORDER BY …)` lalu
+      `WHERE _rn BETWEEN ? AND ?`. Tanpa ini SETIAP laporan server-side gagal
+      di DRAGON dengan "Incorrect syntax near 'OFFSET'" (terukur 26 dari 26).
+
+    Parameter batas selalu di ujung, jadi urutan `?` milik `inner_sql` tak
+    bergeser di kedua bentuk. Kolom `_rn` ikut terpilih di bentuk kedua dan
+    dibuang pemanggil. `order_by` berasal dari whitelist sort, bukan input.
+    """
+    if versi >= VERSI_OFFSET_FETCH:
+        return (f"SELECT * FROM ({inner_sql}) AS q ORDER BY {order_by} "
+                "OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"), [offset, per_page]
+    return (f"SELECT * FROM (SELECT q.*, ROW_NUMBER() OVER (ORDER BY {order_by}) AS _rn "
+            f"FROM ({inner_sql}) AS q) AS h WHERE h._rn BETWEEN ? AND ? ORDER BY h._rn"), \
+        [offset + 1, offset + per_page]
 
 
 def run_all(cur, inner_sql, params, f):

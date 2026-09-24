@@ -2416,6 +2416,24 @@ def _pakai_bentuk_arunika(spec, profile) -> bool:
     return bool(spec.get("inner_arunika") and _arunika_siap(profile))
 
 
+# Laporan yang hitungannya memakai aggregate window BERURUTAN
+# (`SUM() OVER (… ORDER BY …)` — saldo berjalan Kas Harian, akumulasi FMI
+# Penjualan). Fitur itu baru ada sejak SQL Server 2012, dan server DRAGON masih
+# 2008 R2. Padanannya di 2008 (triangular join) menggandakan kueri dan
+# berbiaya n²/2, jadi di server lama laporannya MENOLAK dengan pesan yang
+# jelas, bukan galat sintaks mentah "Incorrect syntax near 'order'". Paginasi
+# laporan lain sudah punya jalur 2008 sendiri (`reporting.sql_halaman`).
+_PESAN_SQL_LAMA = (
+    "Laporan ini belum bisa dibuka di server ini: SQL Server-nya masih versi 2008 R2, "
+    "sedangkan hitungan berjalan di laporan ini butuh SQL Server 2012 atau lebih baru. "
+    "Laporan lain tetap bisa dipakai."
+)
+
+
+def _sql_terlalu_lama(cur) -> bool:
+    return mssql.versi_server(cur) < reporting.VERSI_OFFSET_FETCH
+
+
 def _report_view(spec):
     def view(request):
         f = _spec_params(request, spec)
@@ -2450,6 +2468,9 @@ def _report_view(spec):
                         rows, total, summary, options = [], 0, {}, {}  # reset per attempt
                         try:
                             with buka(read_profile) as cur:
+                                if spec.get("butuh_sql2012") and _sql_terlalu_lama(cur):
+                                    conn_error = _PESAN_SQL_LAMA
+                                    break
                                 if f["recent"]:
                                     rows, total, summary_sql = reporting.run_recent(cur, inner, params, f)
                                 else:
@@ -2543,6 +2564,9 @@ def _report_export(spec):
         for read_profile in kandidat:
             try:
                 with buka(read_profile) as cur:
+                    if spec.get("butuh_sql2012") and _sql_terlalu_lama(cur):
+                        request.session["flash_error"] = _PESAN_SQL_LAMA
+                        return redirect(spec["url"])
                     cur.execute(order_sql, params)
                     resp = reporting.xlsx_stream_response(spec["filename"], columns, cur)
                 break
@@ -3928,6 +3952,8 @@ voucher_export = _report_export(_VOUCHER)
 
 # Analitik
 _FMI_PENJUALAN = {
+    # Akumulasi = SUM() OVER (ORDER BY …), 2012+ — lihat _PESAN_SQL_LAMA.
+    "butuh_sql2012": True,
     "component": "Admin/Analytics/FmiPenjualan",
     "url": "/admin-panel/analitik/fmi-penjualan",
     "inner": rpt.fmi_penjualan,
@@ -4379,10 +4405,14 @@ def kas_harian(request):
                     ssql, sparams = rpt.kas_summary(f)
                 buka = mssql.arunika_cursor if lewat_arunika else mssql.cursor
                 with buka(profile) as cur:
-                    rows, total = reporting.run_paged(cur, inner, params, f)
-                    cur.execute(ssql, sparams)
-                    summary = reporting.one_row(cur)
-                    options = {"kas": _opt_kas(profile, arunika=lewat_arunika)}
+                    # Saldo berjalan = SUM() OVER (… ORDER BY … ROWS …), 2012+.
+                    if not lewat_arunika and _sql_terlalu_lama(cur):
+                        conn_error = _PESAN_SQL_LAMA
+                    else:
+                        rows, total = reporting.run_paged(cur, inner, params, f)
+                        cur.execute(ssql, sparams)
+                        summary = reporting.one_row(cur)
+                        options = {"kas": _opt_kas(profile, arunika=lewat_arunika)}
             except pyodbc.Error as exc:
                 conn_error = mssql.friendly_error(exc, "Gagal membaca kas")
         else:
@@ -4427,6 +4457,9 @@ def kas_harian_export(request):
     kolom = [c for c in _KAS_COLUMNS if c["key"] not in buang]
     try:
         with (mssql.arunika_cursor if lewat_arunika else mssql.cursor)(profile) as cur:
+            if not lewat_arunika and _sql_terlalu_lama(cur):
+                request.session["flash_error"] = _PESAN_SQL_LAMA
+                return redirect("/admin-panel/kas/harian")
             cur.execute(order_sql, params)
             resp = reporting.xlsx_stream_response("kas-harian", kolom, cur)
     except pyodbc.Error as exc:

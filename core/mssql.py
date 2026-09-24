@@ -256,6 +256,24 @@ def cursor(profile, autocommit=True, query_timeout=None):
         conn.close()
 
 
+def versi_server(cur) -> int:
+    """Versi UTAMA SQL Server di ujung cursor ini: 10 = 2008/2008 R2, 11 =
+    2012, 16 = 2022.
+
+    Dibaca dari info yang dikirim driver saat koneksi dibuka (`SQL_DBMS_VER`,
+    mis. '10.50.1600') — tanpa kueri. Terukur 2026-09-24 sama dengan
+    `SERVERPROPERTY('ProductVersion')` di ke-12 server: DRAGON 10.50 (2008 R2),
+    RUMAK 11.00 (2012), sisanya 16.00 (2022).
+
+    Kalau tak terbaca, dianggap modern — jalur yang sudah berjalan di seluruh
+    server lain, bukan jalur cadangan yang hanya diuji di satu server.
+    """
+    try:
+        return int(str(cur.connection.getinfo(pyodbc.SQL_DBMS_VER)).split(".")[0])
+    except (AttributeError, ValueError, pyodbc.Error):
+        return 99
+
+
 @contextmanager
 def report_cursor(profile, query_timeout=None):
     """Cursor READ-ONLY untuk report: READ UNCOMMITTED (NOLOCK) supaya SELECT

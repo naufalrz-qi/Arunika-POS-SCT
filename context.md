@@ -57,6 +57,12 @@ Jumlahnya **67 per 2026-08-11** (`len(ALL_MENUS)`, diukur), naik dari 42 saat au
 
 `apps/core/reporting.py`: `parse_report_params(request, sorts, default_sort, max_range_days=MAX_RANGE_DAYS)` (validasi tanggal, default bulan berjalan, tolak rentang > `max_range_days`), `run_paged(cur, inner_sql, params, f)` / `run_all(cur, inner_sql, params, f)` (COUNT + OFFSET/FETCH vs tanpa paging), `xlsx_response(filename, columns, rows)` (openpyxl), `opt(rows, value_key, label_key)` → `[{value,label}]`.
 
+**Versi SQL Server tak seragam — DRAGON masih 2008 R2** (terukur 2026-09-24 lewat `SQL_DBMS_VER`, sama dengan `SERVERPROPERTY('ProductVersion')`): DRAGON **10.50.1600** (2008 R2 RTM, tanpa service pack), RUMAK 11.00 (2012), sepuluh lainnya 16.00 (2022). `mssql.versi_server(cur)` membacanya dari info driver, tanpa kueri. Akibat yang sudah ditangani:
+- `OFFSET … FETCH` baru ada sejak 2012, dan `run_paged` dulu selalu memakainya — **26 dari 26 laporan server-side** (plus Transaksi Barang dan Kas Harian) gagal di DRAGON dengan "Incorrect syntax near 'OFFSET'". Kini `reporting.sql_halaman()` memilih bentuk menurut versi: 2012+ tetap OFFSET/FETCH, di bawahnya `ROW_NUMBER() OVER (ORDER BY …)` + `BETWEEN`. Dibandingkan di PUSAT (2022): 25 dari 26 spec identik halaman-per-halaman; satu-satunya beda (Penjualan HPP, potongan 5000 baris pertama) murni nilai sort kembar di batas potongan — seluruh 14.188 barisnya identik. Sort satu kolom yang tak unik memang tak menjamin urutan baris kembar, di bentuk mana pun.
+- `FORMAT()` (2012+) di Penjualan/Pembelian per Periode diganti `reports._periode()` = `CONVERT(char(n), …, 120)` — string yang sama persis, tak bergantung setelan bahasa.
+- **Masih TIDAK jalan di 2008 R2, dan sengaja menolak dengan pesan** (`views._PESAN_SQL_LAMA`): Kas Harian (saldo berjalan) dan FMI Penjualan (akumulasi ABC) memakai `SUM() OVER (… ORDER BY …)`, aggregate window berurutan yang baru ada sejak 2012. Padanannya di 2008 (triangular join) menggandakan kueri dan berbiaya n²/2. Spec yang butuh 2012 diberi `"butuh_sql2012": True`. Jalan keluar sebenarnya: naikkan SQL Server DRAGON (2008 R2 sudah lepas dukungan sejak Juli 2019).
+- Aturan untuk SQL baru ke server legacy: jangan pakai fitur 2012+ (OFFSET/FETCH, FORMAT, TRY_CONVERT, IIF, CONCAT, DATEFROMPARTS, EOMONTH, LAG/LEAD, aggregate window dengan ORDER BY, DATEDIFF_BIG, STRING_AGG) tanpa jalur cadangan. `ROW_NUMBER()`, aggregate window TANPA ORDER BY, `CROSS/OUTER APPLY`, tipe `date`, `ISDATE` aman. Dijaga `apps/core/test_sql_lama.py`.
+
 `apps/inventory/services.py` (movement engine, raw tables):
 - `_movement_sql` (9-way UNION ALL: t_penjualan/pembelian(+retur), t_mutasi_stok, t_opname_stok, dll).
 - `_movement_sums` — agregasi DI SQL (GROUP BY + HAVING buang serba-nol). **JANGAN stream jutaan row ke Python.**
@@ -467,6 +473,8 @@ Nol perubahan skema, nol risiko ke legacy, dan seluruh bahaya cascade di atas ma
 
 - **Kolom `stok` di Master Produk salah.** `list_products()` (`apps/master_data/services.py`, sekitar baris 164) masih mengisi kolom itu dari `m_barang_stok_akhir` — cache `'-'` yang rusak di atas — dengan komentar "must stay live" yang sudah tidak berlaku. Layar lain (`reports.py`, `inventory/services.py`) sudah pindah ke movement engine; yang ini terlewat. Perbaikannya: ambil dari `inv.cek_stok()`/payload kolumnar seperti layar lain, atau buang kolomnya.
 - **Login `arunika_app` belum dibuat**; semua profil masih `sa`.
+- **Kas Harian & FMI Penjualan tak bisa dibuka di DRAGON** (SQL Server 2008 R2) — menolak dengan pesan; lihat § Service backend. Butuh upgrade SQL Server atau jalur triangular-join.
+- **Laporan Order Penjualan gagal di DRAGON: skemanya berbeda.** Di DRAGON `t_penjualan_order_detail` terhubung ke header lewat `no_transaksi`; di PUSAT lewat `no_order` ("Invalid column name 'no_order'"). Belum diperiksa apakah jalur TULIS order di layar kasir kena juga.
 
 ## Gotcha / aturan wajib
 

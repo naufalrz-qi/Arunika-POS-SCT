@@ -159,6 +159,19 @@ def _nota_net(where_sql: str) -> str:
     )
 
 
+def _periode(kolom: str, granularitas: str) -> str:
+    """Label periode `yyyy-MM-dd` (harian) atau `yyyy-MM` (bulanan).
+
+    `CONVERT(char(n), …, 120)`, bukan `FORMAT()`: FORMAT baru ada sejak SQL
+    Server 2012, dan server DRAGON masih 2008 R2 (Penjualan/Pembelian per
+    Periode gagal di sana dengan "'FORMAT' is not a recognized built-in
+    function"). Gaya 120 (ODBC canonical) tak bergantung setelan bahasa, dan
+    hasilnya string yang sama persis dengan FORMAT tadi.
+    """
+    panjang = 7 if granularitas == "bulanan" else 10
+    return f"CONVERT(char({panjang}), {kolom}, 120)"
+
+
 def _base_where(f, date_col="h.tanggal", div_col="h.kd_divisi"):
     """Standard date range + optional kd_divisi filter.
 
@@ -542,11 +555,7 @@ def penjualan_periode(f):
     # against a handful of real notas before treating as final (same caveat as
     # the Total Pajak2 column on Penjualan per Nota).
     where, params = _base_where(f)
-    granul = f.get("granularitas", "harian")
-    if granul == "bulanan":
-        periode = "FORMAT(n.tanggal, 'yyyy-MM')"
-    else:
-        periode = "FORMAT(n.tanggal, 'yyyy-MM-dd')"
+    periode = _periode("n.tanggal", f.get("granularitas", "harian"))
     inner = (
         f"SELECT {periode} AS periode, COUNT(n.no_transaksi) AS jml_nota, "
         "COALESCE(SUM(n.total_kotor), 0) AS total_kotor, "
@@ -753,8 +762,7 @@ def pembelian_periode(f):
     # per-periode — added analog to penjualan_periode's breakdown per user's
     # explicit request; same derivation caveat applies (verify vs. real data).
     where, params = _base_where(f)
-    granul = f.get("granularitas", "harian")
-    periode = "FORMAT(n.tanggal, 'yyyy-MM')" if granul == "bulanan" else "FORMAT(n.tanggal, 'yyyy-MM-dd')"
+    periode = _periode("n.tanggal", f.get("granularitas", "harian"))
     inner = (
         f"SELECT {periode} AS periode, COUNT(n.no_transaksi) AS jml_nota, "
         "COALESCE(SUM(n.total_kotor), 0) AS total_kotor, "
@@ -2692,9 +2700,7 @@ def penjualan_periode_arunika(f):
     `_nota_net()` yang merambat ke KEDUA jalur sekaligus.
     """
     where, params = _base_where_arunika(f)
-    granul = f.get("granularitas", "harian")
-    fmt = "yyyy-MM" if granul == "bulanan" else "yyyy-MM-dd"
-    periode = f"FORMAT(p.tanggal, '{fmt}')"
+    periode = _periode("p.tanggal", f.get("granularitas", "harian"))
     inner = (
         f"SELECT {periode} AS periode, COUNT(p.nomor) AS jml_nota, "
         "COALESCE(SUM(p.subtotal), 0) AS total_kotor, "
@@ -3589,9 +3595,7 @@ def pembelian_periode_arunika(f):
     penurunannya sudah dikerjakan sekali, di dalam view.
     """
     where, params = _base_where_arunika(f)
-    granul = f.get("granularitas", "harian")
-    fmt = "yyyy-MM" if granul == "bulanan" else "yyyy-MM-dd"
-    periode = f"FORMAT(p.tanggal, '{fmt}')"
+    periode = _periode("p.tanggal", f.get("granularitas", "harian"))
     inner = (
         f"SELECT {periode} AS periode, COUNT(p.nomor) AS jml_nota, "
         "COALESCE(SUM(p.subtotal), 0) AS total_kotor, "
