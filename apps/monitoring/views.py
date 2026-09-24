@@ -3502,6 +3502,10 @@ def _siapkan_nota_mundur(profile, f):
     """Nyalakan pencarian log hanya kalau index-nya ada — tanpa index, tiap
     baris laporan men-scan jutaan baris log dan layar tak pernah selesai."""
     f["log_siap"] = _log_siap(profile)
+    # Gudang rutin menginput nota bertanggal lama secara berombongan (pindahan
+    # data, komplain), jadi pola "jam komputer salah" di sana bukan tanda apa
+    # pun — lihat rpt.JAM_KOMPUTER_MIN_NOTA.
+    f["gudang"] = profile.db_type == "gudang"
     if not f["log_siap"]:
         f["warning"] = " ".join(filter(None, [f.get("warning"), _PESAN_LOG_BELUM]))
 
@@ -3547,6 +3551,9 @@ _NOTA_MUNDUR = {
     "columns": [
         {"key": "jenis", "label": "Jenis Dokumen"},
         {"key": "no_dokumen", "label": "No. Dokumen"},
+        # Hanya terisi kalau tanggalnya dipindah lewat edit (nomornya berganti).
+        {"key": "nomor_asal", "label": "Nomor Asal"},
+        {"key": "tanggal_asal", "label": "Tanggal Asal", "format": "date"},
         {"key": "tanggal", "label": "Tanggal", "format": "date"},
         # Waktu TERAKHIR disimpan, bukan waktu dibuat — lihat rpt.nota_mundur.
         {"key": "tanggal_server", "label": "Terakhir Disimpan", "format": "date"},
@@ -3572,6 +3579,8 @@ _LABEL_KOLOM_NOTA = {
     "tanggal": "Tanggal nota", "tanggal_jatuh_tempo": "Jatuh tempo",
     "status": "Status", "diskon_uang": "Diskon (Rp)", "pajak": "Pajak", "keterangan": "Keterangan",
     "diskon1": "Diskon 1", "diskon2": "Diskon 2", "diskon3": "Diskon 3", "diskon4": "Diskon 4",
+    # Nomor hanya berganti kalau tanggalnya dipindah lewat edit.
+    "no_transaksi": "Nomor nota", "no_retur": "Nomor nota", "no_order": "Nomor nota",
 }
 
 
@@ -3633,9 +3642,21 @@ def nota_mundur_detail(request):
             jejak = (riwayat_log.riwayat(cur, tabel, nokol, no, h["tanggal"], h["tanggal_server"])
                      if log_siap and h.get("tanggal") and h.get("tanggal_server") else None)
 
+            # Nota-nota di sekitarnya dengan nomor bertanggal sama — tak butuh log.
+            tetangga, jumlah_hari_itu, nomor_terakhir = [], 0, None
+            q = rpt.nota_mundur_tetangga(jenis, no)
+            if q:
+                (sql, prm), (sql_n, prm_n) = q
+                mssql.execute_varchar(cur, sql, prm)
+                # SQL memulangkan yang sebelum dalam urutan TERBALIK (TOP … DESC).
+                tetangga = sorted(reporting.dictify(cur), key=lambda t: t["no"])
+                mssql.execute_varchar(cur, sql_n, prm_n)
+                jumlah_hari_itu, nomor_terakhir = cur.fetchone() or (0, None)
+
             # Satu putaran nama untuk semua kode yang akan dipajang.
             peristiwa = jejak["peristiwa"] if jejak else []
-            kd_user = {h.get("kd_user")} | {p["kd_user"] for p in peristiwa}
+            kd_user = ({h.get("kd_user")} | {p["kd_user"] for p in peristiwa}
+                       | {t.get("kd_user") for t in tetangga})
             kd_pihak = {h.get("kd_customer"), h.get("kd_supplier")}
             kd_barang, kd_satuan = set(), set()
             for p in peristiwa:
@@ -3712,6 +3733,12 @@ def nota_mundur_detail(request):
         "barang_cocok": (riwayat_log.cocok_dengan_sekarang(jejak["barang_akhir"], barang or [],
                                                            riwayat_log.DETAIL[tabel][1])
                          if jejak and barang is not None else None),
+        # Tanpa kolom uang sama sekali: nomor, dua tanggal, dan kasir.
+        "tetangga": [{"no": t["no"], "tanggal": reporting._clean(t["tanggal"]),
+                      "tanggal_server": reporting._clean(t["tanggal_server"]),
+                      "kasir": orang(t.get("kd_user")), "ini": t["no"] == no} for t in tetangga],
+        "jumlah_hari_itu": jumlah_hari_itu or 0,
+        "terakhir_hari_itu": bool(nomor_terakhir) and nomor_terakhir == no,
     })
 
 

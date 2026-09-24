@@ -304,7 +304,7 @@ class NotaMundurDetail(TestCase):
     dari log. Diuji lewat HTTP sungguhan — tes yang memanggil penyaringnya
     langsung akan tetap hijau kalau view berhenti memakainya."""
 
-    HEADER = {"no_transaksi": "SC1", "tanggal": dt.datetime(2026, 9, 20, 12, 0),
+    HEADER = {"no_transaksi": "SC2609200054", "tanggal": dt.datetime(2026, 9, 20, 12, 0),
               "tanggal_server": dt.datetime(2026, 9, 21, 9, 0), "kd_divisi": "DAA000",
               "kd_customer": "CAA000", "keterangan": "-", "kd_user": "UAA032"}
     BARANG = {"kd_barang": "A", "kd_satuan": "SAA000", "kd_pegawai": "PAA000", "jenis": 1,
@@ -342,6 +342,15 @@ class NotaMundurDetail(TestCase):
                     elif sql.startswith("SELECT total_bersih"):
                         self._satu = (8000.0,)
                         return
+                    elif sql.startswith("SELECT COUNT(DISTINCT"):
+                        self._satu = (2, "SC2609200055")
+                        return
+                    elif "UNION ALL SELECT" in sql:
+                        # Urutan sengaja terbalik — view harus mengurutkan.
+                        isi = [{"no": "SC2609200055", "tanggal": uji.HEADER["tanggal"],
+                                "tanggal_server": uji.HEADER["tanggal"], "kd_user": "UAA009"},
+                               {"no": "SC2609200054", "tanggal": uji.HEADER["tanggal"],
+                                "tanggal_server": uji.HEADER["tanggal_server"], "kd_user": "UAA032"}]
                     else:
                         isi = []
                     if isi:
@@ -367,7 +376,7 @@ class NotaMundurDetail(TestCase):
              patch.object(v.mssql, "report_cursor", self._cursor()), \
              patch.object(v.riwayat_log, "riwayat", lambda *a: self.RIWAYAT), \
              patch.object(v.riwayat_log, "cocok_dengan_sekarang", lambda *a: True):
-            r = self.client.get("/admin-panel/analitik/nota-mundur/detail", {"jenis": "Penjualan", "no": "SC1"})
+            r = self.client.get("/admin-panel/analitik/nota-mundur/detail", {"jenis": "Penjualan", "no": "SC2609200054"})
         self.assertEqual(r.status_code, 200)
         return json.loads(r.content)
 
@@ -387,6 +396,14 @@ class NotaMundurDetail(TestCase):
         self.assertEqual(d["barang"][0]["subtotal"], 10000.0)
         self.assertEqual(d["riwayat"][1]["barang"]["diubah"][0]["harga_jual_dari"], 4000.0)
         self.assertEqual([c["label"] for c in d["riwayat"][1]["perubahan"]], ["Diskon (Rp)", "Keterangan"])
+
+    def test_urutan_nota_tanpa_uang(self):
+        d = self._detail(hidden_data_keys=["nominal", "harga_jual"])
+        self.assertEqual([t["no"] for t in d["tetangga"]], ["SC2609200054", "SC2609200055"])
+        self.assertEqual([t["ini"] for t in d["tetangga"]], [True, False])
+        self.assertEqual(set(d["tetangga"][0]), {"no", "tanggal", "tanggal_server", "kasir", "ini"})
+        self.assertEqual(d["jumlah_hari_itu"], 2)
+        self.assertFalse(d["terakhir_hari_itu"])
 
     def test_pembuat_dan_kasir_nota_dipisah(self):
         d = self._detail()

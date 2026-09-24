@@ -102,10 +102,36 @@ const istilah = [
     <Card id="nota-mundur" class="mb-4 scroll-mt-24">
       <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-muted">3. Nota Tanggal Mundur</h3>
       <p class="mb-3 text-sm text-ink-muted">
-        Layar ini menampilkan nota yang tanggalnya berbeda dengan hari nota itu terakhir disimpan.
-        Tidak semuanya salah. Yang penting adalah tahu penyebabnya.
+        Layar ini menampilkan nota yang tanggalnya perlu dicek: berbeda dengan hari nota itu terakhir disimpan,
+        dipindah ke hari lain lewat edit, atau tidak masuk akal. Tidak semuanya salah. Yang penting adalah tahu
+        penyebabnya. Nomor nota membantu di sini: nomor selalu memuat tanggal saat nota dibuat
+        (misalnya <em>SC2609170043</em> = 17 September 2026).
       </p>
       <dl class="mb-4 space-y-2 text-sm">
+        <div>
+          <dt class="font-semibold text-ink">Tanggal tidak wajar</dt>
+          <dd class="text-ink-muted">
+            Tahunnya mustahil (misalnya tahun 7252) atau sebelum 2019. Hampir selalu karena jam komputer kasir
+            rusak saat nota dibuat. Nota seperti ini tidak muncul di laporan mana pun, jadi perlu dibetulkan.
+          </dd>
+        </div>
+        <div>
+          <dt class="font-semibold text-ink">Tanggal diubah lewat edit</dt>
+          <dd class="text-ink-muted">
+            Tanggal nota dipindah ke hari lain saat diedit. Aplikasi kasir lalu memberi nota itu nomor baru, jadi
+            nomor lamanya hilang dari urutan hari asalnya. Nomor dan tanggal asalnya ditampilkan di bawah nomor
+            nota ("dulu …"). Penjualannya ikut pindah hari, jadi laporan hari asal dan hari tujuan sama-sama berubah.
+          </dd>
+        </div>
+        <div>
+          <dt class="font-semibold text-ink">Jam komputer salah</dt>
+          <dd class="text-ink-muted">
+            Banyak nota penjualan dari satu kasir, di hari yang sama, tanggalnya bergeser sama persis (misalnya
+            semuanya mundur satu hari) sepanjang beberapa jam. Tandanya tanggal di komputer kasir itu salah, bukan
+            diubah satu per satu. Cek jam dan baterai komputernya. Tidak dipakai untuk server gudang, yang memang
+            sering memasukkan nota lama sekaligus.
+          </dd>
+        </div>
         <div>
           <dt class="font-semibold text-ink">Diedit</dt>
           <dd class="text-ink-muted">
@@ -144,6 +170,11 @@ const istilah = [
           <strong class="text-ink">Klik nomor nota</strong> untuk melihat isi nota dan riwayatnya: kapan dibuat,
           setiap kali diedit, oleh siapa, dan apa yang berubah. Barang yang ditambah ditandai +, yang dihapus
           −, dan yang jumlahnya diubah ~.
+        </li>
+        <li>
+          <strong class="text-ink">Nota lain di tanggal yang sama</strong> (di dalam nota) menampilkan nota sebelum dan
+          sesudahnya menurut nomor. Nota yang dibuat dengan tanggal salah biasanya menyambung di akhir urutan
+          hari itu, tapi jam simpannya tidak nyambung dengan tetangganya — jam itu ditandai.
         </li>
         <li>
           <strong class="text-ink">"Riwayat barang mungkin tidak lengkap"</strong> muncul kalau ada perubahan barang

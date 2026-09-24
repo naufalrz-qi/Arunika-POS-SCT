@@ -1299,14 +1299,26 @@ _SELISIH = "DATEDIFF(day, CAST(tanggal AS DATE), CAST(tanggal_server AS DATE))"
 # ## `tanggal_server` BUKAN waktu dokumen dibuat
 #
 # Ia waktu dokumen TERAKHIR DISIMPAN. Saat nota diedit, aplikasi legacy menimpa
-# `tanggal_server` dengan waktu edit DAN `kd_user` dengan akun pengedit;
-# `tanggal` tidak disentuh. Audit 2026-09-23 atas seluruh server produksi
-# (penjualan Jan–Sep 2026, dibuktikan versi-per-versi di tbl_log_transaksi):
-# 465 dari 469 nota grosir/retail yang "mundur" ternyata DIEDIT belakangan,
-# bukan diinput dengan tanggal lama; tak satu pun dari 700+ edit mengubah
-# `tanggal`. GUDANG kebalikannya: 160 nota, nol edit — tanggalnya dipilih
+# `tanggal_server` dengan waktu edit DAN `kd_user` dengan akun pengedit.
+# Audit 2026-09-23 atas seluruh server produksi (penjualan Jan–Sep 2026,
+# dibuktikan versi-per-versi di tbl_log_transaksi): 465 dari 469 nota
+# grosir/retail yang "mundur" ternyata DIEDIT belakangan, bukan diinput dengan
+# tanggal lama. GUDANG kebalikannya: 160 nota, nol edit — tanggalnya dipilih
 # mundur saat input (nota komplain). Tanpa jejak log, kedua kasus itu terlihat
 # identik di tabel, dan kolom "petugas" menunjuk pengedit sebagai pembuat.
+#
+# ## Edit BISA mengubah `tanggal` — dan nomornya ikut berganti
+#
+# Nomor dokumen = awalan(2) + YYMMDD + urut(4), dan YYMMDD selalu tanggal saat
+# nomor itu dibuat (1,8 juta nota penjualan di 11 server: hanya 5 yang tak
+# cocok, 4 di antaranya bertahun mustahil). Edit yang mengganti tanggal
+# menomori ulang dokumennya ke urutan tanggal baru — di log: `key__no__LAMA;
+# val__no__BARU;`. Terukur sepanjang log: penjualan 61, pembelian 83, biaya
+# operasional 222 (50 di 2026). Audit 2026-09-23 sempat menyimpulkan "tak ada
+# edit yang mengubah tanggal" karena mengelompokkan versi menurut nomor BARU,
+# padahal insert-nya tercatat dengan nomor LAMA. Karena itu pencarian update
+# di bawah mencocokkan `;val__<no>__X;` (nomor sesudah edit), bukan awalan
+# `key__` (nomor sebelum edit).
 #
 # Jejaknya dibaca dari tbl_log_transaksi (diisi trigger `insert_temp_m_*` /
 # `update_temp_m_*`, tak pernah dihapus job legacy). Tiap simpan meninggalkan
@@ -1323,7 +1335,59 @@ _SELISIH = "DATEDIFF(day, CAST(tanggal AS DATE), CAST(tanggal_server AS DATE))"
 # memberi tahu, alih-alih menggantung.
 LOG_INDEX = "IX_tbl_log_transaksi_aksi_waktu"
 
-PENYEBAB_MUNDUR = ["Diedit", "Diinput mundur", "Diinput maju", "Tak tercatat"]
+PENYEBAB_MUNDUR = ["Diedit", "Tanggal diubah lewat edit", "Diinput mundur", "Diinput maju",
+                   "Jam komputer salah", "Tanggal tidak wajar", "Tak tercatat"]
+_PENYEBAB_INPUT = "('Diinput mundur', 'Diinput maju')"
+
+# Batas tanggal yang masuk akal. Diukur 2026-09-24 di kedelapan jenis dokumen,
+# 11 server produksi: data sungguhan paling awal 2019-11-20, satu-satunya baris
+# sebelum 2019 adalah retur bertanggal 2018-10-21 yang disimpan 2025-10-21
+# (salah tahun), dan tak ada dokumen wajar yang bertanggal masa depan. Yang
+# melewati batas adalah jam komputer yang rusak (tahun 4105, 5202, 7252) —
+# dan justru karena itu tak pernah muncul di laporan mana pun: semuanya
+# menyaring rentang tanggal, dan tahun 7252 tak pernah masuk rentang.
+BATAS_TANGGAL_WAJAR = "2019-01-01"
+
+# "Jam komputer salah" = rombongan nota PENJUALAN yang diinput dengan tanggal
+# salah: satu akun, hari simpan sama, bergeser sama (dibulatkan ke jam),
+# tersebar ≥ 1 jam waktu nyata. Kasus acuan: PRAYA 03/12/2025, 53 nota
+# SUPERVISOR tercatat 02/12 sejak 08.22 sampai ±14.30, lalu kembali benar.
+# Di 10 server toko ambang ini hanya menangkap kasus itu sepanjang sejarah.
+# Di GUDANG ia menangkap 43 rombongan yang DISENGAJA ("DARI PUSAT LAMA…",
+# nota komplain) — gudang memang rutin menginput nota bertanggal lama — jadi
+# label ini tak dipakai di server gudang (`f["gudang"]`). Jenis lain juga tidak:
+# biaya operasional & koreksi stok diinput susulan secara berombongan.
+JAM_KOMPUTER_MIN_NOTA = 3
+JAM_KOMPUTER_MIN_MENIT = 60
+
+
+def _tidak_wajar(kolom: str) -> str:
+    """Predikat: tanggal di luar batas wajar. `NOT BETWEEN`, bukan dua syarat
+    dengan OR, supaya tetap satu predikat atas kolom berindeks (dua seek)."""
+    return f"{kolom} NOT BETWEEN '{BATAS_TANGGAL_WAJAR}' AND DATEADD(day, 1, GETDATE())"
+
+
+def _tanggal_nomor(expr: str) -> str:
+    """Ekspresi SQL: tanggal yang tersimpan di nomor dokumen, atau NULL.
+
+    Nomor = awalan + YYMMDD + urut(4), jadi YYMMDD adalah 6 digit sebelum 4
+    digit terakhir. `yyyymmdd` tanpa pemisah ditafsirkan sama di setelan bahasa
+    server mana pun — beda dengan tanggal berpemisah (lihat execute_varchar).
+    """
+    potong = f"SUBSTRING({expr}, LEN({expr}) - 9, 6)"
+    return (f"CASE WHEN LEN({expr}) >= 10 AND ISDATE('20' + {potong}) = 1 "
+            f"THEN CONVERT(date, '20' + {potong}, 112) END")
+
+
+def _nomor_lama(fd: str, awal: str) -> str:
+    """Ekspresi SQL: nomor SEBELUM edit dari payload update (`key__<no>__X;`).
+
+    `awal` adalah ekspresi SQL berisi `'key__<kolom nomor>__'`. Dijaga CASE
+    supaya payload tanpa `;` tak menghasilkan panjang negatif (galat 537).
+    """
+    n = f"LEN({awal})"
+    return (f"CASE WHEN LEFT({fd}, {n}) = {awal} AND CHARINDEX(';', {fd}) > {n} + 1 "
+            f"THEN SUBSTRING({fd}, {n} + 1, CHARINDEX(';', {fd}) - {n} - 1) END")
 
 
 def kolom_log(fd: str, kolom: str) -> str:
@@ -1339,18 +1403,30 @@ def kolom_log(fd: str, kolom: str) -> str:
             f"CHARINDEX(';', {fd} + ';', {mulai}) - {mulai}) END")
 
 
-def _cari_log(alias: str, kolom: str, aksi: str, kunci: str, dari: str, sampai: str, syarat: str = "") -> str:
+def _awalan(kunci: str) -> str:
+    """Payload diawali `kunci`. `LEFT(...) =` dan bukan LIKE: nomor dokumen tak
+    perlu di-escape, dan `_` di nama kolom tak jadi wildcard."""
+    return f"LEFT(l.formatted_data, LEN({kunci})) = {kunci}"
+
+
+def _berisi(kunci: str) -> str:
+    """Payload memuat `kunci` di mana saja — untuk `;val__<no>__X;` di update,
+    yang letaknya sesudah `key__<no>__<nomor lama>;`."""
+    return f"CHARINDEX({kunci}, l.formatted_data) > 0"
+
+
+def _cari_log(alias: str, kolom: str, aksi: str, cocok: str, dari: str, sampai: str, syarat: str = "") -> str:
     """OUTER APPLY: baris log pertama milik dokumen ini di jendela waktu.
 
     `syarat` hanya merujuk kolom luar, jadi SQL Server menjadikannya predikat
     startup — pencarian tak dijalankan sama sekali untuk baris yang tak
-    memerlukannya. `LEFT(...) = kunci` dan bukan LIKE: nomor dokumen tak perlu
-    di-escape, dan `_` di nama kolom tak jadi wildcard.
+    memerlukannya. `cocok` (lihat `_awalan`/`_berisi`) dinilai hanya atas baris
+    hasil seek `(table_aksi, waktu)`, jadi CHARINDEX di sini murah.
     """
     return (
         f"OUTER APPLY (SELECT TOP 1 {kolom} FROM tbl_log_transaksi l "
         f"WHERE {syarat}l.table_aksi = {aksi} AND l.waktu >= {dari} AND l.waktu < {sampai} "
-        f"AND LEFT(l.formatted_data, LEN({kunci})) = {kunci} ORDER BY l.waktu) {alias}"
+        f"AND {cocok} ORDER BY l.waktu) {alias}"
     )
 
 
@@ -1364,21 +1440,32 @@ SORTS_NOTA_MUNDUR = {
     "tanggal_server": "tanggal_server",
     "jenis": "jenis",
     "no_dokumen": "no_dokumen",
+    "nomor_asal": "nomor_asal",
     "penyebab": "penyebab",
     "divisi": "divisi",
     "dibuat_oleh": "dibuat_oleh",
     "diedit_oleh": "diedit_oleh",
 }
-SUMMARY_NOTA_MUNDUR = (
-    "COUNT(*) AS jml_dokumen, "
-    "COALESCE(SUM(CASE WHEN q.penyebab = 'Diedit' THEN 1 ELSE 0 END), 0) AS jml_diedit, "
-    "COALESCE(SUM(CASE WHEN q.penyebab = 'Diinput mundur' THEN 1 ELSE 0 END), 0) AS jml_input_mundur, "
-    "COALESCE(SUM(CASE WHEN q.penyebab = 'Tak tercatat' THEN 1 ELSE 0 END), 0) AS jml_tak_tercatat, "
-    "COALESCE(SUM(CASE WHEN q.selisih_hari < 0 THEN 1 ELSE 0 END), 0) AS jml_maju, "
-    "COALESCE(MAX(q.jarak_hari), 0) AS selisih_terjauh"
-)
+
+
+def _hitung(penyebab: str, alias: str) -> str:
+    return f"COALESCE(SUM(CASE WHEN q.penyebab = '{penyebab}' THEN 1 ELSE 0 END), 0) AS {alias}"
+
+
+SUMMARY_NOTA_MUNDUR = ", ".join([
+    "COUNT(*) AS jml_dokumen",
+    _hitung("Diedit", "jml_diedit"),
+    _hitung("Tanggal diubah lewat edit", "jml_pindah"),
+    _hitung("Diinput mundur", "jml_input_mundur"),
+    _hitung("Jam komputer salah", "jml_jam_komputer"),
+    _hitung("Tanggal tidak wajar", "jml_tidak_wajar"),
+    _hitung("Tak tercatat", "jml_tak_tercatat"),
+    "COALESCE(SUM(CASE WHEN q.selisih_hari < 0 THEN 1 ELSE 0 END), 0) AS jml_maju",
+    "COALESCE(MAX(q.jarak_hari), 0) AS selisih_terjauh",
+])
 FILTERS_NOTA_MUNDUR = {
     "no_dokumen": ("no_dokumen", "text"),
+    "nomor_asal": ("nomor_asal", "text"),
     # Wajib ada, dan bukan demi kelengkapan: dokumen bertanggal MAJU selisihnya
     # kecil (maksimum 23 hari di testGudang), jadi dengan urutan bawaan menurut
     # jarak terjauh, ke-73 baris itu selalu terkubur di halaman belakang. Kartu
@@ -1392,19 +1479,129 @@ FILTERS_NOTA_MUNDUR = {
 }
 
 
-def nota_mundur(f):
-    """Dokumen yang `tanggal`-nya berbeda HARI dari `tanggal_server`, beserta
-    PENYEBABNYA menurut jejak log.
+def _alamat_log(tabel: str, nokol: str, no: str) -> str:
+    """Kolom alamat jejak dokumen di tbl_log_transaksi. Konstanta per arm, jadi
+    satu set OUTER APPLY di luar melayani kedelapan tabel dan ketiga macam arm."""
+    return (f"'{tabel}__insert' AS aksi_ins, '{tabel}__update' AS aksi_upd, "
+            f"'val__{nokol}__' AS awal_ins, 'key__{nokol}__' AS awal_upd, "
+            f"';val__{nokol}__' + {no} + ';' AS kunci_val, ")
 
-    `selisih_hari` BERTANDA, dan itu bukan kebetulan: positif = cap server
-    sesudah tanggal dokumen (dimundurkan), negatif = cap server sebelum tanggal
-    dokumen (bertanggal maju, dokumen bertanggal masa depan saat disimpan).
-    Membungkusnya dengan ABS() akan menghapus kategori kedua tanpa gejala.
+
+def _arm_tabel(label: str, tabel: str, nokol: str, syarat: list) -> str:
+    no = f"RTRIM({nokol})"
+    return (
+        f"SELECT '{label}' AS jenis, {no} AS no_dokumen, tanggal, tanggal_server, "
+        f"{_SELISIH} AS selisih_hari, ABS({_SELISIH}) AS jarak_hari, "
+        "kd_divisi, kd_user, COALESCE(keterangan, '') AS keterangan, "
+        f"{_alamat_log(tabel, nokol, no)}"
+        "CAST(NULL AS varchar(50)) AS nomor_asal, CAST(NULL AS varchar(20)) AS kd_pengubah, "
+        "CAST(NULL AS datetime) AS waktu_ubah, "
+        f"CASE WHEN {_tidak_wajar('tanggal')} THEN 1 ELSE 0 END AS tidak_wajar "
+        f"FROM {tabel} WHERE {' AND '.join(syarat)}"
+    )
+
+
+def _arm_selisih(label: str, tabel: str, nokol: str) -> str:
+    """Arm A — tanggal beda hari dari waktu simpan terakhir. 3 parameter:
+    date_from, date_to, min_selisih."""
+    return _arm_tabel(label, tabel, nokol, [
+        # Predikat terindeks DULU — ini yang mengerjakan seek.
+        "tanggal >= ?", "tanggal <= ?",
+        "tanggal_server IS NOT NULL",
+        # Residual, dinilai di atas hasil seek.
+        "CAST(tanggal AS DATE) <> CAST(tanggal_server AS DATE)",
+        f"ABS({_SELISIH}) >= ?",
+    ])
+
+
+def _arm_tidak_wajar(label: str, tabel: str, nokol: str) -> str:
+    """Arm C — tanggal mustahil, TANPA memandang rentang: di rentang mana pun
+    tahun 7252 tak akan pernah terpilih. Yang sudah tertangkap arm A (rentangnya
+    memang dipilih sampai sana) dibuang supaya tak dobel. 2 parameter."""
+    return _arm_tabel(label, tabel, nokol, [
+        _tidak_wajar("tanggal"),
+        "NOT (tanggal >= ? AND tanggal <= ?)",
+    ])
+
+
+def _arm_pindah(label: str, tabel: str, nokol: str) -> str:
+    """Arm B — dokumen yang nomornya diganti lewat edit (tanggalnya dipindah).
+
+    Satu-satunya cara menemukannya adalah log: sesudah dipindah, tanggal dan
+    waktu simpannya biasanya jatuh di hari yang sama (dipindah ke hari edit),
+    jadi arm A tak pernah melihatnya. Seek `(table_aksi, waktu >= date_from)` —
+    edit selalu terjadi sesudah tanggal asal maupun tanggal barunya, jadi yang
+    lebih tua dari awal rentang tak mungkin relevan.
+
+    OR di bawah ini sengaja, dan TIDAK melanggar aturan arm A/C: ia menilai
+    kolom turunan di atas hasil seek log, bukan menggantikan seek atas tabel
+    dokumen. 8 parameter (lihat `nota_mundur`).
+    """
+    fd = "l.formatted_data"
+    awal = f"'key__{nokol}__'"
+    aksi = f"'{tabel}__update'"
+    log = (f"SELECT l.id, l.waktu, {_nomor_lama(fd, awal)} AS nomor_asal, "
+           f"RTRIM({kolom_log(fd, nokol)}) AS nomor_baru, "
+           f"RTRIM({kolom_log(fd, 'kd_user')}) AS kd_pengubah "
+           f"FROM tbl_log_transaksi l WHERE l.table_aksi = {aksi} AND l.waktu >= ?")
+    # Hanya pemindahan TERAKHIR ke nomor itu, dan hanya bila sesudahnya nomor itu
+    # tak dipindah pergi lagi. testGudang GP2111270003: dibuat Mei 2021 dengan
+    # tahun salah, dinomori bolak-balik September, akhirnya pindah ke
+    # GP2011270008 — lalu nomor yang kosong itu dipakai pembelian LAIN di
+    # November. Tanpa dua syarat ini, pembelian November itu terbaca "dipindah",
+    # dan dokumen yang dinomori ulang dua kali muncul dua baris.
+    pergi = (f"SELECT 1 FROM tbl_log_transaksi l2 WHERE l2.table_aksi = {aksi} "
+             "AND l2.waktu >= g.waktu AND l2.id > g.id "
+             f"AND LEFT(l2.formatted_data, LEN({awal} + g.nomor_baru + ';')) = {awal} + g.nomor_baru + ';' "
+             f"AND CHARINDEX(';val__{nokol}__' + g.nomor_baru + ';', l2.formatted_data) = 0")
+    log = (f"SELECT g.nomor_asal, g.nomor_baru, g.kd_pengubah, g.waktu AS waktu_ubah, "
+           "ROW_NUMBER() OVER (PARTITION BY g.nomor_baru ORDER BY g.id DESC) AS urut "
+           f"FROM ({log}) g WHERE g.nomor_asal <> g.nomor_baru AND NOT EXISTS ({pergi})")
+    selisih = "DATEDIFF(day, CAST(d.tanggal AS DATE), t.tanggal_asal)"
+    no = f"RTRIM(d.{nokol})"
+    sudah_di_a = ("d.tanggal >= ? AND d.tanggal <= ? AND d.tanggal_server IS NOT NULL "
+                  "AND CAST(d.tanggal AS DATE) <> CAST(d.tanggal_server AS DATE) "
+                  "AND ABS(DATEDIFF(day, CAST(d.tanggal AS DATE), CAST(d.tanggal_server AS DATE))) >= ?")
+    return (
+        f"SELECT '{label}' AS jenis, {no} AS no_dokumen, d.tanggal, d.tanggal_server, "
+        f"{selisih} AS selisih_hari, ABS({selisih}) AS jarak_hari, "
+        "d.kd_divisi, d.kd_user, COALESCE(d.keterangan, '') AS keterangan, "
+        f"{_alamat_log(tabel, nokol, no)}"
+        "m.nomor_asal, m.kd_pengubah, m.waktu_ubah, 0 AS tidak_wajar "
+        f"FROM ({log}) m "
+        f"CROSS APPLY (SELECT {_tanggal_nomor('m.nomor_asal')} AS tanggal_asal) t "
+        f"INNER JOIN {tabel} d ON d.{nokol} = m.nomor_baru "
+        "WHERE m.urut = 1 "
+        "AND ((t.tanggal_asal >= ? AND t.tanggal_asal <= ?) OR (d.tanggal >= ? AND d.tanggal <= ?)) "
+        f"AND NOT ({sudah_di_a}) AND NOT ({_tidak_wajar('d.tanggal')})"
+    )
+
+
+def nota_mundur(f):
+    """Dokumen yang TANGGALNYA bermasalah, beserta PENYEBABNYA menurut jejak log.
+
+    Satu baris per dokumen, dari tiga sumber (arm) per tabel:
+      A. tanggal beda hari dari waktu simpan terakhir (`_arm_selisih`),
+      B. nomor diganti lewat edit — tanggalnya dipindah (`_arm_pindah`, butuh log),
+      C. tanggal mustahil, di rentang mana pun (`_arm_tidak_wajar`).
+
+    Rombongan "jam komputer salah" dihitung dengan fungsi window langsung di
+    atas gabungan arm (lihat `sumber` — di atas pencarian log ia membuat
+    halaman 300× lebih lambat). Lalu dua lapis: (1) jejak log per baris +
+    penyebab, (2) pencarian/divisi/penyebab. Pencarian sengaja di lapis
+    TERAKHIR: kalau disaring lebih dulu, mencari satu nomor membuat
+    rombongannya tinggal satu dan labelnya berubah.
+
+    `selisih_hari` BERTANDA, dan itu bukan kebetulan: positif = tanggal nota
+    lebih awal dari acuannya (mundur), negatif = lebih akhir (maju). Acuannya
+    waktu simpan terakhir, kecuali arm B: tanggal asal dari nomor lamanya.
+    Membungkusnya dengan ABS() akan menghapus kategori maju tanpa gejala.
 
     `f["log_siap"]` (index `LOG_INDEX` ada di server ini) menentukan apakah
-    jejak log dibaca. Tanpanya penyebab = 'Belum dicek' dan kedua kolom orang
-    kosong — lebih baik kosong dan dijelaskan daripada menebak pembuatnya dari
-    `kd_user`, yang justru sudah ditimpa pengedit.
+    jejak log dibaca. Tanpanya arm B dilewati, penyebab = 'Belum dicek' (kecuali
+    tanggal tak wajar, yang tak butuh log), dan kedua kolom orang kosong — lebih
+    baik kosong dan dijelaskan daripada menebak pembuat dari `kd_user`, yang
+    justru sudah ditimpa pengedit.
     """
     # Jenis disaring dengan MEMBUANG ARM-nya, bukan menyaring hasil UNION.
     # Memilih "Penjualan" berarti tujuh tabel lain tak pernah disentuh sama
@@ -1420,80 +1617,147 @@ def nota_mundur(f):
     except (TypeError, ValueError):
         min_selisih = 1
 
+    log_siap = bool(f.get("log_siap"))
+    rentang = [f["date_from"], f["date_to"]]
     arms, params = [], []
     for label, tabel, nokol in dipakai:
-        syarat = [
-            # Predikat terindeks DULU — ini yang mengerjakan seek.
-            "tanggal >= ?", "tanggal <= ?",
-            "tanggal_server IS NOT NULL",
-            # Residual, dinilai di atas hasil seek.
-            "CAST(tanggal AS DATE) <> CAST(tanggal_server AS DATE)",
-            f"ABS({_SELISIH}) >= ?",
-        ]
-        arms.append(
-            f"SELECT '{label}' AS jenis, RTRIM({nokol}) AS no_dokumen, tanggal, tanggal_server, "
-            f"{_SELISIH} AS selisih_hari, ABS({_SELISIH}) AS jarak_hari, "
-            "kd_divisi, kd_user, COALESCE(keterangan, '') AS keterangan, "
-            # Alamat jejak dokumen ini di tbl_log_transaksi. Konstanta per arm,
-            # jadi satu set OUTER APPLY di luar melayani kedelapan tabel.
-            f"'{tabel}__insert' AS aksi_ins, '{tabel}__update' AS aksi_upd, "
-            f"'val__{nokol}__' + RTRIM({nokol}) + ';' AS kunci_ins, "
-            f"'key__{nokol}__' + RTRIM({nokol}) + ';' AS kunci_upd "
-            f"FROM {tabel} WHERE {' AND '.join(syarat)}"
-        )
-        params += [f["date_from"], f["date_to"], min_selisih]
+        arms.append(_arm_selisih(label, tabel, nokol))
+        params += rentang + [min_selisih]
+        arms.append(_arm_tidak_wajar(label, tabel, nokol))
+        params += rentang
+        if log_siap:
+            arms.append(_arm_pindah(label, tabel, nokol))
+            # waktu edit ≥ awal; tanggal asal di rentang; tanggal kini di
+            # rentang; syarat arm A (untuk dibuang).
+            params += [f["date_from"]] + rentang + rentang + rentang + [min_selisih]
 
-    where = ["1=1"]
-    _search(where, params, f, ["x.no_dokumen", "x.keterangan"])
-    if f.get("kd_divisi"):
-        where.append("x.kd_divisi = ?")
-        params.append(f["kd_divisi"])
+    # Rombongan "jam komputer salah" dihitung di SINI, langsung di atas gabungan
+    # arm — di bawah semua pencarian log. Versi pertama menaruh fungsi window
+    # di ATAS pencarian log, dan halaman bertopang `ORDER BY … FETCH 100`
+    # melonjak dari 0,17 dtk jadi 51–116 dtk di grosirPusat: SQL Server
+    # menyusun ulang rencana dan mengulang pencarian log berkali-kali. Di sini
+    # window hanya melihat kolom arm yang murah. Konsekuensinya rombongan
+    # dihitung atas semua baris penjualan arm A dengan kunci yang sama (nota
+    # yang diedit ikut terhitung), tapi LABELnya tetap hanya untuk baris yang
+    # ternyata diinput dengan tanggal salah. Geseran dalam menit hanya untuk
+    # baris bertanggal wajar: tahun 7252 vs 2022 dalam menit melampaui int
+    # (galat 535).
+    sumber = f"({' UNION ALL '.join(arms)})"
+    jam_komputer = log_siap and not f.get("gudang")
+    if jam_komputer:
+        kunci = ("x0.jenis, x0.kd_user, CAST(x0.tanggal_server AS DATE), "
+                 "CASE WHEN x0.jenis = 'Penjualan' AND x0.nomor_asal IS NULL AND x0.tidak_wajar = 0 "
+                 "THEN ROUND(DATEDIFF(minute, x0.tanggal, x0.tanggal_server) / 60.0, 0) END")
+        sumber = (
+            f"(SELECT x0.*, COUNT(*) OVER (PARTITION BY {kunci}) AS n_serupa, "
+            f"DATEDIFF(minute, MIN(x0.tanggal_server) OVER (PARTITION BY {kunci}), "
+            f"MAX(x0.tanggal_server) OVER (PARTITION BY {kunci})) AS rentang_serupa "
+            f"FROM {sumber} x0)"
+        )
+        salah_jam = (f"WHEN x.jenis = 'Penjualan' AND x.n_serupa >= {JAM_KOMPUTER_MIN_NOTA} "
+                     f"AND x.rentang_serupa >= {JAM_KOMPUTER_MIN_MENIT} THEN 'Jam komputer salah' ")
+    else:
+        salah_jam = ""
 
     kasir_nota = "COALESCE(u.nama, RTRIM(x.kd_user))"
-    if f.get("log_siap"):
+    if log_siap:
         tsrv_dari, tsrv_sampai = "DATEADD(second, -5, x.tanggal_server)", "DATEADD(day, 1, x.tanggal_server)"
+        kunci_nomor_ini = "x.awal_upd + x.no_dokumen + ';'"  # update yang TIDAK mengganti nomor
         jejak = " ".join([
             # Baris log yang menyetel `tanggal_server` saat ini: update = diedit,
-            # insert = memang disimpan dengan tanggal itu.
-            _cari_log("su", "l.id", "x.aksi_upd", "x.kunci_upd", tsrv_dari, tsrv_sampai),
-            _cari_log("si", "l.id", "x.aksi_ins", "x.kunci_ins", tsrv_dari, tsrv_sampai,
-                      syarat="su.id IS NULL AND "),
-            # Pembuat asli nota yang diedit = kd_user di baris insert-nya. Baris
-            # itu tercatat dekat `tanggal` (jam PC kasir): biasanya s.d. 10 menit
-            # sesudahnya, jadi jendela cepat dimulai 5 menit sebelum. PC yang
-            # jamnya kecepatan berjam-jam (GUDANG, ANDARIA) jatuh ke jendela
-            # kedua, yang hanya dijalankan kalau yang pertama kosong.
-            _cari_log("a1", "l.formatted_data AS fd", "x.aksi_ins", "x.kunci_ins",
-                      "DATEADD(minute, -5, x.tanggal)", "DATEADD(day, 1, x.tanggal)",
-                      syarat="su.id IS NOT NULL AND "),
-            _cari_log("a2", "l.formatted_data AS fd", "x.aksi_ins", "x.kunci_ins",
-                      "DATEADD(day, -1, x.tanggal)", "DATEADD(minute, -5, x.tanggal)",
-                      syarat="su.id IS NOT NULL AND a1.fd IS NULL AND "),
-            f"OUTER APPLY (SELECT RTRIM({kolom_log('COALESCE(a1.fd, a2.fd)', 'kd_user')}) AS kd) asal",
+            # insert = memang disimpan dengan tanggal itu. Update dicocokkan
+            # lewat nomor SESUDAH edit — edit yang mengganti nomor tak punya
+            # `key__<nomor sekarang>`.
+            _cari_log("su", "l.id, l.formatted_data AS fd", "x.aksi_upd", _berisi("x.kunci_val"),
+                      tsrv_dari, tsrv_sampai),
+            _cari_log("si", "l.id", "x.aksi_ins", _awalan("x.awal_ins + x.no_dokumen + ';'"),
+                      tsrv_dari, tsrv_sampai, syarat="su.id IS NULL AND "),
+            # Update yang MENGGANTI nomor ke nomor ini (tanggalnya dipindah),
+            # untuk baris arm A yang diedit. Bukan cukup `su`: nota yang dipindah
+            # lalu diedit biasa di hari lain punya `su` = edit biasa itu, dan
+            # tanpa pencarian ini label "dipindah"-nya hilang. Jendelanya dari
+            # sehari sebelum tanggal (edit pemindah memasang tanggal = saat edit,
+            # atau lebih awal) sampai simpan terakhir; yang terbaru dulu.
+            "OUTER APPLY (SELECT TOP 1 l.formatted_data AS fd, l.waktu FROM tbl_log_transaksi l "
+            "WHERE su.id IS NOT NULL AND x.nomor_asal IS NULL AND l.table_aksi = x.aksi_upd "
+            "AND l.waktu >= DATEADD(day, -1, CASE WHEN x.tanggal < x.tanggal_server "
+            "THEN x.tanggal ELSE x.tanggal_server END) AND l.waktu < DATEADD(day, 1, x.tanggal_server) "
+            f"AND {_berisi('x.kunci_val')} AND NOT ({_awalan(kunci_nomor_ini)}) "
+            "ORDER BY l.waktu DESC) sp",
+            # Nomor sebelum dipindah + siapa yang memindah: dari arm B, atau dari
+            # update pengganti nomor yang barusan ditemukan.
+            "CROSS APPLY (SELECT COALESCE(x.nomor_asal, "
+            f"{_nomor_lama('sp.fd', 'x.awal_upd')}) AS nomor_asal, "
+            f"COALESCE(x.kd_pengubah, RTRIM({kolom_log('sp.fd', 'kd_user')})) AS kd_pengubah, "
+            "COALESCE(x.waktu_ubah, sp.waktu) AS waktu_ubah) na",
+            # Pembuat asli = kd_user di baris insert-nya, yang tercatat dengan
+            # nomor ASAL dan dekat tanggal ASAL (tersimpan di nomor itu). Tanpa
+            # nomor asal, jangkarnya `tanggal`: biasanya s.d. 10 menit sesudah,
+            # jadi jendela cepat mulai 5 menit sebelum; PC yang jamnya kecepatan
+            # berjam-jam (GUDANG, ANDARIA) jatuh ke jendela kedua.
+            "CROSS APPLY (SELECT x.awal_ins + COALESCE(na.nomor_asal, x.no_dokumen) + ';' AS kunci, "
+            f"CAST(COALESCE({_tanggal_nomor('na.nomor_asal')}, x.tanggal) AS datetime) AS jangkar, "
+            "CASE WHEN su.id IS NOT NULL OR na.nomor_asal IS NOT NULL THEN 1 ELSE 0 END AS perlu) ja",
+            _cari_log("a1", "l.formatted_data AS fd", "x.aksi_ins", _awalan("ja.kunci"),
+                      "DATEADD(minute, -5, ja.jangkar)", "DATEADD(day, 1, ja.jangkar)",
+                      syarat="ja.perlu = 1 AND "),
+            _cari_log("a2", "l.formatted_data AS fd", "x.aksi_ins", _awalan("ja.kunci"),
+                      "DATEADD(day, -1, ja.jangkar)", "DATEADD(minute, -5, ja.jangkar)",
+                      syarat="ja.perlu = 1 AND a1.fd IS NULL AND "),
+            # Nota yang dibuat dengan tanggal salah lalu DIBETULKAN lewat edit
+            # (TANJUNG ST2602080069: dibuat 15/09 14.05 bertanggal 8 Feb, 46
+            # menit kemudian dinomori ulang ke 15 Sep): insert-nya dekat waktu
+            # edit pemindah, bukan dekat tanggal di nomor lamanya.
+            _cari_log("a3", "l.formatted_data AS fd", "x.aksi_ins", _awalan("ja.kunci"),
+                      "DATEADD(day, -1, na.waktu_ubah)", "DATEADD(second, 1, na.waktu_ubah)",
+                      syarat="ja.perlu = 1 AND a1.fd IS NULL AND a2.fd IS NULL AND na.waktu_ubah IS NOT NULL AND "),
+            f"OUTER APPLY (SELECT RTRIM({kolom_log('COALESCE(a1.fd, a2.fd, a3.fd)', 'kd_user')}) AS kd) asal",
             "LEFT JOIN m_userx ua ON ua.kd_user = asal.kd",
+            "LEFT JOIN m_userx up ON up.kd_user = na.kd_pengubah",
         ])
-        penyebab = ("CASE WHEN su.id IS NOT NULL THEN 'Diedit' "
-                    "WHEN si.id IS NOT NULL THEN CASE WHEN x.selisih_hari > 0 "
+        nomor_asal = "na.nomor_asal"
+        penyebab = ("CASE WHEN x.tidak_wajar = 1 THEN 'Tanggal tidak wajar' "
+                    "WHEN na.nomor_asal IS NOT NULL THEN 'Tanggal diubah lewat edit' "
+                    "WHEN su.id IS NOT NULL THEN 'Diedit' "
+                    "WHEN si.id IS NOT NULL THEN CASE "
+                    f"{salah_jam}WHEN x.selisih_hari > 0 "
                     "THEN 'Diinput mundur' ELSE 'Diinput maju' END "
                     "ELSE 'Tak tercatat' END")
-        dibuat = ("CASE WHEN su.id IS NOT NULL THEN COALESCE(ua.nama, asal.kd) "
+        dibuat = ("CASE WHEN ja.perlu = 1 THEN COALESCE(ua.nama, asal.kd) "
                   f"WHEN si.id IS NOT NULL THEN {kasir_nota} END")
-        diedit = f"CASE WHEN su.id IS NOT NULL THEN {kasir_nota} END"
+        # Untuk nota yang dipindah: orang yang MEMINDAH, bukan pengedit terakhir.
+        diedit = ("CASE WHEN na.kd_pengubah IS NOT NULL THEN COALESCE(up.nama, na.kd_pengubah) "
+                  f"WHEN su.id IS NOT NULL THEN {kasir_nota} END")
     else:
-        jejak, penyebab = "", "'Belum dicek'"
+        jejak, nomor_asal = "", "x.nomor_asal"
+        penyebab = "CASE WHEN x.tidak_wajar = 1 THEN 'Tanggal tidak wajar' ELSE 'Belum dicek' END"
         dibuat = diedit = "CAST(NULL AS varchar(50))"
 
-    inner = (
-        "SELECT x.jenis, x.no_dokumen, x.tanggal, x.tanggal_server, x.selisih_hari, x.jarak_hari, "
-        "CASE WHEN x.selisih_hari > 0 THEN 'Mundur' ELSE 'Maju' END AS arah, "
-        f"{penyebab} AS penyebab, "
-        "COALESCE(dv.nama, '') AS divisi, "
+    # Lapis 1 — satu baris per dokumen beserta penyebabnya.
+    dasar = (
+        f"SELECT x.jenis, x.no_dokumen, {nomor_asal} AS nomor_asal, "
+        f"{_tanggal_nomor(nomor_asal)} AS tanggal_asal, x.tanggal, x.tanggal_server, "
+        "x.selisih_hari, x.jarak_hari, "
+        "CASE WHEN x.selisih_hari > 0 THEN 'Mundur' WHEN x.selisih_hari < 0 THEN 'Maju' ELSE '-' END AS arah, "
+        f"{penyebab} AS penyebab, x.kd_divisi, COALESCE(dv.nama, '') AS divisi, "
         f"{dibuat} AS dibuat_oleh, {diedit} AS diedit_oleh, x.keterangan "
-        f"FROM ({' UNION ALL '.join(arms)}) x "
+        f"FROM {sumber} x "
         "LEFT JOIN m_divisi dv ON x.kd_divisi = dv.kd_divisi "
         "LEFT JOIN m_userx u ON x.kd_user = u.kd_user "
-        f"{jejak} "
-        f"WHERE {' AND '.join(where)}"
+        f"{jejak}"
+    )
+
+    # Lapis 2 — penyaring pengguna, SESUDAH rombongan dihitung (lihat `sumber`).
+    where = ["1=1"]
+    _search(where, params, f, ["b.no_dokumen", "b.keterangan", "b.nomor_asal"])
+    if f.get("kd_divisi"):
+        where.append("b.kd_divisi = ?")
+        params.append(f["kd_divisi"])
+    inner = (
+        "SELECT b.jenis, b.no_dokumen, b.nomor_asal, b.tanggal_asal, b.tanggal, b.tanggal_server, "
+        "b.selisih_hari, b.jarak_hari, b.arah, b.penyebab, b.divisi, "
+        "b.dibuat_oleh, b.diedit_oleh, b.keterangan "
+        f"FROM ({dasar}) b WHERE {' AND '.join(where)}"
     )
     # Penyebab dihitung di SELECT yang sama, jadi penyaringnya harus satu
     # lapis di luar. Nilai di luar daftar diabaikan — laporan kosong tanpa
@@ -1514,6 +1778,34 @@ def nota_mundur_header(jenis: str, no: str):
     menyimpan satu baris per barang di bawah satu nomor."""
     tabel, nokol = DOK_MUNDUR[jenis]
     return f"SELECT TOP 1 * FROM {tabel} WHERE {nokol} = ?", [no]
+
+
+def nota_mundur_tetangga(jenis: str, no: str, n: int = 3):
+    """Nomor-nomor di sekitar `no` dengan awalan + tanggal yang sama.
+
+    Cara auditor mengenali nota yang dibuat dengan tanggal salah: nomornya
+    menyambung urutan hari itu (sering jadi yang terakhir), tapi waktu
+    simpannya tak nyambung dengan tetangganya. Nomor = awalan + YYMMDD +
+    urut(4), jadi "hari itu" = semua nomor berawalan `no[:-4]` — seek PK.
+
+    `GROUP BY` karena Koreksi Stok menyimpan satu baris per barang di bawah
+    satu nomor. Mengembalikan None kalau nomornya tak berbentuk demikian.
+    """
+    if len(no) < 10 or not no[-10:].isdigit():
+        return None
+    tabel, nokol = DOK_MUNDUR[jenis]
+    pola = no[:-4].replace("[", "[[]").replace("%", "[%]").replace("_", "[_]") + "%"
+    kolom = (f"RTRIM({nokol}) AS no, MIN(tanggal) AS tanggal, MIN(tanggal_server) AS tanggal_server, "
+             "MIN(RTRIM(kd_user)) AS kd_user")
+    sql = (
+        f"SELECT * FROM (SELECT TOP {n} {kolom} FROM {tabel} WHERE {nokol} LIKE ? AND {nokol} < ? "
+        f"GROUP BY {nokol} ORDER BY {nokol} DESC) a "
+        f"UNION ALL SELECT {kolom} FROM {tabel} WHERE {nokol} = ? GROUP BY {nokol} "
+        f"UNION ALL SELECT * FROM (SELECT TOP {n} {kolom} FROM {tabel} WHERE {nokol} LIKE ? AND {nokol} > ? "
+        f"GROUP BY {nokol} ORDER BY {nokol}) b"
+    )
+    jumlah = f"SELECT COUNT(DISTINCT {nokol}), MAX(RTRIM({nokol})) FROM {tabel} WHERE {nokol} LIKE ?"
+    return (sql, [pola, no, no, pola, no]), (jumlah, [pola])
 
 
 def nota_mundur_barang(no: str):

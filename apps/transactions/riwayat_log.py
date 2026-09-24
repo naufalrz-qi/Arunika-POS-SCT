@@ -48,9 +48,16 @@ DETAIL = {
 _SEBELUM, _SESUDAH = dt.timedelta(minutes=1), dt.timedelta(minutes=10)
 
 
-def _log(cur, aksi: str, kunci: tuple, dari, sampai=None) -> list:
-    """Baris log `aksi` milik dokumen ini (payload diawali salah satu `kunci`)."""
-    syarat = " OR ".join("LEFT(formatted_data, ?) = ?" for _ in kunci)
+# Batas rantai nomor lama yang ditelusuri. Nomor berganti setiap kali tanggal
+# diubah lewat edit; lebih dari sekali pun sudah jarang.
+_MAKS_NOMOR = 5
+
+
+def _log(cur, aksi: str, kunci: tuple, dari, sampai=None, berisi: str | None = None) -> list:
+    """Baris log `aksi` milik dokumen ini: payload diawali salah satu `kunci`,
+    atau (untuk update) memuat `berisi` — `;val__<no>__X;` letaknya sesudah
+    nomor lama, jadi tak bisa dicocokkan sebagai awalan."""
+    syarat = ["LEFT(formatted_data, ?) = ?" for _ in kunci]
     params = [aksi, dari]
     batas = ""
     if sampai is not None:
@@ -58,13 +65,25 @@ def _log(cur, aksi: str, kunci: tuple, dari, sampai=None) -> list:
         params.append(sampai)
     for k in kunci:
         params += [len(k), k]
+    if berisi:
+        syarat.append("CHARINDEX(?, formatted_data) > 0")
+        params.append(berisi)
     mssql.execute_varchar(
         cur,
         "SELECT id, waktu, formatted_data FROM tbl_log_transaksi "
-        f"WHERE table_aksi = ? AND waktu >= ? {batas}AND ({syarat}) ORDER BY id",
+        f"WHERE table_aksi = ? AND waktu >= ? {batas}AND ({' OR '.join(syarat)}) ORDER BY id",
         params,
     )
     return cur.fetchall()
+
+
+def tanggal_nomor(no: str):
+    """Tanggal yang tersimpan di nomor dokumen (awalan + YYMMDD + urut 4), atau
+    None. Kembaran Python dari `reports._tanggal_nomor`."""
+    try:
+        return dt.datetime.strptime("20" + no[-10:-4], "%Y%m%d")
+    except (TypeError, ValueError):
+        return None
 
 
 def _baris(isi: dict, kunci: tuple) -> tuple:
@@ -73,15 +92,21 @@ def _baris(isi: dict, kunci: tuple) -> tuple:
     return tuple(_k(str(isi.get(c, ""))) for c in kunci)
 
 
-def _putar_barang(cur, tabel_detail: str, kunci: tuple, no_kol: str, no: str, peristiwa: list) -> list[dict]:
-    """Isi barang SESUDAH tiap peristiwa header, hasil memutar ulang log detail."""
-    # Bentuk kedua milik trigger insert detail di GUDANG, yang menulis kolom
-    # nomor DUA kali dan yang pertama kosong: `val__no_transaksi__;val__no_
-    # transaksi__GP…;`. Tanpa ini setiap nota GUDANG tampak tak berbarang.
-    ins = (f"val__{no_kol}__{no};", f"val__{no_kol}__;val__{no_kol}__{no};")
-    kun = (f"key__{no_kol}__{no};",)
+def _putar_barang(cur, tabel_detail: str, kunci: tuple, no_kol: str, peristiwa: list) -> list[dict]:
+    """Isi barang SESUDAH tiap peristiwa header, hasil memutar ulang log detail.
+
+    Nomor dicari PER PERISTIWA: nota yang tanggalnya dipindah lewat edit
+    tercatat dengan nomor lama sebelum edit itu dan nomor baru sesudahnya.
+    """
     baris = {}
     for p in peristiwa:
+        nomor = {p["nomor"], p.get("nomor_lama") or p["nomor"]}
+        # Bentuk kedua milik trigger insert detail di GUDANG, yang menulis
+        # kolom nomor DUA kali dan yang pertama kosong: `val__no_transaksi__;
+        # val__no_transaksi__GP…;`. Tanpa ini setiap nota GUDANG tampak tak
+        # berbarang.
+        ins = tuple(x for n in nomor for x in (f"val__{no_kol}__{n};", f"val__{no_kol}__;val__{no_kol}__{n};"))
+        kun = tuple(f"key__{no_kol}__{n};" for n in nomor)
         dari, sampai = p["waktu"] - _SEBELUM, p["waktu"] + _SESUDAH
         for aksi, pola, jenis in ((f"{tabel_detail}__insert", ins, "insert"),
                                   (f"{tabel_detail}__update", kun, "update"),
@@ -147,35 +172,56 @@ def riwayat(cur, tabel: str, no_kol: str, no: str, tanggal, tanggal_server) -> d
     hari baris insert. Update dicari sejak insert pertama sampai sekarang;
     update jarang (±300 setahun per tabel di PUSAT), jadi itu murah.
 
+    Nomor yang berganti diikuti mundur: edit yang memindah tanggal menomori
+    ulang dokumennya (`key__<no>__LAMA; val__<no>__BARU;`), dan seluruh riwayat
+    sebelum edit itu — termasuk siapa yang membuatnya — tercatat dengan nomor
+    LAMA, di sekitar tanggal yang tersimpan di nomor lama itu.
+
     `barang` per peristiwa hanya ada untuk tabel di `DETAIL`; selain itu None.
     """
-    ins = (f"val__{no_kol}__{no};",)
-    upd = (f"key__{no_kol}__{no};",)
     satu_hari = dt.timedelta(days=1)
-    sisipan = {}
-    for dari, sampai in ((tanggal - satu_hari, tanggal + satu_hari),
-                         (tanggal_server - dt.timedelta(seconds=5), tanggal_server + satu_hari)):
-        for r in _log(cur, f"{tabel}__insert", ins, dari, sampai):
-            sisipan[r[0]] = r
-    mulai = min([r[1] for r in sisipan.values()] + [tanggal - satu_hari])
-    rows = sorted(list(sisipan.values()) + _log(cur, f"{tabel}__update", upd, mulai), key=lambda r: r[0])
+    rows, antre, dilihat = {}, [(no, tanggal, tanggal_server)], set()
+    while antre and len(dilihat) < _MAKS_NOMOR:
+        nomor, jangkar, jangkar_simpan = antre.pop(0)
+        if nomor in dilihat:
+            continue
+        dilihat.add(nomor)
+        jendela = [(jangkar - satu_hari, jangkar + satu_hari)]
+        if jangkar_simpan:
+            jendela.append((jangkar_simpan - dt.timedelta(seconds=5), jangkar_simpan + satu_hari))
+        sisipan = {}
+        for dari, sampai in jendela:
+            for r in _log(cur, f"{tabel}__insert", (f"val__{no_kol}__{nomor};",), dari, sampai):
+                sisipan[r[0]] = r
+        rows.update(sisipan)
+        mulai = min([r[1] for r in sisipan.values()] + [jangkar - satu_hari])
+        for r in _log(cur, f"{tabel}__update", (), mulai, berisi=f";val__{no_kol}__{nomor};"):
+            rows[r[0]] = r
+            k, _ = parse_formatted_data(r[2])
+            lama = (k.get(no_kol) or "").strip()
+            if lama and lama != nomor:
+                antre.append((lama, tanggal_nomor(lama) or jangkar, None))
 
     peristiwa, sebelum = [], None
-    for id_, waktu, fd in rows:
-        _, v = parse_formatted_data(fd)
+    for id_, waktu, fd in sorted(rows.values(), key=lambda r: r[0]):
+        k, v = parse_formatted_data(fd)
         aksi = "Diedit" if fd.startswith("key__") else ("Dibuat ulang" if peristiwa else "Dibuat")
         perubahan = []
         if sebelum is not None and aksi == "Diedit":
+            # Termasuk kolom nomor: nomor yang berganti adalah tanda tanggal
+            # dipindah, dan tanggalnya sendiri ikut tampil sebagai perubahan.
             for kol, ke in v.items():
-                if kol not in _BUKAN_PERUBAHAN and kol != no_kol and (sebelum.get(kol) or "").strip() != (ke or "").strip():
+                if kol not in _BUKAN_PERUBAHAN and (sebelum.get(kol) or "").strip() != (ke or "").strip():
                     perubahan.append({"kolom": kol, "dari": (sebelum.get(kol) or "").strip(), "ke": (ke or "").strip()})
+        nomor = (v.get(no_kol) or "").strip()
         peristiwa.append({"id": id_, "waktu": waktu, "aksi": aksi, "kd_user": (v.get("kd_user") or "").strip(),
-                          "tanggal": (v.get("tanggal") or "").strip(), "perubahan": perubahan})
+                          "tanggal": (v.get("tanggal") or "").strip(), "perubahan": perubahan,
+                          "nomor": nomor, "nomor_lama": (k.get(no_kol) or "").strip() or nomor})
         sebelum = v
 
     if tabel in DETAIL and peristiwa:
         tabel_detail, kunci = DETAIL[tabel]
-        potret = _putar_barang(cur, tabel_detail, kunci, no_kol, no, peristiwa)
+        potret = _putar_barang(cur, tabel_detail, kunci, no_kol, peristiwa)
         for i, p in enumerate(peristiwa):
             if p["aksi"] != "Diedit":
                 p["barang"] = {"isi": [_ringkas(v) for v in potret[i].values()]}
@@ -188,7 +234,7 @@ def riwayat(cur, tabel: str, no_kol: str, no: str, tanggal, tanggal_server) -> d
         akhir = None
     for p in peristiwa:
         p.setdefault("barang", None)
-        del p["id"]
+        del p["id"], p["nomor_lama"]
     return {"peristiwa": peristiwa, "barang_akhir": akhir}
 
 

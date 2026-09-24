@@ -29,6 +29,7 @@ import Input from "@/components/ui/Input.vue";
 import Banner from "@/components/ui/Banner.vue";
 import Badge from "@/components/ui/Badge.vue";
 import { useServerReport } from "@/composables/useServerReport.js";
+import { tanggal } from "@/utils/tanggal";
 
 const props = defineProps({
   report: { type: Object, default: null },
@@ -58,8 +59,13 @@ const penyebabOptions = computed(() => props.report?.options?.penyebab || []);
 const summaryItems = computed(() => {
   const s = props.report?.summary || {};
   const nf = new Intl.NumberFormat("id-ID");
+  // Satu kartu per penyebab. "Selisih Terjauh" dibuang: tabel sudah bisa
+  // diurut menurut selisih, dan kartunya tak menjawab "apa yang terjadi".
   return [
     { label: "Jumlah Nota", value: nf.format(s.jml_dokumen || 0) },
+    { label: "Tanggal Diubah (Edit)", value: nf.format(s.jml_pindah || 0) },
+    { label: "Jam Komputer Salah", value: nf.format(s.jml_jam_komputer || 0) },
+    { label: "Tanggal Tidak Wajar", value: nf.format(s.jml_tidak_wajar || 0) },
     { label: "Diedit Belakangan", value: nf.format(s.jml_diedit || 0) },
     { label: "Diinput Mundur", value: nf.format(s.jml_input_mundur || 0) },
     // Dipisah, bukan digabung: bertanggal MAJU jauh lebih jarang dan jauh lebih
@@ -67,14 +73,20 @@ const summaryItems = computed(() => {
     // mundur akan menguburnya.
     { label: "Bertanggal Maju", value: nf.format(s.jml_maju || 0) },
     { label: "Tak Tercatat", value: nf.format(s.jml_tak_tercatat || 0) },
-    { label: "Selisih Terjauh", value: `${nf.format(s.selisih_terjauh || 0)} hari` },
   ];
 });
 
-// "Diedit" diberi warna karena ia temuan utamanya: tanggal nota tak berubah,
-// yang berubah adalah isinya dan orang yang tercatat. "Maju" tetap kuning —
-// jarang dan tak punya penjelasan wajar.
-const WARNA_PENYEBAB = { Diedit: "brand", "Diinput maju": "warning" };
+// Warna mengikuti seberapa perlu diperiksa, bukan seberapa sering. Yang paling
+// berat "Tanggal tidak wajar": nota itu tak muncul di laporan mana pun. Lalu
+// yang memindah penjualan ke hari lain (edit yang mengganti tanggal) dan jam
+// komputer yang salah. "Diedit" biru: temuan paling umum, tanggalnya tetap.
+const WARNA_PENYEBAB = {
+  "Tanggal tidak wajar": "danger",
+  "Tanggal diubah lewat edit": "warning",
+  "Jam komputer salah": "warning",
+  "Diinput maju": "warning",
+  Diedit: "brand",
+};
 
 const dipilih = ref(null);
 </script>
@@ -83,8 +95,9 @@ const dipilih = ref(null);
   <AdminLayout title="Nota Tanggal Mundur">
     <!-- Pendek dan tanpa istilah teknis; penjelasan lengkapnya di Bantuan. -->
     <Banner variant="info" class="mb-4">
-      Tanggal nota di sini berbeda dengan hari nota itu terakhir disimpan. Biasanya karena notanya
-      <strong>diedit belakangan</strong>, atau memang sengaja <strong>dibuat dengan tanggal lama</strong>.
+      Nota di sini tanggalnya perlu dicek: berbeda dengan hari terakhir disimpan, <strong>dipindah lewat
+      edit</strong>, atau tidak masuk akal. Penyebab paling umum adalah nota <strong>diedit belakangan</strong>;
+      yang perlu diperhatikan adalah tanggal yang dipindah dan <strong>jam komputer kasir yang salah</strong>.
       Klik nomor nota untuk melihat isinya dan siapa yang mengubahnya.
       <Link href="/admin-panel/bantuan#nota-mundur" class="underline underline-offset-2 hover:no-underline">Penjelasan lengkap</Link>
     </Banner>
@@ -130,6 +143,10 @@ const dipilih = ref(null);
         >
           {{ row.no_dokumen }}
         </button>
+        <!-- Nomor lama = tanggal lamanya; nomornya berganti saat tanggal dipindah. -->
+        <div v-if="row.nomor_asal" class="text-xs text-ink-subtle">
+          dulu {{ row.nomor_asal }}<template v-if="row.tanggal_asal"> · {{ tanggal(row.tanggal_asal) }}</template>
+        </div>
       </template>
       <template #cell-penyebab="{ row }">
         <Badge :variant="WARNA_PENYEBAB[row.penyebab] || 'neutral'">{{ row.penyebab }}</Badge>

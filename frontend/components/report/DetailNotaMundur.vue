@@ -59,6 +59,9 @@ watch(
 );
 
 const WARNA_AKSI = { Dibuat: "success", "Dibuat ulang": "warning", Diedit: "brand" };
+// Bandingkan bagian TANGGAL dari string "YYYY-MM-DD HH:MM" kiriman server —
+// bukan lewat Date, supaya zona waktu peramban tak menggeser harinya.
+const bedaHari = (t) => !!t.tanggal_server && !!t.tanggal && t.tanggal.slice(0, 10) !== t.tanggal_server.slice(0, 10);
 const adaBarangBerubah = (b) => b && ((b.ditambah || []).length || (b.dihapus || []).length || (b.diubah || []).length);
 const judul = computed(() => (props.baris ? `${props.baris.jenis} ${props.baris.no_dokumen}` : ""));
 </script>
@@ -127,6 +130,38 @@ const judul = computed(() => (props.baris ? `${props.baris.jenis} ${props.baris.
                 <td class="px-2 py-1 text-right text-ink">{{ nf.format(b.qty) }}</td>
                 <td v-if="ada(data.barang, 'harga_jual')" class="px-2 py-1 text-right text-ink">{{ rp.format(b.harga_jual || 0) }}</td>
                 <td v-if="ada(data.barang, 'subtotal')" class="px-2 py-1 text-right text-ink">{{ rp.format(b.subtotal || 0) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Cara auditor mengenali nota bertanggal salah: nomornya menyambung
+           urutan hari itu, tapi waktu simpannya tak nyambung dengan tetangganya. -->
+      <section v-if="data.tetangga && data.tetangga.length">
+        <h4 class="mb-1 text-sm font-semibold text-ink">Nota lain di tanggal yang sama</h4>
+        <p class="mb-2 text-xs text-ink-subtle">
+          Ada {{ nf.format(data.jumlah_hari_itu) }} nota bernomor tanggal ini<template v-if="data.terakhir_hari_itu">,
+          dan nota ini yang terakhir</template>. Jam yang ditandai berarti nota itu disimpan di hari lain.
+        </p>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="text-xs text-ink-subtle">
+              <tr class="border-b border-border-default">
+                <th class="px-2 py-1 text-left font-medium">No. Nota</th>
+                <th class="px-2 py-1 text-left font-medium">Tanggal nota</th>
+                <th class="px-2 py-1 text-left font-medium">Disimpan</th>
+                <th class="px-2 py-1 text-left font-medium">Kasir</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-border-default">
+              <tr v-for="t in data.tetangga" :key="t.no" :class="t.ini ? 'bg-brand-bg font-medium' : ''">
+                <td class="px-2 py-1 text-ink">{{ t.no }}</td>
+                <td class="px-2 py-1 text-ink-muted">{{ tanggalJam(t.tanggal) }}</td>
+                <td class="px-2 py-1" :class="bedaHari(t) ? 'font-semibold text-warning-fg' : 'text-ink-muted'">
+                  {{ t.tanggal_server ? tanggalJam(t.tanggal_server) : "—" }}
+                </td>
+                <td class="px-2 py-1 text-ink-muted">{{ t.kasir }}</td>
               </tr>
             </tbody>
           </table>

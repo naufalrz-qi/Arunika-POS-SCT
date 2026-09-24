@@ -13,9 +13,11 @@ from apps.transactions import riwayat_log as rl
 T0 = dt.datetime(2026, 9, 20, 12, 28, 33)
 
 
-def _hdr(aksi, no, kd_user, **kol):
+def _hdr(aksi, no, kd_user, lama=None, **kol):
+    """Payload header. `lama` = nomor SEBELUM edit (edit yang memindah tanggal
+    menomori ulang: `key__no__LAMA; val__no__BARU;`)."""
     isi = ";".join(f"val__{k}__{v}" for k, v in {"no_transaksi": no, **kol, "kd_user": kd_user}.items())
-    return f"key__no_transaksi__{no};{isi}" if aksi == "update" else isi
+    return f"key__no_transaksi__{lama or no};{isi}" if aksi == "update" else isi
 
 
 def _det_ins(no, kd_barang, qty, harga=1000):
@@ -44,11 +46,13 @@ class LogPalsu:
         pakai_sampai = "waktu < ?" in sql
         sampai = params[2] if pakai_sampai else None
         sisa = params[3:] if pakai_sampai else params[2:]
-        awalan = [sisa[i + 1] for i in range(0, len(sisa), 2)]
+        n = sql.count("LEFT(formatted_data, ?) = ?")
+        awalan = [sisa[2 * j + 1] for j in range(n)]
+        berisi = sisa[2 * n] if "CHARINDEX" in sql else None
         self._hasil = sorted(
             (i, w, fd) for i, w, ta, fd in self.baris
             if ta == aksi and w >= dari and (sampai is None or w < sampai)
-            and any(fd.startswith(a) for a in awalan)
+            and (any(fd.startswith(a) for a in awalan) or (berisi is not None and berisi in fd))
         )
 
     def fetchall(self):
@@ -134,6 +138,40 @@ class Riwayat(SimpleTestCase):
         ]
         r = rl.riwayat(LogPalsu(log), "t_penjualan", "no_transaksi", no, T0, T0)
         self.assertEqual([b["kd_barang"] for b in r["peristiwa"][0]["barang"]["isi"]], ["SBN024"])
+
+    def test_tanggal_dipindah_lewat_edit_menelusuri_nomor_lama(self):
+        """TANJUNG 15/09/2026: ST2602080069 (8 Feb) diedit menjadi ST2609150023.
+
+        Nota sekarang bernomor BARU, tapi insert dan barangnya tercatat dengan
+        nomor LAMA di sekitar 8 Feb. Tanpa menelusuri nomor lama, riwayatnya
+        hanya satu edit tanpa pembuat — persis yang dulu membuat audit pertama
+        menyimpulkan edit tak pernah mengubah tanggal."""
+        lama, baru = "ST2602080069", "ST2609150023"
+        dibuat, edit = dt.datetime(2026, 2, 8, 10, 0, 5), dt.datetime(2026, 9, 15, 14, 51, 39)
+        log = [
+            (10, dibuat, "t_penjualan__insert", _hdr("insert", lama, "UAA003", tanggal="2026-2-8 10:00:00")),
+            (11, dibuat, "t_penjualan_detail__insert", _det_ins(lama, "A", 2)),
+            (500, edit, "t_penjualan__update",
+             _hdr("update", baru, "UAA001", lama=lama, tanggal="2026-9-15 14:51:39")),
+            (501, edit, "t_penjualan_detail", _det_del(lama, "A")),
+            (502, edit, "t_penjualan_detail__insert", _det_ins(baru, "A", 2)),
+        ]
+        r = rl.riwayat(LogPalsu(log), "t_penjualan", "no_transaksi", baru, edit, edit)
+        self.assertEqual([(p["aksi"], p["kd_user"], p["nomor"]) for p in r["peristiwa"]],
+                         [("Dibuat", "UAA003", lama), ("Diedit", "UAA001", baru)])
+        self.assertEqual(r["peristiwa"][1]["perubahan"], [
+            {"kolom": "no_transaksi", "dari": lama, "ke": baru},
+            {"kolom": "tanggal", "dari": "2026-2-8 10:00:00", "ke": "2026-9-15 14:51:39"},
+        ])
+        # Barangnya ikut pindah nomor, bukan dihapus lalu hilang.
+        self.assertEqual([b["kd_barang"] for b in r["peristiwa"][0]["barang"]["isi"]], ["A"])
+        self.assertEqual(r["peristiwa"][1]["barang"], {"ditambah": [], "dihapus": [], "diubah": []})
+        self.assertEqual(r["barang_akhir"], {("A", "SAA000", "PAA000", "1"): 2.0})
+
+    def test_tanggal_nomor(self):
+        self.assertEqual(rl.tanggal_nomor("ST2602080069"), dt.datetime(2026, 2, 8))
+        self.assertIsNone(rl.tanggal_nomor("SC2602300001"))
+        self.assertIsNone(rl.tanggal_nomor("SC1"))
 
     def test_tabel_tanpa_putar_ulang_barang(self):
         log = [(1, T0, "t_pembelian__insert", _hdr("insert", "PB1", "UAA001", tanggal="2026-9-20 12:28:33"))]
