@@ -29,6 +29,9 @@ TULIS = {
     # penambahan/mutasi kas `kd_divisi` tautan itu pula yang jadi awalan
     # nomornya — tabelnya sendiri tak punya kolom divisi.
     "kas_biaya_input", "kas_pendapatan", "kas_penambahan", "kas_mutasi",
+    # Edit nota menulis ulang kepala + baris nota dengan `kd_user` pengeditnya,
+    # seperti aplikasi lama — tanpa tautan koneksi itu tak ada atas nama siapa.
+    "edit_nota",
 }
 
 

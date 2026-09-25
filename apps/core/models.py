@@ -1,12 +1,28 @@
-"""Audit trail (SQLite). PRD §5.1 / §7.6."""
+"""Audit trail (pangkal, MS SQL). PRD §5.1 / §7.6."""
+import datetime as dt
+import hashlib
 import json
 
 from django.conf import settings
-from django.db import models
+from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 
 
 class ActivityLog(models.Model):
+    """Satu peristiwa: siapa melakukan apa, kapan, dari mana — dan, untuk
+    perubahan data bisnis, isi sebelum/sesudahnya.
+
+    Satu tabel untuk semua jejak, bukan tabel audit kedua. Lonceng notif, kartu
+    dashboard, Log Aktivitas, dan Jejak Audit membaca baris yang SAMA; dua tabel
+    berarti dua tempat sebuah peristiwa bisa tercatat di satu dan terlewat di
+    yang lain.
+
+    Baris baru dirangkai hash (`hash_prev` → `hash`, lihat `save()`), sehingga
+    baris yang diubah atau dihapus langsung di database terdeteksi oleh
+    `manage.py cek_jejak`. Baris dari sebelum migrasi 0019 tak ber-hash dan
+    berada di luar rantai.
+    """
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -21,11 +37,159 @@ class ActivityLog(models.Model):
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     timestamp = models.DateTimeField(auto_now_add=True)
 
+    # --- Kolom audit (0019). Semuanya boleh kosong: ±40 pemanggil lama tetap
+    # sah tanpa menyebutnya, dan baris lama tetap terbaca.
+    #
+    # Koneksi tempat peristiwa itu terjadi. `no_transaksi` bertabrakan antar
+    # server, jadi nomor dokumen tanpa koneksi tak menunjuk apa pun. Namanya
+    # didenormalisasi seperti `username`: profil yang dihapus tak boleh membuat
+    # jejaknya kehilangan tempat.
+    profile = models.ForeignKey(
+        "connections.ServerProfile",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="activity_logs",
+    )
+    profile_name = models.CharField(max_length=100, blank=True)
+    # Dokumen yang disentuh, mis. ("penjualan", "SC2609250001").
+    jenis_dokumen = models.CharField(max_length=30, blank=True)
+    no_dokumen = models.CharField(max_length=40, blank=True)
+    # Alasan yang DIKETIK orangnya. Wajib untuk perubahan dokumen; dipisah dari
+    # `detail` karena `detail` ringkasan buatan kode, bukan kata-kata manusia.
+    alasan = models.CharField(max_length=255, blank=True)
+    # JSON: {"skema": "legacy", "sebelum": {...}, "sesudah": {...}, ...}.
+    # TextField, bukan JSONField, supaya isi yang di-hash persis string yang
+    # tersimpan — JSONField boleh menormalkan urutan/spasi saat membaca ulang.
+    data = models.TextField(blank=True)
+    hash_prev = models.CharField(max_length=64, blank=True)
+    hash = models.CharField(max_length=64, blank=True)
+
     class Meta:
         ordering = ["-timestamp"]
+        indexes = [
+            models.Index(fields=["no_dokumen", "profile_name"], name="ix_log_dokumen"),
+        ]
 
     def __str__(self) -> str:
         return f"{self.timestamp:%Y-%m-%d %H:%M} {self.username} {self.action}"
+
+    def save(self, *args, **kwargs):
+        """Baris BARU dirangkai ke rantai hash; update biasa tidak.
+
+        Di `save()`, bukan di `log_activity()`: ada penulis yang memanggil
+        `ActivityLog.objects.create()` langsung (`bisnis/transfer.py`), dan
+        rantai yang hanya dijaga satu pintu masuk punya lubang di pintu lain.
+        `bulk_create` memang melewatinya — satu-satunya pemakainya
+        `pindah_pangkal`, yang menyalin baris lama beserta hash-nya apa adanya.
+        """
+        if not (self._state.adding and not self.hash):
+            return super().save(*args, **kwargs)
+        using = kwargs.get("using") or "default"
+        with transaction.atomic(using=using):
+            kepala = _kunci_rantai(using)
+            self.hash_prev = kepala.hash_terakhir
+            super().save(*args, **kwargs)
+            # Di-hash dari BACAAN ULANG database, bukan dari atribut di memori:
+            # GenericIPAddressField menormalkan IPv6 saat menyimpan, dan waktu
+            # bisa dibulatkan kolomnya. Hash dari nilai di memori akan gagal
+            # diverifikasi untuk baris yang tak pernah diubah siapa pun.
+            isi = type(self).objects.using(using).values(*KOLOM_HASH).get(pk=self.pk)
+            self.hash = hash_jejak(isi)
+            type(self).objects.using(using).filter(pk=self.pk).update(hash=self.hash)
+            kepala.hash_terakhir = self.hash
+            kepala.id_terakhir = self.pk
+            kepala.save(update_fields=["hash_terakhir", "id_terakhir"])
+
+
+class RantaiJejak(models.Model):
+    """Kepala rantai hash ActivityLog: SATU baris, dikunci setiap penulisan.
+
+    Tanpa kunci, dua thread waitress (atau thread penjadwal dan `manage.py`)
+    yang menulis bersamaan sama-sama membaca hash terakhir yang sama dan rantai
+    bercabang — lalu `cek_jejak` melaporkan kerusakan yang tak pernah terjadi.
+    Kunci baris di database, bukan `threading.Lock`, karena penulisnya bisa
+    berada di proses yang berbeda.
+
+    `hash_terakhir` juga menangkap penghapusan EKOR rantai: baris terakhir yang
+    dihapus tak meninggalkan mata rantai putus di tengah, tapi kepala ini masih
+    menunjuk hash-nya.
+    """
+
+    kunci = models.CharField(max_length=10, unique=True, default="utama")
+    hash_terakhir = models.CharField(max_length=64, blank=True)
+    id_terakhir = models.BigIntegerField(null=True, blank=True)
+
+    def __str__(self) -> str:
+        return f"rantai {self.kunci}: #{self.id_terakhir}"
+
+
+# Kolom yang ikut di-hash. `user_id` dan `profile_id` SENGAJA tidak: keduanya
+# SET_NULL, jadi menghapus akun atau profil akan "merusak" rantai yang tak
+# disentuh siapa pun. Nama tersalinnya (`username`, `profile_name`) yang dijaga.
+KOLOM_HASH = (
+    "id", "timestamp", "username", "action", "detail", "ip_address",
+    "profile_name", "jenis_dokumen", "no_dokumen", "alasan", "data", "hash_prev",
+)
+
+
+def _cap_waktu(v) -> str:
+    if v is None:
+        return ""
+    if timezone.is_aware(v):
+        v = v.astimezone(dt.timezone.utc)
+    return v.isoformat(timespec="microseconds")
+
+
+def hash_jejak(isi: dict) -> str:
+    """sha256 dari kolom `KOLOM_HASH` satu baris (dict hasil `.values()`)."""
+    urut = [_cap_waktu(isi["timestamp"]) if k == "timestamp" else (isi.get(k) or "")
+            for k in KOLOM_HASH]
+    urut[0] = int(isi["id"])
+    teks = json.dumps(urut, ensure_ascii=False, separators=(",", ":"), default=str)
+    return hashlib.sha256(teks.encode("utf-8")).hexdigest()
+
+
+def _kunci_rantai(using: str = "default") -> "RantaiJejak":
+    """Baris kepala rantai, terkunci sampai transaksi pemanggil selesai."""
+    qs = RantaiJejak.objects.using(using).select_for_update()
+    kepala = qs.filter(kunci="utama").first()
+    if kepala is None:
+        # Migrasi 0019 membuatnya; ini untuk database yang dikosongkan (test
+        # TransactionTestCase memotong semua tabel). Dua pembuat bersamaan:
+        # yang kalah menabrak unique `kunci`, lalu membaca milik pemenang.
+        try:
+            with transaction.atomic(using=using):
+                RantaiJejak.objects.using(using).create(kunci="utama")
+        except IntegrityError:
+            pass
+        kepala = qs.get(kunci="utama")
+    return kepala
+
+
+def periksa_rantai(using: str = "default") -> dict:
+    """Telusuri rantai dari awal. Mengembalikan ringkasan + mata rantai putus
+    PERTAMA (bukan semua: sesudah satu putus, setiap baris sesudahnya ikut
+    tak cocok dan daftar panjang itu tak menambah informasi)."""
+    qs = (ActivityLog.objects.using(using).exclude(hash="")
+          .order_by("id").values(*KOLOM_HASH, "hash"))
+    sebelum, jumlah, putus = "", 0, None
+    for isi in qs.iterator(chunk_size=2000):
+        jumlah += 1
+        if isi["hash_prev"] != sebelum:
+            putus = {"id": isi["id"], "sebab": "hash_prev tak menyambung ke baris sebelumnya "
+                                               "(ada baris yang dihapus atau disisipkan)"}
+            break
+        if hash_jejak(isi) != isi["hash"]:
+            putus = {"id": isi["id"], "sebab": "isi baris tak cocok dengan hash-nya (baris diubah)"}
+            break
+        sebelum = isi["hash"]
+    if putus is None:
+        kepala = RantaiJejak.objects.using(using).filter(kunci="utama").first()
+        if kepala and kepala.hash_terakhir and kepala.hash_terakhir != sebelum:
+            putus = {"id": kepala.id_terakhir,
+                     "sebab": "baris terakhir rantai hilang (ekor rantai dihapus)"}
+    return {"jumlah": jumlah, "putus": putus}
 
 
 def log_untuk(user):
@@ -51,8 +215,15 @@ def log_untuk(user):
     return qs.filter(username=user.username)
 
 
-def log_activity(request, action, detail=""):
-    """Convenience helper to record an audit entry from a request."""
+def log_activity(request, action, detail="", *, profile=None, dokumen=None,
+                 alasan="", data=None):
+    """Catat satu jejak dari sebuah request.
+
+    Argumen kata-kunci hanya untuk perubahan data bisnis (Edit Nota, dsb.):
+    `profile` koneksi tempat dokumennya tinggal, `dokumen` = (jenis, nomor),
+    `alasan` ketikan orangnya, `data` dict sebelum/sesudah. Pemanggil lama tak
+    menyebut satu pun dan barisnya tetap sama seperti dulu.
+    """
     from apps.core.http import client_ip
 
     user = getattr(request, "user", None)
@@ -61,7 +232,15 @@ def log_activity(request, action, detail=""):
     # satunya alasan kolom ini ada — berhenti bisa dijawab untuk semua orang
     # sekaligus, tanpa ada yang menyadarinya sampai dibutuhkan.
     ip = client_ip(request) if request else None
-    ActivityLog.objects.create(
+    jenis_dok, no_dok = dokumen if dokumen else ("", "")
+    return ActivityLog.objects.create(
+        profile=profile,
+        profile_name=(getattr(profile, "name", "") or "")[:100],
+        jenis_dokumen=str(jenis_dok or "")[:30],
+        no_dokumen=str(no_dok or "").strip()[:40],
+        alasan=str(alasan or "").strip()[:255],
+        # Isi LENGKAP tinggal di sini, bukan di `detail` yang dipotong 255.
+        data=(json.dumps(data, ensure_ascii=False, default=str) if data is not None else ""),
         user=user if (user and user.is_authenticated) else None,
         username=(user.username if (user and user.is_authenticated) else ""),
         action=action,

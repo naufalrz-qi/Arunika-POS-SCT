@@ -95,8 +95,11 @@ class MenuTulisKritisTests(TestCase):
     # apa pun. Ia menyebut nama penginput tiap dokumen bertanggal janggal, dan
     # daftar semacam itu bukan bacaan sehari-hari kasir atau supervisor yang
     # justru namanya ada di sana.
+    # `edit_nota`: menulis ulang nota yang sudah tersimpan — supervisor hanya
+    # sebagai akses khusus dari superadmin.
     KUNCI = ("opname", "koreksi_stok", "nota_mundur",
-             "kas_biaya_input", "kas_pendapatan", "kas_penambahan", "kas_mutasi")
+             "kas_biaya_input", "kas_pendapatan", "kas_penambahan", "kas_mutasi",
+             "edit_nota")
 
     def setUp(self):
         self.spv = User.objects.create_user("spv7", password="rahasia-kuat-123", role=Role.SUPERVISOR)

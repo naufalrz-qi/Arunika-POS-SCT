@@ -106,6 +106,12 @@ ALL_MENUS = [
     # Order penjualan sudah DITULIS sejak lama (layar kasir Penjualan Order),
     # tapi sampai sekarang tak ada layar yang membacanya kembali.
     {"key": "order_penjualan", "label": "Order Penjualan", "icon": "clipboard", "href": "/admin-panel/laporan/order-penjualan", "section": "penjualan"},
+    # Edit nota yang SUDAH tersimpan. `tulis_kritis`: bawaan admin, dan ke
+    # supervisor/kasir hanya lewat superadmin sebagai akses khusus — mengubah
+    # nota sesudah uangnya berpindah tangan adalah pekerjaan yang harus bisa
+    # dipertanggungjawabkan satu orang. `butuh_tautan`: edit ditulis atas nama
+    # `kd_user` pengeditnya di server itu, persis seperti aplikasi lama.
+    {"key": "edit_nota", "label": "Edit Nota Penjualan", "icon": "pencil", "href": "/admin-panel/penjualan/edit-nota", "section": "penjualan", "tulis_kritis": True, "butuh_tautan": True},
     # Pembelian
     {"key": "pembelian", "label": "Pembelian", "icon": "truck", "href": "/admin-panel/laporan/pembelian", "section": "pembelian", "roles": ("supervisor",)},
     {"key": "pembelian_supplier", "label": "Pembelian per Supplier", "icon": "truck", "href": "/admin-panel/laporan/pembelian-supplier", "section": "pembelian"},
@@ -227,6 +233,11 @@ ALL_MENUS = [
     {"key": "users", "label": "Manajemen User", "icon": "users", "href": "/admin-panel/users", "section": "admin", "teknis": True},
     {"key": "connections", "label": "Koneksi Server", "icon": "server", "href": "/admin-panel/connections", "section": "admin", "teknis": True},
     {"key": "logs", "label": "Log Aktivitas", "icon": "list", "href": "/admin-panel/logs", "section": "admin"},
+    # Jejak SEMUA orang: siapa mengubah apa, sebelum/sesudahnya, dan riwayat per
+    # nota termasuk edit dari aplikasi lama. Teknis, karena Log Aktivitas di
+    # atasnya sengaja hanya memperlihatkan jejak sendiri (`log_untuk`) — layar
+    # ini membuka pekerjaan seluruh kantor, jadi hanya superadmin yang memberi.
+    {"key": "jejak_audit", "label": "Jejak Audit", "icon": "clipboard", "href": "/admin-panel/audit", "section": "admin", "teknis": True},
     # Teknis (hanya superadmin yang memberi):
     {"key": "menus", "label": "Kelola Menu", "icon": "key", "href": "/admin-panel/menus", "section": "admin", "teknis": True},
     # Teknis, sama seperti Kelola Menu: tautan ini menentukan transaksi

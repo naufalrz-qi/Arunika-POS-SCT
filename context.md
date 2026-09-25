@@ -223,7 +223,7 @@ Tiga layar transaksi berbagi satu berkas Vue dan satu mesin penomoran. Yang perl
 - **Tak ada fallback.** `tautan_wajib(user, profile)` menolak kalau tautan koneksi itu belum ada; ia TIDAK meminjam tautan koneksi lain. Peminjaman tak menimbulkan galat apa pun — kodenya valid di server tujuan, lolos FK, langsung terkirim ke pusat oleh trigger — cuma atas nama orang yang tak menyentuhnya. Untuk layar yang sekadar MENAMPILKAN, pakai `tautan_untuk()` yang memulangkan `KOSONG`.
 - **Resolusinya eksplisit**, profil dioper sebagai argumen. Properti yang diam-diam membaca profil aktif dari thread-local akan jatuh ke `is_default` di perintah `manage.py` dan thread penjadwal — persis peminjaman yang dilarang di atas, cuma lebih sulit dilihat.
 - **Kasir/supervisor bukan kasus khusus**: mereka terkunci ke satu server, jadi tautannya kebetulan cuma satu baris. Satu mekanisme, bukan dua.
-- **Menu yang MENULIS hilang sebelum dibuka, bukan menolak sesudah terisi.** Flag `butuh_tautan` di `apps/core/menus.py` menandai **tujuh** layar (`kasir_penjualan`, `kasir_penjualan_order`, `kasir_retur_penjualan`, `kasir_pembelian`, `kasir_pembelian_order`, `kasir_retur_pembelian`, `koreksi_stok`) — daftar ini pernah tertulis "enam" selama Order Pembelian sudah lama ada, jadi baca `KEYS_BUTUH_TAUTAN` alih-alih memercayai angka di kalimat ini; `menus_for()` membuangnya kalau `tautan.lengkap(user, profil_aktif)` palsu. Karena `admin_network_guard._menu_allowed` membaca fungsi yang sama, URL yang diketik langsung ikut tertutup — termasuk `/save` dan `/cari-barang` lewat pencocokan prefix. Empat hal yang sengaja begitu:
+- **Menu yang MENULIS hilang sebelum dibuka, bukan menolak sesudah terisi.** Flag `butuh_tautan` di `apps/core/menus.py` menandai **tujuh** layar (`kasir_penjualan`, `kasir_penjualan_order`, `kasir_retur_penjualan`, `kasir_pembelian`, `kasir_pembelian_order`, `kasir_retur_pembelian`, `koreksi_stok`) — plus empat layar tulis kas dan `edit_nota` — daftar ini pernah tertulis "enam" selama Order Pembelian sudah lama ada, jadi baca `KEYS_BUTUH_TAUTAN` alih-alih memercayai angka di kalimat ini; `menus_for()` membuangnya kalau `tautan.lengkap(user, profil_aktif)` palsu. Karena `admin_network_guard._menu_allowed` membaca fungsi yang sama, URL yang diketik langsung ikut tertutup — termasuk `/save` dan `/cari-barang` lewat pencocokan prefix. Empat hal yang sengaja begitu:
   - **Superadmin ikut digerbangi.** Penyaringnya berjalan SESUDAH cabang peran, bukan sebelum. Ia juga tak bisa menyimpan tanpa `kd_user` di koneksi itu; membiarkan menunya terlihat hanya menunda penolakan sampai keranjang terisi.
   - **Cek Stok & Cetak Faktur TIDAK ditandai.** Keduanya cuma membaca. Mencabutnya membuat kasir tanpa tautan tak punya satu pun halaman kasir, dan `landing_for()` lalu mengantarnya ke Bantuan — yang ada di `/admin-panel` dan tertutup penjaga Tailscale dari jaringan toko. Jalan buntu.
   - **Pesannya beda dari "menu belum dibuka".** `middleware._pesan_tautan()` memulangkan kalimat `tautan.pesan_belum_tertaut()` yang sama persis dengan yang dipakai `tautan_wajib`, dan `ditolak()` merendernya tanpa redirect. Pesan generik akan mengirim orangnya ke Kelola Menu padahal yang kurang ada di Kelola Tautan User. Kalau menunya memang tak diberikan, pesan menu yang berlaku (dicek lewat `menus_for(user, abaikan_tautan=True)`).
@@ -382,6 +382,74 @@ Layar tulis pertama yang tabelnya **tidak punya satu pun baris lama untuk ditiru
 - **Riwayat barang diputar ulang dari log detail**, karena edit legacy = hapus SEMUA baris barang lalu insert ulang. Dua cacat trigger yang harus diketahui: baris hapus detail tercatat dengan `table_aksi` TANPA sufiks (`'t_penjualan_detail'__delete` dibaca SQL Server sebagai literal + alias), dan trigger insert detail GUDANG menulis `val__no_transaksi__;` kosong sebelum nomor sebenarnya. Hasil putar ulang diadu dengan isi nota sekarang (`barang_cocok`): cocok 393/405 nota diedit di `Testing` — 12 sisanya semua nota retail `CT` yang disalin ke server grosir, yang perubahan barangnya tiba tanpa peristiwa header — dan 881/882 di `testgudang` (satu tanpa log sama sekali).
 - Nota `CT` di database PUSAT adalah salinan RTL PUSAT (27 dari 142 nota "mundur" PUSAT 2026 kembar dengan RTL PUSAT); jejak lognya dibuat job sinkron per jam (`xx:00:02`), bukan oleh kasir.
 
+## Edit Nota Penjualan (`apps/transactions/edit_nota.py` + `Admin/Transaksi/EditNota.vue`)
+
+Menu `edit_nota` (`/admin-panel/penjualan/edit-nota`): `tulis_kritis` + `butuh_tautan`. Artinya bawaan admin; ke supervisor/kasir hanya lewat superadmin sebagai akses khusus; dan akun tanpa tautan koneksi aktif tak bisa membukanya. Jalur tulisnya **meniru edit aplikasi POS lama persis**, bukan membuat cara sendiri:
+
+1. `SELECT … WITH (UPDLOCK, HOLDLOCK)` kepala + baris, lalu cek ulang `versi`. Versi adalah sidik isi nota saat layar dibuka; baris diurutkan di Python karena collation CI membuat `ORDER BY` tak total. Kalau versinya berubah, edit ditolak.
+2. `UPDATE t_penjualan` **lebih dulu**: kolom yang boleh diubah, lalu `kd_user` = pengedit, `tanggal_server = GETDATE()`, dan `tanggal_setor = COALESCE(tanggal_setor, DATEADD(day,-1,tanggal))`.
+3. `DELETE TOP (1) FROM t_penjualan_detail WHERE no_transaksi = ?`, satu per execute (trigger stok skalar). Setelahnya `COUNT(*) = 0` diverifikasi dengan SELECT, bukan `rowcount`.
+4. INSERT baris baru, satu per execute. `jenis`/`point1`/`point2` dibawa dari baris lama yang barang+satuannya sama.
+5. `UPDATE t_penjualan_total`, atau INSERT kalau nota lama itu belum punya barisnya.
+
+Urutan "kepala dulu" bukan kebetulan: `riwayat_log._putar_barang` memasangkan baris barang ke peristiwa kepala **terakhir sebelum** mereka. Semua itu terbukti di tiruan legacy yang memakai **trigger asli** dari `docs/skema/skema-grosirPusat.txt` (feed insert/update/delete kepala + detail, trigger stok, trigger detail pegawai):
+
+- nota ala aplikasi lama → diedit Arunika → `riwayat_log.riwayat()` memulangkan "Dibuat UAA001 → Diedit UAA009" dengan perubahan kepala dan barang yang benar;
+- `cocok_dengan_sekarang` = True;
+- tak satu pun payload `tbl_tmp_post` NULL.
+
+- **Satu-satunya DELETE Arunika ke tabel legacy di server toko**, dan pengecualian sadar atas aturan "tak pernah DELETE" (§ Database legacy). Yang membuatnya aman:
+  - `t_penjualan_detail` tabel DAUN: tak punya PK, jadi tak ada FK yang menunjuknya, dan tak ada cascade;
+  - cakupannya satu nomor, dalam satu transaksi;
+  - isi lamanya sudah terekam utuh di jejak audit sebelum dihapus.
+
+  **Kepala nota tak pernah dihapus** (`t_penjualan` merambat ke `_total`, `t_piutang_cicilan`, `t_tagihan_detail`). Karena itu **batal nota belum ada**, dan nota tak boleh dikosongkan.
+- **`tanggal_setor` NULL mematikan payload sync.** Trigger kepala merangkai setiap kolom dengan `+`, jadi satu NULL membuat `query` dan `formatted_data` NULL seluruhnya. Aplikasi lama mengisinya (tanggal nota − 1 hari), jalur buat nota Arunika tidak (lihat § Belum diperbaiki). Edit Nota mengisinya **hanya bila masih NULL**.
+- **Yang tak bisa diubah:**
+  - `tanggal`: edit legacy yang memindah tanggal menomori ulang nota; itu yang dibongkar Nota Tanggal Mundur.
+  - `kd_divisi`: menentukan awalan nomor.
+  - `status`: di legacy mencampur cara bayar dan pelunasan, dan jalur buat nota selalu menulis 1.
+  - `diskon1..4` kepala: tak ada di layar nota; dibawa apa adanya dan ikut dihitung.
+- **Penghalang** (`edit_nota.penghalang`, semua dikumpulkan sekaligus):
+  - tanggal ≤ tutup buku terakhir (stok berjangkar di sana);
+  - tanggal ≤ snapshot stok DASAR (`pos_stok_snapshot_base`, dianggap beku ±13 bulan);
+  - ada `t_piutang_cicilan`;
+  - ada `t_tagihan_detail`;
+  - awalan nomor ≠ `kepala_nota` divisinya (salinan sync dari server lain, mis. `CT` di PUSAT).
+
+  Edit yang ditolak ikut tercatat (`edit_nota_ditolak`).
+- **Snapshot stok LIVE dibangun ulang tiap malam**, jadi Stok Akhir untuk tanggal sebelum snapshot terakhir baru menyesuaikan sesudah rebuild berikutnya. Ini sama dengan edit backdate dari aplikasi lama (jendela galat ≤1 hari, lihat `inventory/services.py`).
+- **Server GUDANG (testGudang) tak punya trigger `delete_temp`/`update_temp` untuk `t_penjualan_detail`.** Penghapusan baris di sana tak terkirim ke pusat dan tak tercatat di log. Ini sama persis dengan edit dari aplikasi lama. Akibatnya riwayat barang di sana bisa `barang_cocok = False`, dan layar mengatakannya.
+- Total dihitung `pj.total_nota()`, rumus yang sama dengan pembuatan nota. Tak ada rumus kedua.
+- Akun yang `nominal`/`harga_jual`-nya disembunyikan **ditolak utuh**, seperti Laba Rugi.
+- `detail` jejak sengaja tanpa rupiah, karena kolom itu tampil di Log Aktivitas dan lonceng notif tanpa penyaring uang. Totalnya ada di `data`.
+- Dijaga oleh:
+  - `apps/transactions/test_edit_nota.py`: bentuk SQL, urutan, satu baris per execute, penghalang, versi;
+  - `apps/monitoring/test_edit_nota_akses.py`: hak, jejak, uang.
+
+## Jejak Audit (`ActivityLog` + `apps/monitoring/views_audit.py` + `Admin/JejakAudit.vue`)
+
+**Satu tabel, dua layar.** `ActivityLog` diperkaya (migrasi `core/0019`), bukan dibuatkan tabel audit kedua: dua tabel berarti sebuah peristiwa bisa tercatat di satu dan terlewat di yang lain.
+
+- Kolom barunya semua boleh kosong, jadi ±40 pemanggil lama tetap sah:
+  - `profile` + `profile_name` (denormalisasi seperti `username`);
+  - `jenis_dokumen` + `no_dokumen` (index `ix_log_dokumen`);
+  - `alasan` (ketikan manusia, beda dari `detail` buatan kode);
+  - `data` (JSON teks: `skema`, `sebelum`, `sesudah`, `selisih`, `log_id`);
+  - `hash_prev` + `hash`.
+- **Log Aktivitas tetap "jejak saya"** (`log_untuk`). **Jejak Audit** (`/admin-panel/audit`, menu `teknis`) melihat semua akun, dengan penyaring di SQL dan paginasi server.
+- **Rantai hash anti-ubah.** Setiap baris BARU (lewat `ActivityLog.save()`, jadi `objects.create` langsung pun ikut) menyimpan sha256 dari isinya + hash baris sebelumnya.
+  - Isinya dibaca ulang dari database, bukan dari memori: IPv6 dinormalkan kolomnya.
+  - `user_id`/`profile_id` sengaja tak ikut di-hash, karena keduanya SET_NULL. Menghapus akun tak boleh terbaca sebagai perusakan.
+  - Kepalanya satu baris `RantaiJejak` yang dikunci `select_for_update`. Penulisnya bisa di thread atau proses berbeda.
+  - `manage.py cek_jejak` (keluar kode 1 bila putus) dan tombol "Periksa keutuhan" menunjuk baris pertama yang diubah, dihapus, atau hilang di ekor.
+  - Baris sebelum 0019 dan salinan `pindah_pangkal` (bulk_create) berada di luar rantai.
+- **Snapshot memakai nama kolom legacy apa adanya + penanda `skema`.** Menerjemahkannya ke kosakata Arunika kehilangan informasi (empat slot diskon → satu). Penulis Arunika nanti mengisi `"skema": "arunika"`. Audit tinggal di PANGKAL, jadi ia bertahan melewati migrasi legacy → Arunika. Kuncinya `(profile_name, no_dokumen)`, dan `bisnis.Penjualan.nomor` menyimpan nomor yang sama.
+- **Riwayat per nota menggabungkan dua sumber** (`views_audit.riwayat_gabungan`): jejak Arunika (siapa, alasan, sebelum/sesudah) dan log trigger legacy (`riwayat_log`, setiap versi termasuk edit dari aplikasi lama). Peristiwa legacy yang `log_id`-nya jatuh di rentang `(dari, sampai]` milik sebuah edit Arunika diberi lencana "via Arunika", sehingga satu edit tak terbaca dua kali. Log legacy dibaca hanya bila index log ada (`_log_siap`).
+- Riwayat dipasang ULANG di `penjualan/edit-nota/riwayat`: admin yang cuma diberi Edit Nota tak punya menu teknis Jejak Audit.
+- Akun yang nilai uangnya disembunyikan ditolak utuh. JSON bersarang adalah tempat paling mudah satu kolom uang terlewat.
+- `ActivityLog` tetap **tidak** ikut `pangkas_log`.
+
 ## Nilai bawaan layar tulis kasir
 
 `pj.bawaan_form(profile, jenis)` kini melayani **semua** layar tulis, bukan cuma nota. Sebelumnya keempat layar `Transaksi.vue` membuka dengan Jenis Bayar dan Kas KOSONG padahal keduanya NOT NULL ber-FK: simpan pertama selalu gagal dengan galat foreign key, dan galat itu tak terbaca sebagai "ada isian yang belum dipilih".
@@ -464,7 +532,7 @@ Bukan cuma isi data — DDL-nya memang beda, jadi jalur tulis yang sama bisa ber
 
 Keempat belas `ServerProfile` memakai login `sa`/`SA`. Artinya Arunika secara teknis mampu `DROP TABLE`, mematikan trigger, dan menjalankan `DELETE FROM m_merk` yang cascade sampai `m_barang` — kemampuan yang tak satu pun fiturnya butuhkan.
 
-Satu-satunya `DELETE` yang Arunika kirim ke server toko adalah `_write_snapshot` di `apps/inventory/services.py`, dan itu ke tabel snapshot bikinan sendiri. Semua `DELETE` lain (`cdc_sync`, `feed_sync`, `hub_pull`, `hub_master`, `hub_sync`) menyasar AMPHOREUS atau replica, bukan server toko. Jadi login berhak-terbatas benar-benar muat:
+`DELETE` yang Arunika kirim ke server toko ada DUA: `_write_snapshot` di `apps/inventory/services.py` (ke tabel snapshot bikinan sendiri), dan Edit Nota (`DELETE TOP (1) FROM t_penjualan_detail` untuk satu nomor nota, meniru edit aplikasi lama — § Edit Nota Penjualan). Semua `DELETE` lain (`cdc_sync`, `feed_sync`, `hub_pull`, `hub_master`, `hub_sync`) menyasar AMPHOREUS atau replica, bukan server toko. Jadi login berhak-terbatas benar-benar muat:
 
 ```sql
 CREATE LOGIN arunika_app WITH PASSWORD = '...';
@@ -473,20 +541,26 @@ ALTER ROLE db_datareader ADD MEMBER arunika_app;
 GRANT INSERT, UPDATE ON SCHEMA::dbo TO arunika_app;
 GRANT EXECUTE ON SCHEMA::dbo TO arunika_app;
 DENY DELETE ON SCHEMA::dbo TO arunika_app;   -- lalu GRANT balik khusus tabel snapshot Arunika
+GRANT DELETE ON dbo.t_penjualan_detail TO arunika_app;   -- Edit Nota (tabel daun, tanpa cascade)
 ```
 
-Nol perubahan skema, nol risiko ke legacy, dan seluruh bahaya cascade di atas mati di akar alih-alih dijaga kedisiplinan kode. **Aturan turunannya, berlaku sejak sekarang: Arunika TIDAK PERNAH `DELETE` di server toko** — pembatalan memakai kolom `status`/soft-delete. Skrip sekali-pakai di `scripts/` yang butuh hak lebih harus memakai kredensial terpisah secara sadar, bukan mewarisi kuasa penuh aplikasi.
+Nol perubahan skema, nol risiko ke legacy, dan seluruh bahaya cascade di atas mati di akar alih-alih dijaga kedisiplinan kode. **Aturan turunannya, berlaku sejak sekarang: Arunika TIDAK PERNAH `DELETE` di server toko** (satu pengecualian sadar: baris `t_penjualan_detail` milik nota yang sedang diedit, § Edit Nota Penjualan) — pembatalan memakai kolom `status`/soft-delete. Skrip sekali-pakai di `scripts/` yang butuh hak lebih harus memakai kredensial terpisah secara sadar, bukan mewarisi kuasa penuh aplikasi.
 
 ### Belum diperbaiki (jangan dianggap sudah)
 
 - **Kolom `stok` di Master Produk salah.** `list_products()` (`apps/master_data/services.py`, sekitar baris 164) masih mengisi kolom itu dari `m_barang_stok_akhir` — cache `'-'` yang rusak di atas — dengan komentar "must stay live" yang sudah tidak berlaku. Layar lain (`reports.py`, `inventory/services.py`) sudah pindah ke movement engine; yang ini terlewat. Perbaikannya: ambil dari `inv.cek_stok()`/payload kolumnar seperti layar lain, atau buang kolomnya.
 - **Login `arunika_app` belum dibuat**; semua profil masih `sa`.
+- **Nota buatan layar kasir Arunika mungkin tak terkirim ke pusat.** `pj.buat_nota` tidak menulis `tanggal_setor`. Di tiruan legacy dengan trigger asli, `insert_temp_m_t_penjualan` lalu menghasilkan `query`/`formatted_data` **NULL**, karena kolom dirangkai dengan `+`. Akibatnya kepala notanya tak ikut sink pusat dan tak terbaca `riwayat_log`. Belum dicek di produksi: dump skema tak menunjukkan DEFAULT untuk kolom itu, tapi DEFAULT `tanggal_server` pun tak tampil di dump padahal ada. Cek di server nyata:
+  - `SELECT COUNT(*) FROM t_penjualan WHERE tanggal_setor IS NULL`;
+  - `SELECT COUNT(*) FROM tbl_tmp_post WHERE table_aksi = 't_penjualan__insert' AND query IS NULL`.
+
+  Kalau benar, perbaikannya satu kolom di `_HEADER`, dengan rumus yang sama dengan Edit Nota.
 - **Kas Harian & FMI Penjualan tak bisa dibuka di DRAGON** (SQL Server 2008 R2) — menolak dengan pesan; lihat § Service backend. Butuh upgrade SQL Server atau jalur triangular-join.
 - **Laporan Order Penjualan gagal di DRAGON: skemanya berbeda.** Di DRAGON `t_penjualan_order_detail` terhubung ke header lewat `no_transaksi`; di PUSAT lewat `no_order` ("Invalid column name 'no_order'"). Belum diperiksa apakah jalur TULIS order di layar kasir kena juga.
 
 ## Gotcha / aturan wajib
 
-- **Empat aturan keras terhadap DB legacy** (alasan & angkanya di § "Database legacy: milik bersama"): (1) tak pernah `DELETE` di server toko — pakai soft-delete; (2) tak pernah `UPDATE` kolom `kd_*` di tabel master — `ON UPDATE CASCADE` ada di 128 dari 129 FK; (3) satu baris per `execute` untuk tabel bertrigger skalar (`t_opname_stok`, `t_penjualan`, `t_penjualan_detail`, `t_pembelian_detail`, `*_retur_detail`); (4) validasi referensi di aplikasi — FK-nya beda antar server dan 116 di antaranya `not_trusted`.
+- **Empat aturan keras terhadap DB legacy** (alasan & angkanya di § "Database legacy: milik bersama"): (1) tak pernah `DELETE` di server toko — pakai soft-delete (satu-satunya pengecualian: Edit Nota mengganti baris `t_penjualan_detail` satu nota, seperti aplikasi lama); (2) tak pernah `UPDATE` kolom `kd_*` di tabel master — `ON UPDATE CASCADE` ada di 128 dari 129 FK; (3) satu baris per `execute` untuk tabel bertrigger skalar (`t_opname_stok`, `t_penjualan`, `t_penjualan_detail`, `t_pembelian_detail`, `*_retur_detail`); (4) validasi referensi di aplikasi — FK-nya beda antar server dan 116 di antaranya `not_trusted`.
 - **Collation CI**: SQL Server anggap `'LYG005'`=`'lyg005'` & abaikan trailing space; dict Python tidak. Semua join key `kd_*` di Python WAJIB `_k()`.
 - **Tanpa view/UDF/SP legacy** (PRD §5.3) — query langsung tabel, parameterized. Tiga yang paling menggoda dan paling salah: view `mon_g_stok_barang_per_divisi_new`, fungsi `GetStokPerUkuranNew` dan `GetStokBarangPerSupplier` — ketiganya membaca `m_barang_stok_akhir` yang rusak.
 - **Agregasi di SQL**, bukan Python (movement bisa jutaan row).

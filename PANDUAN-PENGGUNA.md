@@ -175,6 +175,40 @@ Angka penjualan mereka tetap lengkap di laporan **Penjualan per Customer**.
 
 ---
 
+## 4c. Edit nota penjualan
+
+Menu **Penjualan → Edit Nota Penjualan**. Bawaan untuk admin; supervisor atau kasir hanya bisa
+membukanya kalau superadmin memberikannya secara khusus. Akun Anda juga harus sudah ditautkan
+ke user legacy di koneksi yang sedang dipilih (Kelola Tautan User).
+
+1. Ketik nomor nota, tekan **Buka nota**.
+2. Ubah yang perlu diubah: pelanggan, jenis bayar, kas, voucher, no. bukti, keterangan, jatuh
+   tempo, diskon (Rp), pajak, dan baris barang (qty, harga, diskon, satuan, pegawai). Barang
+   bisa ditambah lewat kotak di bawah tabel atau dihapus dengan tombol **Hapus**.
+3. Periksa **Pratinjau perubahan** di kanan (apa yang berubah, total lama → baru).
+4. Tulis **alasan edit** (minimal 10 huruf), tekan **Simpan perubahan…**, lalu pastikan sekali
+   lagi di jendela konfirmasi.
+
+**Yang tidak bisa diubah:** tanggal nota (di aplikasi lama mengubah tanggal ikut mengganti
+nomor nota), divisi, dan status. Nota juga tidak bisa dikosongkan atau dibatalkan dari sini.
+
+**Nota yang ditolak untuk diedit** (alasannya tampil sebagai banner merah):
+
+- bertanggal sebelum tutup buku terakhir, atau lebih tua dari batas snapshot stok (±13 bulan);
+- sudah punya cicilan piutang atau sudah masuk tagihan;
+- nomor dari server lain (salinan sinkronisasi) — edit di server asalnya;
+- sudah diubah orang lain (atau lewat aplikasi lama) sejak Anda membukanya — buka ulang notanya.
+
+Setiap edit tercatat di **Jejak Audit**: siapa, kapan, dari mana, alasannya, dan isi nota
+sebelum serta sesudahnya. Di server legacy, edit tercatat persis seperti edit dari aplikasi lama.
+Bagian **Riwayat nota ini** di bawah layar menampilkan semua versi nota, termasuk edit yang
+dilakukan lewat aplikasi lama.
+
+Catatan stok: kalau nota yang diedit bertanggal sebelum hari ini, **Stok Akhir** untuk tanggal
+lampau baru menyesuaikan sesudah rekap stok malam berikutnya — sama seperti edit dari aplikasi lama.
+
+---
+
 ## 5. Administrasi (Superadmin)
 
 - **Manajemen User** — buat/ubah akun dan perannya. Superadmin terakhir tidak bisa
@@ -182,7 +216,12 @@ Angka penjualan mereka tetap lengkap di laporan **Penjualan per Customer**.
 - **Kelola Menu** — tentukan menu apa saja yang boleh dibuka tiap admin. Menu **Bantuan &
   Istilah** selalu tersedia dan tidak bisa dicabut.
 - **Koneksi Server** — daftar server beserta tombol Test.
-- **Log Aktivitas** — jejak semua tindakan pengguna.
+- **Log Aktivitas** — jejak tindakan akun Anda sendiri (superadmin melihat semua).
+- **Jejak Audit** — jejak SEMUA akun: penyaring tanggal/user/aksi/koneksi/nomor dokumen,
+  tombol **Isi** untuk melihat isi nota sebelum dan sesudah diedit, dan klik nomor dokumen untuk
+  riwayat lengkap nota itu (termasuk edit dari aplikasi lama). Tombol **Periksa keutuhan**
+  memastikan tak ada jejak yang diubah atau dihapus langsung di database. Menu teknis — hanya
+  superadmin yang bisa memberikannya.
 
 ---
 
@@ -206,7 +245,8 @@ Angka penjualan mereka tetap lengkap di laporan **Penjualan per Customer**.
 **Ringkasan:** Dashboard · Bantuan & Istilah
 
 **Penjualan:** Penjualan (Detail) · Laba per Barang · Penjualan per Nota · Penjualan per
-Customer · Penjualan per User · Penjualan per Periode · Retur Penjualan · Piutang Pelanggan
+Customer · Penjualan per User · Penjualan per Periode · Retur Penjualan · Piutang Pelanggan ·
+Edit Nota Penjualan
 
 **Pembelian:** Pembelian · Pembelian per Supplier · Pembelian per Periode · Retur Pembelian
 
@@ -225,7 +265,7 @@ Transaksi Barang · Opname Stok
 
 **Sinkronisasi:** Sinkronisasi Harga · Sinkronisasi Master Data · Riwayat Sinkronisasi
 
-**Administrasi:** Manajemen User · Koneksi Server · Log Aktivitas · Kelola Menu *(bisa diberikan superadmin kepada admin; admin hanya bisa memberi menu non-teknis yang ia pegang sendiri)*
+**Administrasi:** Manajemen User · Koneksi Server · Log Aktivitas · Jejak Audit · Kelola Menu *(bisa diberikan superadmin kepada admin; admin hanya bisa memberi menu non-teknis yang ia pegang sendiri)*
 
 ---
 

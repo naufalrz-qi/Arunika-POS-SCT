@@ -234,7 +234,10 @@ def riwayat(cur, tabel: str, no_kol: str, no: str, tanggal, tanggal_server) -> d
         akhir = None
     for p in peristiwa:
         p.setdefault("barang", None)
-        del p["id"], p["nomor_lama"]
+        # `log_id` tetap dibawa: Jejak Audit mencocokkannya dengan rentang log
+        # yang dicatat Edit Nota Arunika, supaya satu edit tak tampil dua kali.
+        p["log_id"] = p.pop("id")
+        del p["nomor_lama"]
     return {"peristiwa": peristiwa, "barang_akhir": akhir}
 
 

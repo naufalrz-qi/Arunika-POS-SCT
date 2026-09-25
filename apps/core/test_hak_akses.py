@@ -72,10 +72,14 @@ class UrutanPeranTests(TestCase):
         self.assertEqual(r.status_code, 404)
 
 
+# `jejak_audit` teknis: ia membuka jejak SELURUH akun, sedangkan Log Aktivitas
+# sengaja hanya jejak sendiri. `edit_nota` tulis_kritis: menulis ulang nota yang
+# uangnya sudah berpindah tangan — supervisor hanya lewat superadmin.
 TEKNIS = {"connections", "users", "menus", "tautan_user", "sync_health", "sync_history",
-          "sync_harga", "sync_master", "transfer_arunika", "cadangan", "migrasi", "kode_nota"}
+          "sync_harga", "sync_master", "transfer_arunika", "cadangan", "migrasi", "kode_nota",
+          "jejak_audit"}
 TULIS_KRITIS = {"opname", "koreksi_stok", "nota_mundur", "kas_biaya_input",
-                "kas_pendapatan", "kas_penambahan", "kas_mutasi"}
+                "kas_pendapatan", "kas_penambahan", "kas_mutasi", "edit_nota"}
 
 
 def _menu(key):

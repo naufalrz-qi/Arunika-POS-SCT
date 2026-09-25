@@ -2,6 +2,8 @@ from django.urls import path
 from django.views.generic import RedirectView
 
 from . import views
+from . import views_audit, views_edit_nota
+from .views_kasir import cari_barang_json, cari_customer_json, satuan_json
 
 urlpatterns = [
     path("dashboard", views.dashboard, name="dashboard"),
@@ -76,6 +78,20 @@ urlpatterns = [
     path("master/sync-master", views.sync_master_index, name="sync_master"),
     path("master/sync-master/apply", views.sync_master_apply, name="sync_master_apply"),
     path("logs", views.logs_index, name="logs"),
+    # Jejak Audit (menu teknis) — jejak seluruh akun + riwayat per nota.
+    path("audit", views_audit.jejak_audit, name="jejak_audit"),
+    path("audit/detail", views_audit.jejak_audit_detail, name="jejak_audit_detail"),
+    path("audit/periksa", views_audit.jejak_audit_periksa, name="jejak_audit_periksa"),
+    path("audit/riwayat", views_audit.jejak_audit_riwayat, name="jejak_audit_riwayat"),
+    # Edit Nota Penjualan. Pencarian barang/pelanggan dipasang ULANG di bawah
+    # prefix menu ini, alasannya sama dengan urls_kasir: izin diberikan per
+    # prefix, dan admin yang hanya diberi Edit Nota tak punya menu kasir.
+    path("penjualan/edit-nota", views_edit_nota.edit_nota, name="edit_nota"),
+    path("penjualan/edit-nota/save", views_edit_nota.edit_nota_save, name="edit_nota_save"),
+    path("penjualan/edit-nota/riwayat", views_edit_nota.edit_nota_riwayat, name="edit_nota_riwayat"),
+    path("penjualan/edit-nota/cari-barang", cari_barang_json, name="edit_nota_cari_barang"),
+    path("penjualan/edit-nota/satuan", satuan_json, name="edit_nota_satuan"),
+    path("penjualan/edit-nota/cari-customer", cari_customer_json, name="edit_nota_cari_customer"),
     # Inventory
     path("inventory/stock", views.stock_index, name="stock"),
     path("inventory/stock/export", views.stock_export, name="stock_export"),

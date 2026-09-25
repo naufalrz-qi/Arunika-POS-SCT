@@ -14,6 +14,11 @@
 > Penjualan, laporan Order Pembelian, Input Pendapatan Lain-Lain, dan Laba Rugi** (2026-08-11). Justru
 > merekalah yang menyentuh jalur tulis. Matriks ini masih sahih untuk 42 menu yang disebutnya;
 > ia tidak sahih sebagai daftar lengkap.
+>
+> **2026-09-25:** menyusul dua lagi — **Edit Nota Penjualan** (`edit_nota`, jalur TULIS ke
+> `t_penjualan`/`_detail`/`_total`, `tulis_kritis` + `butuh_tautan`) dan **Jejak Audit**
+> (`jejak_audit`, teknis, baca pangkal + log legacy). Lihat `context.md` § Edit Nota Penjualan
+> dan § Jejak Audit.
 
 ---
 

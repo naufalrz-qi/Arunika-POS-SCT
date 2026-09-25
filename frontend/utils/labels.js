@@ -51,6 +51,33 @@ export const ACTION_LABELS = {
   supplier: "Kelola supplier",
   // Ditulis thread indexing, tanpa request — username-nya "system".
   index: "Pembangunan index",
+  edit_nota: "Edit nota",
+  // Upaya edit yang ditolak (nota sudah dicicil, ditutup bukunya, dsb.) — ikut
+  // dicatat karena justru itu yang ingin diketahui auditor.
+  edit_nota_ditolak: "Edit nota ditolak",
+};
+
+// Kolom `t_penjualan` → label, untuk selisih edit nota (Edit Nota, Jejak
+// Audit) dan riwayat dari log legacy. Nama kolom legacy dipakai apa adanya di
+// jejak audit; di layar orang membaca labelnya.
+export const LABEL_KOLOM_NOTA = {
+  no_transaksi: "Nomor",
+  kd_customer: "Pelanggan",
+  kd_divisi: "Divisi",
+  kd_jenis: "Jenis bayar",
+  kd_kas: "Kas",
+  kd_voucher: "Voucher",
+  no_bukti: "No. bukti",
+  tanggal: "Tanggal",
+  tanggal_jatuh_tempo: "Jatuh tempo",
+  status: "Status",
+  diskon1: "Diskon 1",
+  diskon2: "Diskon 2",
+  diskon3: "Diskon 3",
+  diskon4: "Diskon 4",
+  diskon_uang: "Diskon (Rp)",
+  pajak: "Pajak",
+  keterangan: "Keterangan",
 };
 
 export const DB_TYPE_LABELS = {
