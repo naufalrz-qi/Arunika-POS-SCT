@@ -4,9 +4,11 @@ Semuanya berbentuk sama seperti bug-bug yang sudah pernah terjadi di jalur sync
 ini: tidak ada exception, laporan tetap jalan, angkanya saja yang salah.
 """
 import datetime as dt
+from contextlib import contextmanager
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
+from django.utils import timezone
 
 from apps.transactions import hub_master, hub_pull, hub_sync
 
@@ -178,6 +180,84 @@ class CobaUlangTests(SimpleTestCase):
             akhir = hub_pull.pull_source(object(), object(), mode="segar", dry_run=True, coba=3)
         self.assertEqual(m.call_count, 3)
         self.assertEqual(akhir["status"], "failed")
+
+
+class CocokDetailTests(SimpleTestCase):
+    """Header yang sama tidak berarti nota yang sama: uangnya di detail.
+
+    Terukur 25 Sep 2026 — GP2608310004 di GUDANG 29 baris, di AMPHOREUS 28, dan
+    pencocokan header-saja melaporkan nol hari beda."""
+
+    HARI = dt.date(2026, 8, 31)
+    SUMBER = type("P", (), {"name": "GUDANG", "kode_sumber": "GUDANG"})()
+
+    def _cocok(self, kolom_ada, detail):
+        @contextmanager
+        def kursor(*a, **kw):
+            yield KursorPalsu()
+
+        with patch.object(hub_pull.mssql, "cursor", kursor), \
+             patch.object(hub_pull, "batas_arsip", return_value=dt.datetime(2017, 12, 31)), \
+             patch.object(hub_pull, "_awal_jendela", return_value=dt.datetime(2026, 9, 18)), \
+             patch.object(hub_pull, "_kolom_waktu", return_value=["tanggal"]), \
+             patch.object(hub_pull, "agregat_harian", return_value={self.HARI: (5, 0)}), \
+             patch.object(hub_pull, "_kolom_ada", return_value=kolom_ada), \
+             patch.object(hub_pull, "_kolom_numerik", return_value=["qty"]), \
+             patch.object(hub_pull, "agregat_detail_harian", side_effect=detail) as m:
+            return hub_pull.cocokkan_harian(self.SUMBER, object(), dry_run=True), m
+
+    def test_header_sama_detail_beda_terbaca_hari_beda(self):
+        def detail(cur, header, tdet, pk, kol, dari, sampai, num, kd_sumber=None):
+            if tdet == "t_pembelian_detail":
+                return {self.HARI: (29 if kd_sumber is None else 28, 1)}
+            return {self.HARI: (3, 1)}
+
+        hasil, _ = self._cocok({"no_transaksi", "no_retur", "no_order"}, detail)
+        self.assertEqual(hasil["hari_beda"], 1)
+
+    def test_detail_tanpa_parent_key_dilewati_bukan_menggagalkan(self):
+        """Order detail DRAGON berkunci `no_transaksi`, bukan `no_order`."""
+        hasil, m = self._cocok(set(), lambda *a, **kw: {})
+        m.assert_not_called()
+        self.assertEqual(hasil["status"], "dry_run")
+
+
+class SlotHarianTests(TestCase):
+    """Slot harian jam 02:00 gagal tiga malam berturut (semua server mati) tapi
+    ditandai selesai, jadi pencocokan dan master tak pernah jalan."""
+
+    def setUp(self):
+        from apps.connections.models import ServerProfile
+        from apps.core.models import HubPullState
+
+        self.hub = ServerProfile.objects.create(name="AMPHOREUS", host="h", db_name="A", username="sa")
+        self.src = ServerProfile.objects.create(name="PRAYA", host="p", db_name="P", username="sa",
+                                                kode_sumber="PRAYA")
+        HubPullState.objects.create(source_profile=self.src, target_profile=self.hub)
+
+    def _jalan(self, status_cocok):
+        from apps.core import scheduler
+
+        def palsu(s, hub, mode="segar", **kw):
+            return {**hub_pull._hasil_kosong(s), "status": status_cocok if mode == "cocok" else "ok"}
+
+        env = {"HUB_MATCH_ENABLED": "1", "HUB_MASTER_ENABLED": "0", "MASTER_TOKO_ENABLED": "0"}
+        with patch.dict("os.environ", env), \
+             patch.object(hub_pull, "sumber_profiles", return_value=[self.src]), \
+             patch.object(hub_pull, "pull_source", side_effect=palsu):
+            scheduler._run_due_hub_pull(timezone.localtime().replace(hour=3))
+
+    def test_slot_gagal_tidak_ditandai_selesai(self):
+        from apps.core.models import HubPullState
+
+        self._jalan("failed")
+        self.assertIsNone(HubPullState.objects.get().cocok_terakhir_at)
+
+    def test_slot_berhasil_ditandai_selesai(self):
+        from apps.core.models import HubPullState
+
+        self._jalan("ok")
+        self.assertIsNotNone(HubPullState.objects.get().cocok_terakhir_at)
 
 
 class TitikLanjutTests(SimpleTestCase):

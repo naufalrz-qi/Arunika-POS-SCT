@@ -353,6 +353,39 @@ class DisaringVsDeadLetterTests(TestCase):
         self.assertEqual(tulis.call_count, 1)
         self.assertEqual(hasil["diterapkan"], 1)
 
+    def test_durasi_tidak_dihitung_dari_id_feed(self):
+        """Id feed nyata jutaan, `time.monotonic()` detik sejak boot. Durasi yang
+        dihitung dari id feed negatif, ditolak CHECK `duration_ms` sesudah
+        commit, dan exception-nya dulu menghentikan seluruh fan-out. Tes-tes di
+        atas memakai `from_id=0`, yang kebetulan membuat angkanya positif."""
+        from apps.core.models import SyncLog
+
+        feed = [{"id": 1_087_089, "table_aksi": "m_merk", "formatted_data": "val__kd_merk__M1"}]
+        with patch.object(fs.mssql, "cursor", self._cursor_palsu), \
+                patch.object(fs, "ambil_perubahan", return_value=feed):
+            fs.sync_pair(self.src, self.dst, from_id=1_087_088)
+        durasi = SyncLog.objects.get(feature="feed_sync").duration_ms
+        self.assertGreaterEqual(durasi, 0)
+        self.assertLess(durasi, 60_000)
+
+    def test_satu_tujuan_melempar_tujuan_lain_tetap_dilayani(self):
+        from apps.connections.models import ServerProfile
+
+        dst2 = ServerProfile.objects.create(name="TUJ2", host="h3", db_name="D", username="sa")
+        dilayani = []
+
+        def palsu(source, target, **kw):
+            if target.pk == self.dst.pk:
+                raise ValueError("galat di luar pyodbc")
+            dilayani.append(target.name)
+            return {"source": source.name, "target": target.name, "status": "ok"}
+
+        with patch.object(fs, "sync_pair", side_effect=palsu), \
+                self.assertLogs("apps.transactions.feed_sync", "ERROR"):
+            hasil = fs.sync_all(self.src, [self.dst, dst2])
+        self.assertEqual(dilayani, ["TUJ2"])
+        self.assertEqual([h["status"] for h in hasil], ["failed", "ok"])
+
     def test_dry_run_tidak_memajukan_cursor(self):
         from apps.core.models import FeedSyncCursor
 

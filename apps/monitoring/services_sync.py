@@ -76,6 +76,11 @@ WATERMARK_LAMBAT_MENIT = 360
 # ini bukan alarm — hanya penentu apakah "antrean kosong" boleh dibaca sebagai
 # bukti terkirim atau harus dibaca sebagai "tidak tahu".
 AKTIF_MENIT = 120
+# Selisih jam server legacy vs jam aplikasi yang dianggap rusak. Bukan kosmetik:
+# SQL Agent menjadwal ulang dari jam server, jadi jam yang MUNDUR menghentikan
+# job kirim sampai jam itu menyusul jadwal lamanya. GUDANG mundur 8 jam sejak
+# 23 Sep 2026 dan pembelian toko tertahan berjam-jam tanpa satu pun galat.
+JAM_MELESET_MENIT = 10
 
 STATUS_OK = "ok"
 STATUS_LAMBAT = "lambat"
@@ -172,6 +177,7 @@ def _baca(cur) -> dict:
         "watermark_get": watermark_get,
         "feed_id": feed[0] if feed else None,
         "feed_waktu": feed[1] if feed else None,
+        "jam_server": _scalar(cur, "SELECT GETDATE()"),
     }
 
 
@@ -196,6 +202,7 @@ def sync_health(profile) -> dict:
         "feed_id": None,
         "feed_waktu": None,
         "aktivitas_menit": None,
+        "jam_selisih_menit": None,
         "bukti": "",
         "penyebab": "",
         "status": STATUS_OFFLINE,
@@ -241,7 +248,13 @@ def sync_health(profile) -> dict:
     status_antre = _nilai_status(umur_antre, ANTRE_OK_MENIT, ANTRE_LAMBAT_MENIT)
     status_watermark = _nilai_status(umur_watermark, WATERMARK_OK_MENIT, WATERMARK_LAMBAT_MENIT)
     status_stuck = _stuck(profile, mentah)
-    status = _terburuk(status_antre, status_watermark, status_stuck)
+    # Semua umur di atas dihitung dari jam server itu sendiri; kalau jamnya
+    # meleset, angka-angka itu ikut bohong. Selisihnya karena itu jadi sumbu
+    # sendiri, dan disebut apa adanya supaya yang dibetulkan jamnya, bukan job-nya.
+    selisih = -_umur_menit(mentah["jam_server"], sekarang) if mentah.get("jam_server") else None
+    hasil["jam_selisih_menit"] = selisih
+    status_jam = STATUS_MATI if selisih is not None and abs(selisih) >= JAM_MELESET_MENIT else None
+    status = _terburuk(status_antre, status_watermark, status_stuck, status_jam)
 
     # Sumbu mana pun yang serendah status akhir ikut disebut — bisa lebih dari
     # satu kalau seri (antre DAN watermark sama-sama mati). Ini yang membuat
@@ -254,6 +267,10 @@ def sync_health(profile) -> dict:
         penyebab.append("tarik terakhir")
     if status_stuck and _PERINGKAT[status_stuck] == _PERINGKAT[status]:
         penyebab.append("macet")
+    if status_jam:
+        jam = selisih / 60
+        penyebab.append(f"jam server meleset {jam:+.1f} jam" if abs(jam) >= 1
+                        else f"jam server meleset {selisih:+.0f} menit")
     hasil["penyebab"] = ", ".join(penyebab)
 
     hasil["status"] = status

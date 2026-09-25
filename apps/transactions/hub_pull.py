@@ -58,14 +58,13 @@ per hari. GUDANG 2.019 hari / 55.430 nota = **0,15 detik**; ANDARIA 933 hari /
    bisa dilakukan feed: feed hanya memuat `__insert`/`__update`, jadi nota yang
    dibatalkan tertinggal jadi hantu — jumlah nota benar, omzetnya salah.
 
-## Yang TIDAK dilihat modul ini
+## Pencocokan melihat header DAN detail
 
-Agregat pencocokan memakai `COUNT(*)` header plus jumlah kolom numerik header
-(diskon/pajak). **Tidak ada satu pun kolom nilai di tabel header** — uangnya ada
-di tabel detail. Jadi nota lama yang qty/harga DETAILNYA diubah tanpa headernya
-tersentuh tidak akan terdeteksi tingkat 2.
-# ponytail: agregat header saja. Kalau edit detail pada nota lama ternyata nyata,
-# tambahkan agregat detail (JOIN ke header untuk tanggalnya) ke `agregat_harian`.
+**Tidak ada satu pun kolom nilai di tabel header** — uangnya ada di detail.
+Agregat header saja (`COUNT(*)` + kolom numerik header) meloloskan nota lama yang
+qty/harga detailnya diedit tanpa headernya berubah, dan itu terbukti nyata: 108 hari
+`t_pembelian_detail` di 9 cabang masih versi lama di AMPHOREUS (25 Sep 2026). Tingkat 2
+juga membandingkan `agregat_detail_harian` (JOIN ke header untuk tanggalnya).
 Jendela segar tidak terpengaruh — ia menyalin ulang tanpa membandingkan.
 """
 from __future__ import annotations
@@ -170,7 +169,7 @@ def _kolom_waktu(cur, tabel: str) -> list[str]:
     return [k for k in _KOLOM_WAKTU if k in ada]
 
 
-def _where_rentang(kolom: list[str], dari, sampai) -> tuple[str, list]:
+def _where_rentang(kolom: list[str], dari, sampai, alias: str = "") -> tuple[str, list]:
     """Potongan WHERE untuk rentang tanggal, memakai SEMUA kolom waktu dengan OR.
 
     OR, bukan AND, dan bukan `tanggal` saja: nota bisa bertanggal tiga minggu lalu
@@ -181,9 +180,10 @@ def _where_rentang(kolom: list[str], dari, sampai) -> tuple[str, list]:
     if not kolom:
         raise RuntimeError("tabel tanpa kolom tanggal tidak bisa disapu per rentang")
     atas = min(sampai, TANGGAL_MAKS)
+    pre = f"{alias}." if alias else ""
     potong, params = [], []
     for k in kolom:
-        potong.append(f"([{k}] >= ? AND [{k}] < ?)")
+        potong.append(f"({pre}[{k}] >= ? AND {pre}[{k}] < ?)")
         params += [dari, atas]
     return "(" + " OR ".join(potong) + ")", params
 
@@ -468,6 +468,44 @@ def agregat_harian(cur, tabel: str, kolom_waktu: list[str], dari, sampai,
     return {r[0]: (int(r[1]), r[2]) for r in cur.fetchall()}
 
 
+def agregat_detail_harian(cur, header: str, detail: str, parent_key: str, kolom_waktu: list[str],
+                          dari, sampai, numerik: list[str], kd_sumber: str | None = None) -> dict:
+    """`{tanggal header: (jumlah baris detail, jumlah nilai)}` — SATU kueri.
+
+    Pasangan `agregat_harian` untuk tabel detail. Ada karena uangnya di detail:
+    header tidak berubah saat qty/harga baris nota diedit, jadi pencocokan yang
+    hanya melihat header meloloskannya. Terukur 25 Sep 2026: 108 hari di 9
+    cabang, semuanya `t_pembelian_detail` yang harga belinya dikoreksi sesudah
+    jendela segar lewat, dengan header identik — dan nol hari beda.
+
+    Dikelompokkan menurut tanggal HEADER dengan saringan rentang yang sama, jadi
+    harinya sebanding satu-satu dengan `agregat_harian`. `numerik` diberikan
+    pemanggil (irisan kedua sisi): kolom yang cuma ada di satu sisi akan membuat
+    SETIAP hari terbaca beda dan disalin ulang tiap malam tanpa henti.
+    """
+    where, params = _where_rentang(kolom_waktu, dari, sampai, alias="h")
+    join = f"d.[{parent_key}] = h.[{parent_key}]"
+    if kd_sumber is not None:
+        where = f"h.[{KOL_SUMBER}] = ? AND {where}"
+        params = [kd_sumber] + params
+        join += f" AND d.[{KOL_SUMBER}] = h.[{KOL_SUMBER}]"
+    nilai = (
+        "SUM(" + " + ".join(f"CAST(ISNULL(d.[{k}], 0) AS decimal(18,4))" for k in numerik) + ")"
+        if numerik else "CAST(0 AS decimal(18,4))"
+    )
+    cur.execute(
+        f"SELECT CAST(h.[tanggal] AS date) hari, COUNT(*), {nilai} FROM [{detail}] d "
+        f"JOIN [{header}] h ON {join} WHERE {where} GROUP BY CAST(h.[tanggal] AS date)",
+        params,
+    )
+    return {r[0]: (int(r[1]), r[2]) for r in cur.fetchall()}
+
+
+def _kolom_ada(cur, tabel: str) -> set[str]:
+    cur.execute("SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(?)", [tabel])
+    return {r[0] for r in cur.fetchall()}
+
+
 def _kolom_numerik(cur, tabel: str) -> list[str]:
     """Kolom float/decimal/money header, urut nama — bahan agregat pencocokan.
 
@@ -508,11 +546,22 @@ def cocokkan_harian(source, hub, sampai=None, dry_run: bool = False, lapor=None)
                 return hasil
             for tabel in TABEL_HEADER + TABEL_RENTANG:
                 kol_src = _kolom_waktu(src_cur, tabel)
+                kol_hub = _kolom_waktu(hub_cur, tabel)
                 a = agregat_harian(src_cur, tabel, kol_src, dari, atas)
-                b = agregat_harian(
-                    hub_cur, tabel, _kolom_waktu(hub_cur, tabel), dari, atas, kd_sumber
-                )
+                b = agregat_harian(hub_cur, tabel, kol_hub, dari, atas, kd_sumber)
                 beda_semua |= {d for d in set(a) | set(b) if a.get(d) != b.get(d)}
+                for tdet in HUB_TABLE_SPECS[tabel].get("details", ()):
+                    pk = HUB_TABLE_SPECS[tdet]["parent_key"]
+                    # Detail yang tidak berkunci `parent_key` di cabang ini
+                    # (order detail DRAGON/KOTA MAS/PAGESANGAN berkunci
+                    # `no_transaksi`) tak bisa dijodohkan. Dilewati, bukan
+                    # menggagalkan seluruh cabang: headernya di sana kosong.
+                    if pk not in _kolom_ada(src_cur, tdet):
+                        continue
+                    numerik = sorted(set(_kolom_numerik(src_cur, tdet)) & set(_kolom_numerik(hub_cur, tdet)))
+                    a = agregat_detail_harian(src_cur, tabel, tdet, pk, kol_src, dari, atas, numerik)
+                    b = agregat_detail_harian(hub_cur, tabel, tdet, pk, kol_hub, dari, atas, numerik, kd_sumber)
+                    beda_semua |= {d for d in set(a) | set(b) if a.get(d) != b.get(d)}
     except (pyodbc.Error, RuntimeError) as exc:
         hasil["status"] = "failed"
         hasil["error"] = str(exc.args[-1] if exc.args else exc)

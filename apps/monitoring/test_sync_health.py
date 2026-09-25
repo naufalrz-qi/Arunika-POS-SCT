@@ -104,6 +104,29 @@ class SyncHealthProfilTests(TestCase):
         self.assertEqual(hasil["status"], svc.STATUS_OK)
         self.assertIsNone(hasil["antre_umur_menit"])
 
+    def test_jam_server_mundur_dilaporkan_mati_dengan_penyebabnya(self):
+        """Kasus GUDANG 23-25 Sep 2026: jam server mundur 8 jam, SQL Agent
+        menunggu jam itu menyusul jadwal lamanya, pembelian toko tertahan.
+        Semua umur lain dihitung dari jam yang sama, jadi tanpa sumbu ini
+        penyebabnya tak pernah terbaca."""
+        sekarang = svc._now_naive()
+        hasil = self._jalankan({
+            "antre": 0, "antre_tertua": None, "antre_terbaru": None,
+            "watermark_get": sekarang, "feed_id": 500, "feed_waktu": sekarang,
+            "jam_server": sekarang - dt.timedelta(hours=8),
+        })
+        self.assertEqual(hasil["status"], svc.STATUS_MATI)
+        self.assertIn("jam server meleset -8.0 jam", hasil["penyebab"])
+
+    def test_jam_server_selisih_sedikit_tidak_dinilai(self):
+        sekarang = svc._now_naive()
+        hasil = self._jalankan({
+            "antre": 0, "antre_tertua": None, "antre_terbaru": None,
+            "watermark_get": sekarang, "feed_id": 500, "feed_waktu": sekarang,
+            "jam_server": sekarang + dt.timedelta(minutes=2),
+        })
+        self.assertEqual(hasil["status"], svc.STATUS_OK)
+
     def test_antrean_sehat_tapi_penarikan_mati_tetap_mati(self):
         """Kasus GUDANG: antreannya bersih, tapi tbl_waktu_get beku 17 bulan.
         Satu sumbu sehat tidak boleh menutupi sumbu yang lain."""

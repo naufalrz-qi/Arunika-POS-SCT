@@ -415,8 +415,15 @@ def _run_due_hub_pull(now) -> None:
             if not jatuh_tempo:
                 continue
 
+            # Slot hanya ditandai selesai kalau isinya BERHASIL. Dulu ditandai
+            # apa pun hasilnya — dan slotnya jam 02:00, saat semua cabang mati:
+            # tiga malam berturut-turut cocok + master gagal karena timeout,
+            # ditandai selesai, dan tak pernah diulang. Sekarang yang gagal
+            # dicoba lagi tiap tick sampai server hidup pagi harinya.
+            selesai = True
             if _flag("HUB_MATCH_ENABLED", "0"):
                 cocok = hub_pull.pull_source(s, hub, mode="cocok", username=PELAKU_TERJADWAL)
+                selesai = cocok["status"] != "failed"
                 if cocok["hari_beda"]:
                     # Hari yang tidak cocok adalah TEMUAN, bukan derau: catat
                     # jumlahnya supaya tren "selalu ada 3 hari beda" terlihat.
@@ -428,6 +435,7 @@ def _run_due_hub_pull(now) -> None:
                 if _flag("HUB_MASTER_ENABLED", "0"):
                     m = hub_master.sync_master(s, hub)
                     if m["status"] == "failed":
+                        selesai = False
                         log.warning("hub_master GAGAL: %s", m["error"])
                 # Arah lain, jadwal sama: samakan nama barang & merek di toko
                 # dengan gudang. Harga TIDAK ikut — itu milik `harga_sync` yang
@@ -448,10 +456,17 @@ def _run_due_hub_pull(now) -> None:
                             log.info("master ke toko: %s baris ditulis", ditulis)
                         if mt["gagal"]:
                             log.warning("master ke toko GAGAL: %s", mt["gagal"])
-            # Slot harian ditandai selesai apa pun yang jalan di dalamnya.
-            HubPullState.objects.filter(source_profile=s, target_profile=hub).update(
-                cocok_terakhir_at=timezone.now()
-            )
+                        # Gagal ke SEMUA toko = jaringan/gudang yang mati, ulangi.
+                        # Satu toko mati tidak: ia menunggu besok, dan sementara
+                        # itu `harga_sync`/`feed_sync` tetap menjangkaunya —
+                        # mengulang sapuan 8 toko tiap tick demi satu toko yang
+                        # tutup cuma membakar koneksi.
+                        if len(mt["gagal"]) >= len(toko):
+                            selesai = False
+            if selesai:
+                HubPullState.objects.filter(source_profile=s, target_profile=hub).update(
+                    cocok_terakhir_at=timezone.now()
+                )
         except Exception:  # pragma: no cover — satu cabang tak menjatuhkan sisanya
             log.exception("hub_pull gagal untuk cabang %s", getattr(s, "name", "?"))
 

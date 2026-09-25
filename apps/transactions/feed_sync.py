@@ -103,6 +103,7 @@ itu. Karena itu kolom payload SELALU diiris dengan katalog nyata server tujuan
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 
@@ -111,6 +112,8 @@ from django.utils import timezone
 
 from apps.core.models import FeedSyncCursor, SyncDeadLetter, log_sync
 from core import mssql
+
+log = logging.getLogger(__name__)
 
 # Daftar-izin. Apa pun di luar ini tidak pernah disentuh — itulah yang membuat
 # feed asing tidak bisa jadi perintah.
@@ -365,7 +368,7 @@ def _dead_letter(source, target, baris: dict, alasan: str) -> None:
     )
 
 
-def _catat_riwayat(source, target, hasil: dict, mulai: float, username: str) -> None:
+def _catat_riwayat(source, target, hasil: dict, t0: float, username: str) -> None:
     """Satu baris `SyncLog` per run yang berbuah — sunyi kalau tidak.
 
     `FeedSyncCursor` menimpa satu baris per pasangan, jadi kegagalan semalam
@@ -391,7 +394,7 @@ def _catat_riwayat(source, target, hasil: dict, mulai: float, username: str) -> 
         # Baris terbuang bukan "berhasil": ia perubahan yang TIDAK sampai.
         status="failed" if gagal else ("partial" if terbuang else "ok"),
         items=rincian, error=hasil["error"][:255], username=username,
-        duration_ms=int((time.monotonic() - mulai) * 1000),
+        duration_ms=int((time.monotonic() - t0) * 1000),
     )
 
 
@@ -403,7 +406,12 @@ def sync_pair(source, target, limit: int = 2000, dry_run: bool = False, from_id:
     run diteruskan — pola `sync_all` di `cdc_sync`, dan kebalikan dari `goto hell`
     di job legacy yang membuat sisa antrean terlewat sesiklus.
     """
-    mulai = time.monotonic()
+    # `t0` (jam) dan `mulai` (id feed) DUA variabel. Dulu keduanya bernama
+    # `mulai`, jadi durasi dihitung dari id feed: negatif, ditolak CHECK
+    # `core_synclog.duration_ms` SESUDAH commit — dan exception itu menghentikan
+    # `sync_all`, sehingga toko sesudahnya tak pernah dilayani (PUSAT/RUMAK/
+    # TANJUNG macet 23-25 Sep 2026).
+    t0 = time.monotonic()
     row = _cursor_row(source, target)
     mulai = from_id if from_id is not None else row.last_id
     if not mulai and from_id is None:
@@ -543,12 +551,30 @@ def sync_pair(source, target, limit: int = 2000, dry_run: bool = False, from_id:
     # Jalur keluar lebih awal (posisi_awal / tak_ada_perubahan / dry_run) sengaja
     # melewati ini: ketiganya menerapkan 0 baris dan tidak gagal, jadi aturan
     # sunyi akan membuangnya juga — dan dry run tidak boleh menulis apa pun.
-    _catat_riwayat(source, target, hasil, mulai, username)
+    _catat_riwayat(source, target, hasil, t0, username)
     return hasil
 
 
 def sync_all(source, targets, limit: int = 2000, dry_run: bool = False,
              username: str = "") -> list[dict]:
     """Fan-out satu sumber ke banyak tujuan. Tiap tujuan punya cursor sendiri,
-    jadi satu toko yang mati tidak menahan yang lain."""
-    return [sync_pair(source, t, limit=limit, dry_run=dry_run, username=username) for t in targets]
+    jadi satu toko yang mati tidak menahan yang lain.
+
+    Janji itu hanya ditepati kalau exception APA PUN dari satu tujuan ditangkap
+    di sini. `sync_pair` sendiri cuma menangkap pyodbc/RuntimeError; galat
+    Django (mis. `IntegrityError` saat mencatat riwayat) dulu lolos dan
+    membuang seluruh sisa daftar — toko yang abjadnya belakangan tak pernah
+    dilayani selama dua hari tanpa satu pun baris di Kesehatan Sync.
+    """
+    hasil = []
+    for t in targets:
+        try:
+            hasil.append(sync_pair(source, t, limit=limit, dry_run=dry_run, username=username))
+        except Exception as exc:  # satu tujuan tak boleh menjatuhkan sisanya
+            log.exception("feed_sync %s -> %s gagal", source.name, t.name)
+            hasil.append({
+                "source": source.name, "target": t.name, "status": "failed",
+                "diterapkan": 0, "disaring": 0, "dilewati": 0, "dilewati_hilang": 0,
+                "sampai_id": None, "error": f"{type(exc).__name__}: {exc}", "alasan": {},
+            })
+    return hasil
