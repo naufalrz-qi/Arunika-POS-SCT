@@ -6,7 +6,6 @@ import AdminLayout from "@/layouts/AdminLayout.vue";
 import Input from "@/components/ui/Input.vue";
 import Select from "@/components/ui/Select.vue";
 import Button from "@/components/ui/Button.vue";
-import Banner from "@/components/ui/Banner.vue";
 import ReportView from "@/components/report/ReportView.vue";
 import LoadingCard from "@/components/ui/LoadingCard.vue";
 import BarangEditModal from "@/components/master/BarangEditModal.vue";
@@ -16,7 +15,6 @@ const props = defineProps({
   data: { type: Object, default: null },
   active: { type: Object, default: null },
   profile_type: { type: String, default: null },
-  saran_profile: { type: Object, default: null },
   profiles: { type: Array, default: () => [] },
   filters: { type: Object, default: () => ({}) },
   last_run: { type: Object, default: null },
@@ -25,11 +23,8 @@ const props = defineProps({
 const ui = useUiStore();
 
 const rows = computed(() => props.data?.rows || []);
-const saran = computed(() => props.data?.saran || []);
 
 const isRetail = computed(() => props.profile_type === "retail");
-
-const tab = ref("perubahan"); // perubahan | saran
 
 const pick = reactive({
   kd_barang: props.filters.kd_barang || "",
@@ -42,7 +37,7 @@ const pick = reactive({
 const BASE_URL = "/admin-panel/master/pergerakan-harga";
 
 // URL halaman ini + filter aktif — dipakai `redirect_to` supaya simpan dari
-// modal edit / terapkan saran kembali ke halaman & filter yang sama.
+// modal edit kembali ke halaman & filter yang sama.
 const currentUrl = computed(() => {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(pick)) if (v) q.set(k, v);
@@ -78,21 +73,9 @@ const changeColumns = [
   { key: "aksi", label: "", align: "right" },
 ];
 
-const saranColumns = [
-  { key: "kd_barang", label: "Kode Barang", sortable: true },
-  { key: "nama", label: "Nama Barang", sortable: true },
-  { key: "keterangan", label: "Keterangan" },
-  { key: "satuan", label: "Satuan" },
-  { key: "harga_lama", label: "Harga Sekarang", align: "right", sortable: true },
-  { key: "harga_baru", label: "Saran", align: "right", sortable: true },
-  { key: "selisih", label: "Selisih", align: "right", sortable: true },
-  { key: "aksi", label: "", align: "right" },
-];
-
-// Edit & terapkan hanya untuk koneksi AKTIF (endpoint update menulis ke
+// Edit hanya untuk koneksi AKTIF (endpoint update menulis ke
 // koneksi aktif server-side) — baris dari koneksi lain read-only.
 const canEditChange = (row) => !!props.active && row.profile_id === props.active.id;
-const saranIsActive = computed(() => !!props.active && !!props.saran_profile && props.saran_profile.id === props.active.id);
 
 // --- Modal edit (sama persis dengan Update Barang) ---
 const editItem = ref(null);
@@ -125,36 +108,10 @@ async function openEdit(kd_barang) {
       Belum ada snapshot. Jalankan otomatis saat server hidup, atau manual: <code class="rounded bg-surface-3 px-1">manage.py snapshot_harga</code>.
     </p>
 
-    <!-- Tab: perubahan harga vs saran harga -->
-    <div class="mb-4 flex gap-1 rounded-control border border-border-default bg-surface-2 p-1 w-fit">
-      <button
-        type="button"
-        :class="[
-          'rounded px-3 py-1.5 text-sm font-semibold transition',
-          tab === 'perubahan' ? 'bg-surface text-ink shadow-sm' : 'text-ink-muted hover:text-ink',
-        ]"
-        @click="tab = 'perubahan'"
-      >
-        Perubahan Harga<span v-if="data" class="ml-1.5 rounded-full bg-surface-3 px-1.5 text-[10px] font-bold text-ink-muted">{{ rows.length }}</span>
-      </button>
-      <button
-        type="button"
-        :class="[
-          'rounded px-3 py-1.5 text-sm font-semibold transition',
-          tab === 'saran' ? 'bg-surface text-ink shadow-sm' : 'text-ink-muted hover:text-ink',
-        ]"
-        @click="tab = 'saran'"
-      >
-        Saran Harga<span v-if="data" class="ml-1.5 rounded-full bg-warning-bg px-1.5 text-[10px] font-semibold text-warning-fg">{{ saran.length }}</span>
-      </button>
-    </div>
-
     <Deferred data="data">
       <template #fallback><LoadingCard message="Mengambil pergerakan harga…" /></template>
 
-      <!-- Tab 1: perubahan harga (snapshot harian) -->
       <ReportView
-        v-if="tab === 'perubahan'"
         title="Perubahan Harga"
         subtitle="Perubahan harga yang terdeteksi snapshot harian, termasuk yang diubah langsung di POS."
         :columns="changeColumns"
@@ -215,66 +172,6 @@ async function openEdit(kd_barang) {
           </Button>
         </template>
       </ReportView>
-
-      <!-- Tab 2: saran harga menyeluruh dari server terpilih -->
-      <div v-else>
-        <Banner v-if="data?.saran_error" variant="warning" :message="data.saran_error" class="mb-4" />
-        <Banner
-          v-else-if="saran_profile && !saranIsActive"
-          variant="info"
-          :message="`Saran ditampilkan dari server ${saran_profile.name}. Aktifkan koneksi tersebut di navbar untuk menerapkan atau mengedit.`"
-          class="mb-4"
-        />
-
-        <ReportView
-          title="Saran Harga"
-          :subtitle="`Seluruh katalog ${saran_profile?.name || '—'} yang harga jualnya beda dari nominal di kolom keterangan (mis. ECER 3.450.000).`"
-          :columns="saranColumns"
-          :rows="saran"
-          row-key="kd_barang"
-          :search-keys="['kd_barang', 'nama', 'keterangan']"
-          export-name="saran-harga"
-          sheet-name="Saran Harga"
-          empty-message="Semua harga sudah sesuai nominal di keterangan — tidak ada saran perubahan."
-        >
-          <template #filters>
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Select
-                v-model="pick.profile"
-                label="Server Sumber Saran"
-                :options="[{ value: '', label: `Koneksi aktif (${active?.name || '—'})` }, ...profiles]"
-              />
-              <div class="flex items-end">
-                <Button variant="primary" @click="tampilkan">Tampilkan</Button>
-              </div>
-            </div>
-          </template>
-
-          <template #cell-harga_lama="{ value }">
-            <span class="text-ink-muted tabular-nums">{{ rupiah(value) }}</span>
-          </template>
-          <template #cell-harga_baru="{ value }">
-            <span class="font-semibold text-ink tabular-nums">{{ rupiah(value) }}</span>
-          </template>
-          <template #cell-selisih="{ value }">
-            <span :class="['tabular-nums', value < 0 ? 'text-danger-fg' : 'text-success-fg']">
-              {{ value > 0 ? "+" : "" }}{{ rupiah(value) }}
-            </span>
-          </template>
-          <template #cell-aksi="{ row }">
-            <Button
-              size="sm"
-              variant="accent"
-              :disabled="!saranIsActive"
-              :loading="editLoadingKd === row.kd_barang"
-              :title="saranIsActive ? 'Edit harga & status barang' : 'Hanya untuk koneksi aktif'"
-              @click="openEdit(row.kd_barang)"
-            >
-              Edit
-            </Button>
-          </template>
-        </ReportView>
-      </div>
     </Deferred>
 
     <!-- Modal edit — komponen yang sama persis dengan Update Barang -->

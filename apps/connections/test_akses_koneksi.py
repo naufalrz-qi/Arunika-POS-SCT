@@ -180,11 +180,17 @@ class PergerakanHargaKoneksiTests(TestCase):
     menyebut nama, koneksi di luar `koneksi_boleh(request.user)`."""
 
     def setUp(self):
+        from apps.core.models import BarangHargaChange
+
         self.prod = _profil("PUSAT", is_default=True)
         self.internal = _profil("AMPHOREUS", Lingkungan.INTERNAL)
         self.adm = User.objects.create_user(
             "adm_ph", password=PW, role=Role.ADMIN,
             allowed_menu_keys=["dashboard", "pergerakan_harga"])
+        for profil in (self.prod, self.internal):
+            BarangHargaChange.objects.create(
+                profile=profil, profile_name=profil.name, kd_barang=f"B{profil.pk}",
+                nama_barang="Barang", kd_satuan="PCS", harga_lama=1000, harga_baru=1200)
 
     def _url(self):
         return f"/admin-panel/master/pergerakan-harga?profile={self.internal.pk}"
@@ -197,33 +203,27 @@ class PergerakanHargaKoneksiTests(TestCase):
             self._url(), HTTP_X_INERTIA="true", HTTP_X_INERTIA_VERSION="1.0").content)["props"]
 
     def _partial(self):
-        """Partial reload prop `data` — inilah yang memanggil `master.saran_harga`."""
+        """Partial reload prop `data` — nama koneksi di baris yang kembali."""
         self.client.force_login(self.adm)
-        return self.client.get(
+        r = self.client.get(
             self._url(), HTTP_X_INERTIA="true", HTTP_X_INERTIA_VERSION="1.0",
             HTTP_X_INERTIA_PARTIAL_DATA="data",
             HTTP_X_INERTIA_PARTIAL_COMPONENT="Admin/MasterData/PergerakanHarga")
+        return {b["profile_name"] for b in json.loads(r.content)["props"]["data"]["rows"]}
 
     def test_profile_di_luar_wewenang_diabaikan(self):
         props = self._shell()
         # Diperlakukan seperti id tak dikenal: dropdown tak menyebut nama
         # server internal ke admin yang tak berhak.
         self.assertNotIn(self.internal.pk, [int(p["value"]) for p in props["profiles"]])
-
-        with patch("apps.monitoring.views.master.saran_harga",
-                   return_value={"rows": [], "sumber": "", "gudang": "", "pesan": ""}) as saran:
-            self._partial()
-        # Jatuh ke koneksi aktif (produksi), bukan dilempar ke server internal
-        # yang diminta lewat ?profile= di URL.
-        saran.assert_called_once_with(self.prod)
+        # ?profile= diabaikan, bukan dipakai: daftar bawaan (koneksi yang boleh)
+        # yang kembali, bukan daftar server internal yang diminta.
+        self.assertEqual(self._partial(), {"PUSAT"})
 
     def test_profile_di_dalam_wewenang_tetap_dipakai(self):
         """Perilaku yang ADA tak berubah untuk profil yang memang diizinkan."""
         self.adm.koneksi_khusus.add(self.internal)
-        with patch("apps.monitoring.views.master.saran_harga",
-                   return_value={"rows": [], "sumber": "", "gudang": "", "pesan": ""}) as saran:
-            self._partial()
-        saran.assert_called_once_with(self.internal)
+        self.assertEqual(self._partial(), {"AMPHOREUS"})
 class BarisLintasKoneksiTests(TestCase):
     """Ruling R14/R15 — dua layar lintas-koneksi tak boleh menyebut isi server
     non-produksi kepada yang tak berhak memilihnya.
@@ -258,11 +258,9 @@ class BarisLintasKoneksiTests(TestCase):
         return json.loads(r.content)["props"]["data"]["rows"]
 
     def _harga(self, user, query=""):
-        with patch("apps.monitoring.views.master.saran_harga",
-                   return_value={"rows": [], "sumber": "", "gudang": "", "pesan": ""}):
-            return self._baris(
-                user, "/admin-panel/master/pergerakan-harga?scope=semua" + query,
-                "Admin/MasterData/PergerakanHarga")
+        return self._baris(
+            user, "/admin-panel/master/pergerakan-harga?scope=semua" + query,
+            "Admin/MasterData/PergerakanHarga")
 
     def _riwayat(self, user, query=""):
         return self._baris(user, "/admin-panel/master/riwayat-update-barang" + query,

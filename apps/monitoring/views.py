@@ -692,20 +692,6 @@ def update_barang_index(request):
         return {"rows": items, "conn_error": conn_error,
                 "modal_error": status.get("modal_error")}
 
-    # Saran harga: katalog PENUH (bukan hasil search/TOP di atas) — tombol
-    # "Saran Harga" harus melihat semua barang, bukan cuma yang sedang tampil.
-    # `master.saran_harga` yang memilih mekanismenya: retail dari kolom
-    # keterangan, non-retail dari harga server gudang. Satu pintu, supaya
-    # halaman ini dan Pergerakan Harga tak punya dua definisi yang bisa berbeda.
-    def load_saran():
-        if not profile:
-            return {"rows": [], "conn_error": CONN_ERROR, "sumber": None, "pesan": None}
-        try:
-            return {**master.saran_harga(profile), "conn_error": None}
-        except pyodbc.Error as exc:
-            return {"rows": [], "sumber": None, "gudang": None, "pesan": None,
-                    "conn_error": mssql.friendly_error(exc, "Gagal membaca saran harga")}
-
     # Audit harga berpecahan — grup sendiri supaya tidak menahan `items`.
     def load_pecahan():
         if not profile:
@@ -727,7 +713,6 @@ def update_barang_index(request):
             # untuk tampilan; yang menahan penulisan ada di services.
             "boleh_edit_identitas": bool(profile and profile.db_type == "gudang"),
             "items": defer(load_items),
-            "saran": defer(load_saran, group="saran"),
             "pecahan": defer(load_pecahan, group="pecahan"),
             "filters": {"search": search},
         },
@@ -813,7 +798,7 @@ def update_barang_harga(request):
 
 
 def update_barang_harga_massal(request):
-    """Terapkan banyak harga sekaligus (Saran Harga / Harga Berpecahan).
+    """Terapkan banyak harga sekaligus (Harga Berpecahan).
 
     Tetap lewat master.update_harga per barang supaya validasi harga bulat,
     hitung margin, invalidasi cache, dan BarangUpdateLog ikut jalan — tidak ada
@@ -1082,8 +1067,7 @@ def riwayat_update_barang_index(request):
 
 def pergerakan_harga_index(request):
     """Pergerakan Harga: perubahan harga terdeteksi snapshot harian (lintas
-    koneksi, dari sumber apa pun — termasuk edit langsung di POS) + saran harga
-    dari kolom keterangan untuk seluruh katalog server yang dipilih.
+    koneksi, dari sumber apa pun — termasuk edit langsung di POS).
 
     Default menampilkan perubahan HARI INI; scope "semua" (atau filter tanggal
     eksplisit) membuka seluruh riwayat."""
@@ -1102,9 +1086,6 @@ def pergerakan_harga_index(request):
     scope = f.get("scope") or "hari"
 
     active = _active()
-    # Saran harga dibaca dari server yang dipilih di filter; tanpa pilihan,
-    # ikut koneksi aktif. Penerapan saran tetap hanya ke koneksi aktif.
-    saran_profile = profil_boleh.filter(pk=profile_id).first() if profile_id else active
 
     def load_data():
         qs = BarangHargaChange.objects.all()
@@ -1139,23 +1120,7 @@ def pergerakan_harga_index(request):
             }
             for c in qs[:500]
         ]
-
-        # Mekanismenya ikut TIPE server yang dipilih di filter, bukan tipe koneksi
-        # aktif: memilih server grosir lalu melihat saran ala retail (nominal
-        # keterangan, yang di grosir adalah harga ecer orang lain) memberi angka
-        # yang salah untuk server itu.
-        saran, saran_info, saran_error = [], {}, None
-        if saran_profile:
-            try:
-                hasil = master.saran_harga(saran_profile)
-                saran = hasil["rows"]
-                saran_info = {k: hasil[k] for k in ("sumber", "gudang", "pesan")}
-            except pyodbc.Error as exc:
-                saran_error = mssql.friendly_error(exc, "Gagal membaca saran harga")
-        else:
-            saran_error = CONN_ERROR
-        return {"rows": rows, "saran": saran, "saran_info": saran_info,
-                "saran_error": saran_error}
+        return {"rows": rows}
 
     last = HargaSnapshotRun.objects.order_by("-ran_at").first()
     last_run = (
@@ -1176,7 +1141,6 @@ def pergerakan_harga_index(request):
             "data": defer(load_data),
             "active": active.as_dict() if active else None,
             "profile_type": active.db_type if active else None,
-            "saran_profile": {"id": saran_profile.id, "name": saran_profile.name} if saran_profile else None,
             "profiles": [{"value": str(p.id), "label": p.name} for p in profil_boleh],
             "filters": {
                 "kd_barang": kd_barang,

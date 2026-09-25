@@ -26,7 +26,7 @@ const base =
 // `yellow`, dan `accent` (merah) nol pemakaian — `variant="warning"` dan
 // `variant="info"` yang bertebaran di halaman semuanya milik Banner, bukan
 // Button. Nama `yellow-outline` menggambarkan warna, bukan makna, jadi diganti
-// `accent`: aksi yang menonjol tapi bukan destruktif (alur saran/ubah harga).
+// `accent`: aksi yang menonjol tapi bukan destruktif (mis. alur ubah harga).
 const variants = {
   primary: "bg-brand-600 text-white border-brand-600 hover:bg-brand-700 hover:border-brand-700",
   secondary: "bg-surface text-ink border-border-strong hover:bg-surface-2",

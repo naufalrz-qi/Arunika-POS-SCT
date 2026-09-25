@@ -66,8 +66,6 @@ kalau login dengan akun tersebut, sistem akan menolak dan memberi tahu alasannya
   yang tidak bulat, dan tidak ada satu pun satuan yang tersimpan bila salah satunya ditolak.
 - **Harga Massal** — ubah harga banyak barang sekaligus. Barang yang ditolak tidak
   menggagalkan barang lain.
-- **Saran Harga** — usulan sistem. Usulan saja, tidak otomatis dipakai. Sumbernya berbeda per
-  jenis server; lihat tabel di bawah.
 - **Pergerakan Harga** — riwayat perubahan harga sebuah barang.
 - **Riwayat Update Barang** — siapa mengubah apa, kapan, dari berapa ke berapa.
 
@@ -89,23 +87,15 @@ lengkap dengan siapa yang mengubahnya.
 
 Cabang lain menerima nama baru itu lewat **Sinkronisasi Master Data**, bukan otomatis.
 
-### Saran harga: sumbernya beda per jenis server
+### Kalau server sumber modal mati
 
-| Jenis server | Saran harga diambil dari |
-|---|---|
-| Toko retail | Nominal yang ditulis di kolom keterangan barang (mis. "ECER 3.450.000") |
-| Grosir / lainnya | Harga jual barang itu di **server gudang** acuannya |
-| Server gudang | Tidak ada — gudang yang jadi acuan, tidak ada harga lain untuk diikuti |
-
-**Fitur ini opsional dan tidak pernah menghalangi apa pun.** Mengisi **Sumber Modal** pada
-koneksi tidak wajib, dan kalau server gudangnya sedang mati itu juga bukan masalah.
-
-Yang terjadi kalau server sumber modal (gudang) mati:
+Mengisi **Sumber Modal** pada koneksi tidak wajib. Yang terjadi kalau server sumber modal
+(gudang) mati:
 
 | Tetap berjalan | Hilang sementara |
 |---|---|
 | Mencari barang di Update Barang | Kolom **Modal** dan **Margin** pada kartu barang |
-| Mengubah harga jual | Daftar **Saran Harga** (jadi kosong) |
+| Mengubah harga jual | — |
 | Mengubah status ketersediaan | — |
 | Semua menu lain | — |
 
@@ -113,14 +103,6 @@ Aplikasi memberi tahu lewat pemberitahuan biru di atas daftar barang. Khusus tok
 harga tetap tersimpan, tetapi **margin tidak dihitung ulang** — nilai margin lama dibiarkan apa
 adanya, dan itu disebutkan saat menyimpan. Setelah gudang hidup lagi, simpan ulang harga barang
 tersebut kalau marginnya perlu diperbarui.
-
-Buka tombol **Saran Harga** untuk melihat alasannya kalau daftarnya kosong:
-
-| Yang tertulis | Artinya |
-|---|---|
-| Belum punya acuan gudang | Sumber Modal pada koneksi ini belum diisi. Isi kalau ingin memakai fitur ini; kalau tidak, abaikan saja. |
-| Server gudang tidak bisa dihubungi | Gudangnya sedang mati atau tidak terjangkau jaringan. Coba lagi nanti. |
-| Server ini bertipe gudang | Gudang yang menjadi acuan, jadi tidak ada harga lain untuk diikuti. Tombolnya tidak muncul. |
 
 ### ⚠ Sinkronisasi antar-server
 
