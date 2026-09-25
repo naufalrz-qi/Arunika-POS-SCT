@@ -42,7 +42,17 @@ _HEADER = [
     "no_transaksi", "kd_customer", "kd_divisi", "kd_jenis", "kd_kas", "kd_voucher",
     "no_bukti", "tanggal", "tanggal_jatuh_tempo", "status", "diskon1", "diskon2",
     "diskon3", "diskon4", "diskon_uang", "pajak", "keterangan", "kd_user",
+    "tanggal_setor",
 ]
+# Kolom yang diisi EKSPRESI SQL, bukan parameter: jamnya harus jam SERVER.
+#
+# `tanggal_server` dulu tak disebut sama sekali, dengan anggapan kolomnya
+# ber-DEFAULT GETDATE(). Dump skema tak menunjukkan DEFAULT itu (ia hanya membaca
+# `sys.default_constraints`; bound default gaya lama tak terlihat), jadi
+# anggapan itu tak bisa dibuktikan dari repo. Ditulis eksplisit: kalau DEFAULT-
+# nya ada, hasilnya sama; kalau tidak, trigger feed merangkai NULL dan seluruh
+# payload sync nota ini NULL (lihat apps/transactions/payload_sync.py).
+EKSPRESI_NOTA = {"tanggal_server": "GETDATE()"}
 # `total` SENGAJA tidak ada di sini: ia kolom terhitung (computed column) —
 # database yang menghitungnya dengan UDF legacy, dan mencoba mengisinya membuat
 # INSERT ditolak ("cannot be modified because it is either a computed column").
@@ -73,8 +83,9 @@ AWALAN_ORDER = "OJ"
 AWALAN_TETAP = {"penjualan_order": AWALAN_ORDER, "pembelian_order": "OB"}
 
 # tanggal_server SENGAJA di luar daftar: ia diisi GETDATE() sebagai ekspresi SQL
-# (lihat _tulis_order). Beda dengan t_penjualan, kolomnya di sini TIDAK punya
-# DEFAULT — dibiarkan berarti NULL, padahal 7.209 baris legacy semuanya terisi.
+# (`EKSPRESI_ORDER`). Kolomnya di sini TIDAK punya DEFAULT — dibiarkan berarti
+# NULL, padahal 7.209 baris legacy semuanya terisi.
+EKSPRESI_ORDER = {"tanggal_server": "GETDATE()"}
 _ORDER_HEADER = [
     "no_order", "kd_customer", "kd_divisi", "kd_jenis", "kd_kas", "kd_voucher",
     "no_bukti", "tanggal", "tanggal_terima", "status", "diskon1", "diskon2",
@@ -85,6 +96,29 @@ _ORDER_DETAIL = [
     "no_order", "kd_barang", "kd_satuan", "kd_pegawai", "jenis",
     "diskon1", "diskon2", "diskon3", "diskon4", "harga_jual", "qty",
 ]
+
+
+def tanggal_setor(tanggal: dt.datetime) -> dt.datetime:
+    """`t_penjualan.tanggal_setor` seperti yang ditulis aplikasi POS lama:
+    tanggal nota dikurangi satu hari, jam nota.
+
+    Terbaca dari log legacy: aplikasi lama mengisi ulang kolom ini setiap nota
+    disimpan (227 dari 314 edit di grosirPusat 2025+ menggesernya; lihat
+    `riwayat_log._BUKAN_PERUBAHAN`). Arunika tak memakai nilainya sama sekali —
+    ia ditulis karena trigger `insert_temp_m_t_penjualan` merangkainya ke
+    payload sync dengan `+`, dan NULL di sana membuat nota tak terkirim ke
+    pusat maupun terbaca Nota Tanggal Mundur.
+
+    Kembaran SQL-nya ada di `edit_nota.ubah_nota`:
+    `COALESCE(tanggal_setor, DATEADD(day, -1, tanggal))`. Keduanya harus sepakat.
+    """
+    return tanggal - dt.timedelta(days=1)
+
+
+def _kolom_ekspresi(kolom: list[str], ekspresi: dict[str, str]) -> tuple[str, str]:
+    """(daftar kolom, daftar nilai) untuk INSERT: parameter lalu ekspresi SQL."""
+    return (", ".join(list(kolom) + list(ekspresi)),
+            ", ".join(["?"] * len(kolom) + list(ekspresi.values())))
 
 
 def ghb(harga: float, diskon, pajak: float = 0.0, ppnbm: float = 0.0) -> float:
@@ -150,16 +184,16 @@ def buat_nota(profile, *, kd_user, kd_divisi, kd_customer, kd_jenis, kd_kas,
     """Tulis satu nota penjualan. Mengembalikan {no_transaksi, total, baris}."""
     _periksa(items, kd_user)
     # `tanggal` datang dari PC kasir (jam mesin itu sendiri, seperti aplikasi
-    # legacy). `tanggal_server` TIDAK ditulis di sini — kolomnya ber-DEFAULT
-    # GETDATE(), jadi ia selalu jam SERVER. Dua jam yang berbeda memang
-    # disengaja: yang satu kapan kasir mencatat, yang lain kapan server menerima.
+    # legacy). `tanggal_server` diisi GETDATE() di server (`EKSPRESI_NOTA`), jadi
+    # ia selalu jam SERVER. Dua jam yang berbeda memang disengaja: yang satu
+    # kapan kasir mencatat, yang lain kapan server menerima.
     tanggal = tanggal or dt.datetime.now()
     jatuh_tempo = jatuh_tempo or (tanggal + dt.timedelta(days=BAWAAN["jatuh_tempo_hari"]))
     dh = list(diskon_header) + [0, 0, 0, 0]
     dh = dh[:4]
     total = total_nota(items, dh, diskon_uang, pajak)
 
-    tanya_h = ", ".join("?" for _ in _HEADER)
+    kolom_h, nilai_h = _kolom_ekspresi(_HEADER, EKSPRESI_NOTA)
     tanya_d = ", ".join("?" for _ in _DETAIL)
 
     with mssql.cursor(profile, autocommit=False) as cur:
@@ -167,11 +201,11 @@ def buat_nota(profile, *, kd_user, kd_divisi, kd_customer, kd_jenis, kd_kas,
 
         def tulis(no):
             cur.execute(
-                f"INSERT INTO t_penjualan ({', '.join(_HEADER)}) VALUES ({tanya_h})",
+                f"INSERT INTO t_penjualan ({kolom_h}) VALUES ({nilai_h})",
                 [no, kd_customer, kd_divisi, kd_jenis, kd_kas, kd_voucher,
                  no_bukti or KOSONG, tanggal, jatuh_tempo, status,
                  dh[0], dh[1], dh[2], dh[3], diskon_uang, pajak,
-                 keterangan or KOSONG, kd_user],
+                 keterangan or KOSONG, kd_user, tanggal_setor(tanggal)],
             )
             for it in items:
                 cur.execute(
@@ -237,15 +271,13 @@ def buat_order(profile, *, kd_user, kd_divisi, kd_customer, kd_jenis, kd_kas,
     dh = (list(diskon_header) + [0, 0, 0, 0])[:4]
     total = total_nota(items, dh, diskon_uang, pajak)
 
-    kolom = ", ".join(_ORDER_HEADER)
-    tanya_h = ", ".join("?" for _ in _ORDER_HEADER)
+    kolom_h, nilai_h = _kolom_ekspresi(_ORDER_HEADER, EKSPRESI_ORDER)
     tanya_d = ", ".join("?" for _ in _ORDER_DETAIL)
 
     with mssql.cursor(profile, autocommit=False) as cur:
         def tulis(no):
             cur.execute(
-                f"INSERT INTO t_penjualan_order ({kolom}, tanggal_server) "
-                f"VALUES ({tanya_h}, GETDATE())",
+                f"INSERT INTO t_penjualan_order ({kolom_h}) VALUES ({nilai_h})",
                 # tanggal_terima disamakan dengan tanggal: di 7.209 baris legacy
                 # keduanya jam yang sama (selisih 0 hari pada 5.838 baris, dan
                 # yang lain justru MUNDUR) — kolomnya mencatat kapan order

@@ -461,3 +461,52 @@ class BentukInsertTests(SimpleTestCase):
                   "kd_voucher", "no_bukti", "tanggal", "tanggal_jatuh_tempo",
                   "status", "diskon_uang", "pajak", "keterangan", "kd_user"):
             self.assertIn(k, pj._HEADER, f"{k} hilang — kolomnya NOT NULL")
+
+
+class PayloadSyncNotaTests(SimpleTestCase):
+    """Trigger `insert_temp_m_t_penjualan` merangkai `tanggal_setor` dan
+    `tanggal_server` ke payload sync dengan `+`. Tak disebut di INSERT = NULL =
+    seluruh payload NULL: nota tersimpan, tapi tak pernah sampai ke pusat dan
+    tak terbaca Nota Tanggal Mundur. Lihat apps/transactions/payload_sync.py."""
+
+    class _Cur(FakeCursor):
+        def fetchone(self):
+            return ("SC",) if "kepala_nota" in self.sql[-1] else (None,)
+
+    ITEM = [{"kd_barang": "000-06", "kd_satuan": "SAA000", "qty": 2,
+             "harga_jual": 146000.0}]
+    TGL = dt.datetime(2026, 9, 20, 12, 28, 33)
+
+    def _nota(self):
+        cur = self._Cur()
+        with patch.object(pj.mssql, "cursor", lambda *a, **k: _ctx(cur)):
+            pj.buat_nota(object(), kd_user="UAA002", kd_divisi="DAA000",
+                         kd_customer="CAA000", kd_jenis="JAA000", kd_kas="KAA001",
+                         kd_voucher="VAA000", kd_pegawai="PAA000", items=self.ITEM,
+                         tanggal=self.TGL)
+        i = next(k for k, s in enumerate(cur.sql) if s.startswith("INSERT INTO t_penjualan ("))
+        return cur.sql[i], cur.params[i]
+
+    def test_tanggal_setor_ditulis_seperti_aplikasi_lama(self):
+        """Tanggal nota − 1 hari, jam nota — pasangan nilai nyata SC2609200054
+        di PUSAT (lihat test_riwayat_log)."""
+        sql, params = self._nota()
+        self.assertIn("tanggal_setor", sql)
+        nilai = dict(zip(pj._HEADER, params))
+        self.assertEqual(nilai["tanggal_setor"], dt.datetime(2026, 9, 19, 12, 28, 33))
+
+    def test_tanggal_server_diisi_jam_server(self):
+        sql, params = self._nota()
+        kolom = sql.split("(", 1)[1].split(")", 1)[0].split(", ")
+        nilai = sql.split("VALUES (", 1)[1].rsplit(")", 1)[0].split(", ")
+        self.assertEqual(dict(zip(kolom, nilai))["tanggal_server"], "GETDATE()")
+        # Parameter hanya untuk kolom non-ekspresi, urutannya tetap `_HEADER`.
+        self.assertEqual(len(params), len(pj._HEADER))
+
+    def test_rumus_sama_dengan_edit_nota(self):
+        """`edit_nota` mengisi yang masih NULL dengan DATEADD(day, -1, tanggal);
+        dua rumus untuk kolom yang sama harus sepakat."""
+        from apps.transactions import edit_nota
+        import inspect
+        self.assertIn("DATEADD(day, -1, tanggal)", inspect.getsource(edit_nota.ubah_nota))
+        self.assertEqual(pj.tanggal_setor(self.TGL), self.TGL - dt.timedelta(days=1))

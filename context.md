@@ -208,7 +208,7 @@ Tiga layar transaksi berbagi satu berkas Vue dan satu mesin penomoran. Yang perl
 - **Penjualan & Penjualan Order = satu `Kasir/Penjualan.vue`**, dibedakan prop `mode`. Isiannya memang sama persis; yang beda cuma tabel tujuan (`t_penjualan(+_total)` vs `t_penjualan_order`) dan ada/tidaknya uang berpindah (Bayar/Kembali & Cetak hanya di mode nota). `localStorage` keranjang di-key per mode — kalau tidak, keranjang order menimpa keranjang nota milik orang yang sama.
 - **Awalan nomor order `OJ` TETAP, bukan dari `m_divisi.kepala_nota`** (`pj.AWALAN_ORDER`). Di server testing seluruh 7.209 baris `t_penjualan_order` berawalan `OJ` sementara `kepala_nota` divisinya `SC`. Mengambilnya dari `kepala_nota` membuat penomoran order bercabang dua dan urutan legacy patah. Efek sampingnya menguntungkan: layar order tetap jalan walau `kepala_nota` belum diisi.
 - **Order terbuka ditandai `no_transaksi = no_order` + `status = 0`.** Penyaring `daftar_order`/`buat_nota` membaca yang pertama, bukan `status` — ada 25 baris legacy berstatus 1 padahal belum diambil. Order yang salah tanda tidak menimbulkan galat apa pun; ia cuma lenyap dari daftar order terbuka.
-- **`t_penjualan_order.tanggal_server` tak punya DEFAULT** (beda dari `t_penjualan`), jadi ia ditulis eksplisit sebagai `GETDATE()`. Dibiarkan berarti NULL, padahal 7.209 baris legacy semuanya terisi. Kedua tabel order **tanpa trigger**: order tidak mengurangi stok dan tidak ikut terkirim ke pusat — memang benar, barangnya belum keluar. Tak ada `t_penjualan_order_total`.
+- **`t_penjualan_order.tanggal_server` tak punya DEFAULT**, jadi ia ditulis eksplisit sebagai `GETDATE()` (`pj.EKSPRESI_ORDER`). Dibiarkan berarti NULL, padahal 7.209 baris legacy semuanya terisi. (`t_penjualan.tanggal_server` kini juga ditulis eksplisit — § Payload sync legacy tak boleh NULL.) Kedua tabel order **tanpa trigger stok**: order tidak mengurangi stok — memang benar, barangnya belum keluar. Trigger FEED-nya beda per server: grosirPusat tak punya satu pun, testGudang punya `insert_temp`/`delete_temp` (update DISABLED), jadi di GUDANG order ikut terkirim ke pusat. Tak ada `t_penjualan_order_total`.
 - **`detail.jenis` ditulis 1** (`pj.JENIS_BARIS`). Legacy memakai 1 pada seluruh 2.990.259 baris `t_penjualan_detail`; 68 baris ber-`jenis` 0 semuanya tulisan Arunika sendiri sebelum ini diperbaiki. Artinya tak diketahui dari skema — tiru satu-satunya nilai yang dipakai data sungguhan.
 - **Cetak Faktur merender fakturnya sendiri**, tidak mengarahkan ke `/kasir/penjualan/<no>/cetak`: rute itu milik menu Penjualan, jadi orang yang hanya diberi menu Cetak Faktur akan terpental dari halaman cetaknya sendiri. `NotaCetak.vue` dipakai ulang sebagai komponen dengan `:auto="false"`, plus `@media print` **tak ber-scope** di `Faktur.vue` untuk menyembunyikan sidebar/navbar AdminLayout.
 - **Endpoint `cari-barang`/`cari-customer` dipasang ULANG di bawah tiap layar** (lihat `urls_kasir.py`). Izin diberikan per-prefix oleh `menu_key_for_path`, jadi endpoint bersama membuat kotak cari mati bagi orang yang cuma punya salah satu layar — dan yang terlihat cuma "pencarian tak jalan", bukan pesan izin. Menaruhnya di luar semua prefix menu lebih buruk lagi: path tanpa menu dianggap bebas, dan endpoint ini membocorkan nama barang, harga, serta isi nota.
@@ -404,7 +404,7 @@ Urutan "kepala dulu" bukan kebetulan: `riwayat_log._putar_barang` memasangkan ba
   - isi lamanya sudah terekam utuh di jejak audit sebelum dihapus.
 
   **Kepala nota tak pernah dihapus** (`t_penjualan` merambat ke `_total`, `t_piutang_cicilan`, `t_tagihan_detail`). Karena itu **batal nota belum ada**, dan nota tak boleh dikosongkan.
-- **`tanggal_setor` NULL mematikan payload sync.** Trigger kepala merangkai setiap kolom dengan `+`, jadi satu NULL membuat `query` dan `formatted_data` NULL seluruhnya. Aplikasi lama mengisinya (tanggal nota − 1 hari), jalur buat nota Arunika tidak (lihat § Belum diperbaiki). Edit Nota mengisinya **hanya bila masih NULL**.
+- **`tanggal_setor` NULL mematikan payload sync.** Trigger kepala merangkai setiap kolom dengan `+`, jadi satu NULL membuat `query` dan `formatted_data` NULL seluruhnya. Aplikasi lama mengisinya (tanggal nota − 1 hari), dan jalur buat nota Arunika kini juga (§ Payload sync legacy tak boleh NULL). Edit Nota mengisinya **hanya bila masih NULL**, supaya nota lama tulisan Arunika pun kembali ber-payload saat diedit.
 - **Yang tak bisa diubah:**
   - `tanggal`: edit legacy yang memindah tanggal menomori ulang nota; itu yang dibongkar Nota Tanggal Mundur.
   - `kd_divisi`: menentukan awalan nomor.
@@ -546,21 +546,37 @@ GRANT DELETE ON dbo.t_penjualan_detail TO arunika_app;   -- Edit Nota (tabel dau
 
 Nol perubahan skema, nol risiko ke legacy, dan seluruh bahaya cascade di atas mati di akar alih-alih dijaga kedisiplinan kode. **Aturan turunannya, berlaku sejak sekarang: Arunika TIDAK PERNAH `DELETE` di server toko** (satu pengecualian sadar: baris `t_penjualan_detail` milik nota yang sedang diedit, § Edit Nota Penjualan) — pembatalan memakai kolom `status`/soft-delete. Skrip sekali-pakai di `scripts/` yang butuh hak lebih harus memakai kredensial terpisah secara sadar, bukan mewarisi kuasa penuh aplikasi.
 
+### Payload sync legacy tak boleh NULL (`apps/transactions/payload_sync.py`)
+
+Trigger feed (`insert_temp_m_*` / `update_temp_m_*`) merangkai SETIAP kolom baris ke `tbl_tmp_post.query` dan `tbl_log_transaksi.formatted_data` dengan `+`. `'x' + NULL` adalah NULL, jadi satu kolom NULL membuat seluruh payload NULL. Tak ada galat di mana pun: dokumennya tersimpan rapi di server toko, tapi tak pernah sampai ke sink pusat, ke `feed_sync`, maupun ke Nota Tanggal Mundur. Aplikasi lama selalu mengisi semua kolomnya sendiri, itu sebabnya data lama bersih.
+
+- **Temuan (2026-09-25).** Keempat jalur tulis di bawah tak menyebut kolom yang dirangkai triggernya. Di tiruan legacy dengan trigger asli dari `docs/skema/`, kode lama menghasilkan 4 payload NULL dari 4 dokumen (satu per jenis) di `tbl_tmp_post` maupun `tbl_log_transaksi`; kode baru 0.
+  - `t_penjualan`: `tanggal_setor` dan `tanggal_server`;
+  - `t_penjualan_retur`, `t_pembelian`, `t_pembelian_retur`: `tanggal_server`.
+
+  Nota buatan layar kasir Arunika kini juga terbaca `riwayat_log` sebagai "Dibuat".
+- **Perbaikan: tulis eksplisit, jangan bergantung DEFAULT.**
+  - `tanggal_setor` = tanggal nota − 1 hari, jam nota (`pj.tanggal_setor`, rumus aplikasi lama; kembarannya `DATEADD` di Edit Nota).
+  - `tanggal_server` = `GETDATE()` lewat `pj.EKSPRESI_NOTA` dan `SPEC[...]["ekspresi"]` di `transaksi.py`.
+
+  Kalau server ternyata punya DEFAULT, hasilnya sama; kalau tidak, payload tetap utuh. `pembelian_order` dan `t_penjualan_order` sudah menulis/ber-DEFAULT dan tak berisiko.
+- **Dump skema buta terhadap *bound default*.** `scripts/dump_skema_aturan.py` dulu hanya membaca `sys.default_constraints`. Default gaya lama (`CREATE DEFAULT` + `sp_bindefault`, ke kolom atau ke tipe alias `JR_*`) tak terlihat. Karena itu "tanpa DEFAULT menurut dump" belum tentu benar di server: `t_pembelian_order.tanggal_server` tercatat ber-DEFAULT tapi tak tampil di dump. Skripnya kini menulis bagian `## BOUND DEFAULT`, tapi dump di repo belum diregenerasi karena butuh server.
+- **Penjaga:**
+  - `test_payload_sync` membaca trigger kedua dump dan menolak kolom payload nullable tanpa DEFAULT yang tak ditulis Arunika. Tabel yang ditulis diambil dari konstanta INSERT itu sendiri (`payload_sync.kolom_ditulis()`), jadi **jalur tulis baru wajib didaftarkan di sana**.
+  - `manage.py cek_payload_sync --profile <nama>` (read-only) membaca trigger dan DEFAULT dari katalog server hidup, termasuk bound default, lalu menghitung baris yang sudah NULL. Kode keluar 1 bila ada kolom berisiko.
+- **Klaim yang dikoreksi:** "kedua tabel order tanpa trigger" hanya benar untuk grosirPusat. testGudang punya `insert_temp`/`delete_temp_m_t_penjualan_order` (update-nya DISABLED), jadi di sana order penjualan ikut terkirim.
+
 ### Belum diperbaiki (jangan dianggap sudah)
 
 - **Kolom `stok` di Master Produk salah.** `list_products()` (`apps/master_data/services.py`, sekitar baris 164) masih mengisi kolom itu dari `m_barang_stok_akhir` — cache `'-'` yang rusak di atas — dengan komentar "must stay live" yang sudah tidak berlaku. Layar lain (`reports.py`, `inventory/services.py`) sudah pindah ke movement engine; yang ini terlewat. Perbaikannya: ambil dari `inv.cek_stok()`/payload kolumnar seperti layar lain, atau buang kolomnya.
 - **Login `arunika_app` belum dibuat**; semua profil masih `sa`.
-- **Nota buatan layar kasir Arunika mungkin tak terkirim ke pusat.** `pj.buat_nota` tidak menulis `tanggal_setor`. Di tiruan legacy dengan trigger asli, `insert_temp_m_t_penjualan` lalu menghasilkan `query`/`formatted_data` **NULL**, karena kolom dirangkai dengan `+`. Akibatnya kepala notanya tak ikut sink pusat dan tak terbaca `riwayat_log`. Belum dicek di produksi: dump skema tak menunjukkan DEFAULT untuk kolom itu, tapi DEFAULT `tanggal_server` pun tak tampil di dump padahal ada. Cek di server nyata:
-  - `SELECT COUNT(*) FROM t_penjualan WHERE tanggal_setor IS NULL`;
-  - `SELECT COUNT(*) FROM tbl_tmp_post WHERE table_aksi = 't_penjualan__insert' AND query IS NULL`.
-
-  Kalau benar, perbaikannya satu kolom di `_HEADER`, dengan rumus yang sama dengan Edit Nota.
+- **Dokumen lama tulisan Arunika yang payload sync-nya sudah terlanjur NULL belum diperbaiki.** Jalur tulisnya sudah benar (§ Payload sync legacy tak boleh NULL). Baris yang ditulis SEBELUM perbaikan itu mungkin tak pernah sampai ke pusat. Hitung dulu dengan `manage.py cek_payload_sync --profile <nama>`. Memperbaikinya dengan UPDATE memicu `update_temp_m_*`, sehingga pusat menerima UPDATE untuk baris yang INSERT-nya tak pernah sampai. Itu keputusan tersendiri, bukan pembersihan otomatis.
 - **Kas Harian & FMI Penjualan tak bisa dibuka di DRAGON** (SQL Server 2008 R2) — menolak dengan pesan; lihat § Service backend. Butuh upgrade SQL Server atau jalur triangular-join.
 - **Laporan Order Penjualan gagal di DRAGON: skemanya berbeda.** Di DRAGON `t_penjualan_order_detail` terhubung ke header lewat `no_transaksi`; di PUSAT lewat `no_order` ("Invalid column name 'no_order'"). Belum diperiksa apakah jalur TULIS order di layar kasir kena juga.
 
 ## Gotcha / aturan wajib
 
-- **Empat aturan keras terhadap DB legacy** (alasan & angkanya di § "Database legacy: milik bersama"): (1) tak pernah `DELETE` di server toko — pakai soft-delete (satu-satunya pengecualian: Edit Nota mengganti baris `t_penjualan_detail` satu nota, seperti aplikasi lama); (2) tak pernah `UPDATE` kolom `kd_*` di tabel master — `ON UPDATE CASCADE` ada di 128 dari 129 FK; (3) satu baris per `execute` untuk tabel bertrigger skalar (`t_opname_stok`, `t_penjualan`, `t_penjualan_detail`, `t_pembelian_detail`, `*_retur_detail`); (4) validasi referensi di aplikasi — FK-nya beda antar server dan 116 di antaranya `not_trusted`.
+- **Empat aturan keras terhadap DB legacy** (alasan & angkanya di § "Database legacy: milik bersama"): (1) tak pernah `DELETE` di server toko — pakai soft-delete (satu-satunya pengecualian: Edit Nota mengganti baris `t_penjualan_detail` satu nota, seperti aplikasi lama); (2) tak pernah `UPDATE` kolom `kd_*` di tabel master — `ON UPDATE CASCADE` ada di 128 dari 129 FK; (3) satu baris per `execute` untuk tabel bertrigger skalar (`t_opname_stok`, `t_penjualan`, `t_penjualan_detail`, `t_pembelian_detail`, `*_retur_detail`); (4) validasi referensi di aplikasi — FK-nya beda antar server dan 116 di antaranya `not_trusted`. (5) setiap kolom yang dirangkai trigger feed dan boleh NULL wajib ditulis Arunika — satu NULL membuat seluruh payload sync NULL; daftarkan jalur tulis baru di `payload_sync.kolom_ditulis()` (§ Payload sync legacy tak boleh NULL).
 - **Collation CI**: SQL Server anggap `'LYG005'`=`'lyg005'` & abaikan trailing space; dict Python tidak. Semua join key `kd_*` di Python WAJIB `_k()`.
 - **Tanpa view/UDF/SP legacy** (PRD §5.3) — query langsung tabel, parameterized. Tiga yang paling menggoda dan paling salah: view `mon_g_stok_barang_per_divisi_new`, fungsi `GetStokPerUkuranNew` dan `GetStokBarangPerSupplier` — ketiganya membaca `m_barang_stok_akhir` yang rusak.
 - **Agregasi di SQL**, bukan Python (movement bisa jutaan row).

@@ -134,3 +134,31 @@ class ValidasiTests(SimpleTestCase):
     def test_qty_nol_ditolak(self):
         with self.assertRaises(ValueError):
             tx._periksa([{"kd_barang": "X", "qty": 0}], "UAA002", "DAA000")
+
+
+class PayloadSyncTests(SimpleTestCase):
+    """`tanggal_server` dirangkai trigger feed kepala retur penjualan, pembelian,
+    dan retur pembelian ke payload sync dengan `+`, dan kolomnya boleh NULL.
+    Tak ditulis = payload NULL = dokumen tak pernah sampai ke pusat."""
+
+    JAM_SERVER = ("penjualan_retur", "pembelian", "pembelian_retur")
+
+    def _kepala(self, jenis):
+        cur = FakeCursor()
+        _buat(jenis, cur)
+        s = tx.spec(jenis)
+        i = next(n for n, q in enumerate(cur.sql) if q.startswith(f"INSERT INTO {s['tabel']} "))
+        return cur.sql[i], cur.params[i], s
+
+    def test_tanggal_server_diisi_getdate(self):
+        for jenis in self.JAM_SERVER:
+            sql, params, s = self._kepala(jenis)
+            kolom = sql.split("(", 1)[1].split(")", 1)[0].split(", ")
+            nilai = sql.split("VALUES (", 1)[1].rsplit(")", 1)[0].split(", ")
+            self.assertEqual(dict(zip(kolom, nilai)).get("tanggal_server"), "GETDATE()", jenis)
+            self.assertEqual(len(params), len(s["header"]), jenis)
+
+    def test_order_pembelian_tak_berubah(self):
+        """Kolomnya tercatat ber-DEFAULT dan tak berisiko; tak disentuh."""
+        sql, _, _ = self._kepala("pembelian_order")
+        self.assertNotIn("tanggal_server", sql)

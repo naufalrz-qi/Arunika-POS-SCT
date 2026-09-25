@@ -46,6 +46,22 @@ Q_DEF = """
 SELECT OBJECT_NAME(parent_object_id), COL_NAME(parent_object_id, parent_column_id), definition
 FROM sys.default_constraints ORDER BY 1,2
 """
+# Bound default gaya lama (`CREATE DEFAULT` + `sp_bindefault`), langsung ke kolom
+# ATAU lewat tipe alias kolomnya. `sys.default_constraints` tak memuatnya, dan
+# dump yang hanya membaca Q_DEF membuat kolom ber-DEFAULT tampak tanpa DEFAULT —
+# itu yang membuat soal `tanggal_setor`/`tanggal_server` tak bisa diputuskan dari
+# dump lama (lihat apps/transactions/payload_sync.py).
+Q_DEF_BOUND = """
+SELECT OBJECT_NAME(c.object_id), c.name,
+       OBJECT_DEFINITION(COALESCE(NULLIF(c.default_object_id, 0), t.default_object_id))
+FROM sys.columns c
+JOIN sys.objects o ON o.object_id = c.object_id AND o.type = 'U'
+JOIN sys.types t ON t.user_type_id = c.user_type_id
+WHERE COALESCE(NULLIF(c.default_object_id, 0), t.default_object_id) <> 0
+  AND COALESCE(NULLIF(c.default_object_id, 0), t.default_object_id)
+      NOT IN (SELECT object_id FROM sys.default_constraints)
+ORDER BY 1, 2
+"""
 Q_TBL = """
 SELECT t.name, (SELECT COUNT(*) FROM sys.columns c WHERE c.object_id=t.object_id),
        SUM(CASE WHEN p.index_id IN (0,1) THEN p.rows ELSE 0 END)
@@ -108,6 +124,11 @@ def run(profile_name, out):
         w(f"\n## DEFAULT CONSTRAINT ({len(dfl)})\n")
         for t, c, d in dfl:
             w(f"  {t:35s} {c:30s} {d}\n")
+
+        bnd = q(Q_DEF_BOUND)
+        w(f"\n## BOUND DEFAULT ({len(bnd)})\n")
+        for t, c, d in bnd:
+            w(f"  {t:35s} {c:30s} {' '.join((d or '').split())}\n")
 
         w(f"\n## KOLOM PER TABEL\n")
         cur_t = None

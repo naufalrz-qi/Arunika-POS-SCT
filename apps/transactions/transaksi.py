@@ -28,6 +28,17 @@ from core import mssql
 
 KOSONG = "-"
 
+# Kolom kepala yang diisi EKSPRESI SQL, bukan parameter (`SPEC[...]["ekspresi"]`).
+#
+# `tanggal_server` dirangkai trigger `insert_temp_m_*` ketiga tabel ini ke payload
+# sync dengan `+`, dan kolomnya boleh NULL. Dump skema tak menunjukkan DEFAULT
+# untuknya (bound default gaya lama tak terlihat di dump), jadi ditulis eksplisit:
+# kalau DEFAULT-nya ada, hasilnya sama; kalau tidak, seluruh payload dokumen ini
+# NULL dan tak pernah sampai ke pusat. Lihat apps/transactions/payload_sync.py.
+# `pembelian_order` tak memakainya: kolomnya tercatat ber-DEFAULT (context.md
+# § Order Pembelian) dan `test_payload_sync` tak menemukannya berisiko.
+EKSPRESI_JAM_SERVER = {"tanggal_server": "GETDATE()"}
+
 SPEC = {
     "penjualan_retur": {
         "label": "Retur Penjualan",
@@ -41,6 +52,7 @@ SPEC = {
                    "diskon4", "pajak", "keterangan", "kd_user"],
         "detail": ["no_retur", "kd_barang", "kd_satuan", "kd_pegawai",
                    "harga_jual", "qty", "diskon1", "diskon2", "diskon3", "diskon4"],
+        "ekspresi": EKSPRESI_JAM_SERVER,
     },
     "pembelian": {
         "label": "Pembelian",
@@ -56,6 +68,7 @@ SPEC = {
         # `total` sengaja tak ada: kolom terhitung.
         "detail": ["no_transaksi", "kd_barang", "kd_satuan", "jenis", "qty",
                    "harga_beli", "diskon1", "diskon2", "diskon3", "diskon4", "point1"],
+        "ekspresi": EKSPRESI_JAM_SERVER,
     },
     # Order pembelian. Kembarannya `t_penjualan_order`, tapi TIGA hal berbeda dan
     # ketiganya diverifikasi langsung dari skema server (INFORMATION_SCHEMA):
@@ -106,6 +119,7 @@ SPEC = {
                    "diskon4", "pajak", "ppnbm", "keterangan", "kd_user"],
         "detail": ["no_retur", "kd_barang", "kd_satuan", "qty", "harga",
                    "diskon1", "diskon2", "diskon3", "diskon4"],
+        "ekspresi": EKSPRESI_JAM_SERVER,
     },
 }
 
@@ -193,7 +207,9 @@ def buat(profile, jenis: str, *, kd_user, kd_divisi, kd_pihak, kd_jenis, kd_kas,
         "pajak": pajak, "ppnbm": ppnbm,
         "diskon1": dh[0], "diskon2": dh[1], "diskon3": dh[2], "diskon4": dh[3],
     }
-    tanya_h = ", ".join("?" for _ in s["header"])
+    ekspresi = s.get("ekspresi", {})
+    kolom_h = ", ".join(list(s["header"]) + list(ekspresi))
+    nilai_h = ", ".join(["?"] * len(s["header"]) + list(ekspresi.values()))
     tanya_d = ", ".join("?" for _ in s["detail"])
     # Tabel yang kuncinya BUKAN no_transaksi tapi tetap punya kolom itu = order:
     # kolomnya menampung nomor transaksi yang kelak menutup order ini, dan
@@ -212,7 +228,7 @@ def buat(profile, jenis: str, *, kd_user, kd_divisi, kd_pihak, kd_jenis, kd_kas,
             if order_terbuka:
                 ctx["no_transaksi"] = no
             cur.execute(  # nosec B608 — nama tabel/kolom dari SPEC
-                f"INSERT INTO {s['tabel']} ({', '.join(s['header'])}) VALUES ({tanya_h})",
+                f"INSERT INTO {s['tabel']} ({kolom_h}) VALUES ({nilai_h})",
                 [ctx.get(k, "") for k in s["header"]],
             )
             for it in items:
