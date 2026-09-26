@@ -5,7 +5,8 @@
 //
 // Angka ambang di bawah disalin dari kode, bukan dikarang:
 //   - Kritis/Overstock: apps/transactions/reports.py (_FMI_STOK_KRITIS_HARI=7,
-//     _FMI_STOK_OVERSTOCK_HARI=90)
+//     _FMI_STOK_OVERSTOCK_HARI=90) — angka yang sama jadi ambang bawaan
+//     Deadstock (apps/monitoring/views.py::_deadstock_params)
 //   - Batas rentang laporan 92 hari: apps/core/reporting.py
 //   - Cache perbandingan 10 menit: core/cache.py (_MASTER_TTL=600)
 // Kalau salah satunya berubah, ubah juga di sini.
@@ -87,6 +88,15 @@ const istilah = [
           <strong class="text-ink">Status FMI Stok</strong> dihitung dari perkiraan sisa hari stok pada
           laju penjualan sekarang: <em>Kritis</em> = kurang dari 7 hari; <em>Overstock</em> = lebih dari
           90 hari, atau barang tidak pernah laku; <em>Sehat</em> = di antara keduanya.
+        </li>
+        <li>
+          <strong class="text-ink">Deadstock</strong> = barang yang stoknya masih ada tetapi tidak terjual
+          sejak sekian hari (bawaan 90, bisa diubah), dihitung dari seluruh riwayat penjualan — bukan
+          hanya periode tertentu. Barang yang belum pernah laku ikut masuk, <em>kecuali</em> pembelian
+          pertamanya masih di dalam rentang itu (barang baru, belum sempat laku). Filter divisi hanya
+          membatasi stok mana yang dihitung — laku atau tidaknya dinilai per barang di seluruh server,
+          karena di gudang penjualan tercatat di satu divisi sementara divisi lain mengosongkan stok
+          lewat mutasi. Klik nama barang untuk melihat stok per divisi dan gerakan terakhirnya.
         </li>
         <li>
           <strong class="text-ink">Angka stok berwarna merah</strong> berarti stoknya di bawah stok

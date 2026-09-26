@@ -73,6 +73,7 @@ Kolom **Sumber baca**: `replica` = bisa membaca replica laporan bila dikonfigura
 | Opname Stok | `opname` | laporan-server | replica | — | Siap |
 | FMI Penjualan | `fmi_penjualan` | laporan-server | replica | — | Siap |
 | FMI Stok | `fmi_stok` | laporan-server | primary | — | Siap |
+| Deadstock | `deadstock` | laporan-server | primary | — | Siap |
 | Klasifikasi Pelanggan | `klasifikasi_pelanggan` | laporan-server | replica | — | Siap |
 | Promo & Diskon | `promo` | laporan-server | replica | — | Siap |
 | Voucher | `voucher` | laporan-server | replica | — | Siap |
@@ -135,7 +136,7 @@ Ditambah dua layar khusus lewat jalur `_arunika_siap`, bukan `inner_arunika`
 | Rekap Kasir | baru; kembarannya tinggal mengikuti `penjualan_user_arunika` di atas `arunika_src.penjualan`, tapi belum diverifikasi baris demi baris di kedua profil — dan verifikasi itulah bagian terbesar pekerjaannya |
 | Transaksi Barang | UNION 9 tabel gerakan stok legacy; belum punya jalur baca Arunika |
 | Laba Rugi | modul tersendiri (`apps/transactions/laba_rugi.py`), di luar `reports.py` |
-| Stok Akhir, Stok per Divisi, Mutasi Stok, Stok Awal, Barang Histori, FMI Stok | seluruhnya lewat mesin stok `apps/inventory/services.py`; tak ada `inner` untuk ditukar |
+| Stok Akhir, Stok per Divisi, Mutasi Stok, Stok Awal, Barang Histori, FMI Stok, Deadstock | seluruhnya lewat mesin stok `apps/inventory/services.py`; tak ada `inner` untuk ditukar |
 
 Lima yang pertama menunggu **data**, bukan kode: adapternya bisa ditulis, yang tak bisa
 adalah membuktikannya — "identik" atas nol baris lawan nol baris tak menyatakan apa pun

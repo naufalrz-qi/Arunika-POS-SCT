@@ -19,6 +19,7 @@ _HALAMAN = (
     "/admin-panel/laporan/laba-rugi",
     "/admin-panel/laporan/rekap-kasir",
     "/admin-panel/pengaturan/migrasi",
+    "/admin-panel/analitik/deadstock",
 )
 _EXPORT = (
     "/admin-panel/laporan/hutang/export",
@@ -26,9 +27,10 @@ _EXPORT = (
     "/admin-panel/laporan/order-pembelian/export",
     "/admin-panel/laporan/laba-rugi/export",
     "/admin-panel/laporan/rekap-kasir/export",
+    "/admin-panel/analitik/deadstock/export",
 )
 _MENU_BARU = ("hutang", "order_penjualan", "order_pembelian", "kas_pendapatan",
-              "laba_rugi", "rekap_kasir", "migrasi")
+              "laba_rugi", "rekap_kasir", "migrasi", "deadstock")
 
 
 class RuteBaru(TestCase):

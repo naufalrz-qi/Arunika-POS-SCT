@@ -135,7 +135,7 @@ kecuali tanggal daftar barang dan poin pelanggan, yang sengaja dikecualikan.
 Laporan yang tersedia: Penjualan (Detail, per Nota, per Customer, per User, per Periode),
 Laba per Barang, Retur Penjualan, Piutang Pelanggan, Pembelian (dan per Supplier, per
 Periode), Retur Pembelian, Biaya Operasional, Biaya per Kategori, FMI Penjualan, FMI Stok,
-Klasifikasi Pelanggan, Promo & Diskon, Voucher.
+Deadstock, Klasifikasi Pelanggan, Promo & Diskon, Voucher.
 
 ---
 
@@ -213,7 +213,7 @@ Customer · Penjualan per User · Penjualan per Periode · Retur Penjualan · Pi
 **Stok:** Stok Akhir · Barang Histori · Stok per Divisi · Mutasi Stok · Stok Awal Barang ·
 Transaksi Barang · Opname Stok
 
-**Analitik:** FMI Penjualan · FMI Stok · Klasifikasi Pelanggan
+**Analitik:** FMI Penjualan · FMI Stok · Deadstock · Klasifikasi Pelanggan
 
 **Promo:** Promo & Diskon · Voucher
 

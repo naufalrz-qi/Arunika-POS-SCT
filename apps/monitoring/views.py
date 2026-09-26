@@ -4084,6 +4084,206 @@ def fmi_stok_export(request):
     return reporting.xlsx_response("fmi-stok", kolom, rows)
 
 
+# --- Deadstock ----------------------------------------------------------------
+# Barang yang stoknya ADA tapi tak terjual sejak N hari. Bespoke dengan alasan
+# yang sama seperti FMI Stok: stoknya dari mesin stok, bukan satu SELECT.
+#
+# Beda dari status "Overstock" di FMI Stok, dan itulah alasan layar ini ada:
+#   - riwayat jual/beli dibaca PENUH, tanpa predikat tanggal. "Terakhir laku
+#     kapan" tak bisa dijawab dari jendela 92 hari. Terukur: MAX(tanggal) per
+#     barang 1,77 s atas 2,8 juta baris t_penjualan_detail (grosirPusat), 0,46 s
+#     di testGudang; MIN/MAX pembelian 0,12 s.
+#   - barang yang belum pernah laku tapi baru dibeli (pembelian PERTAMA-nya di
+#     dalam jendela) belum sempat laku — bukan deadstock. Barang lama yang
+#     di-restock ulang tetap masuk: restock barang mati justru yang perlu terlihat.
+_DEADSTOCK_COLUMNS = [
+    {"key": "kd_barang", "label": "Kode"}, {"key": "barang", "label": "Barang"},
+    {"key": "kategori", "label": "Kategori"},
+    {"key": "qty_stok", "label": "Stok", "align": "right", "format": "number"},
+    {"key": "nilai_stok", "label": "Nilai Stok", "align": "right", "format": "rupiah"},
+    {"key": "jual_terakhir", "label": "Jual Terakhir", "format": "date"},
+    {"key": "hari_tak_laku", "label": "Hari Tak Laku", "align": "right", "format": "number"},
+    {"key": "beli_terakhir", "label": "Beli Terakhir", "format": "date"},
+]
+# Sama seperti FMI Stok: nama bespoke, disaring lewat kunci izin `nominal`.
+_DEADSTOCK_UANG = {"nilai_stok", "total_nilai"}
+SORTS_DEADSTOCK = {"nilai_stok": "nilai_stok", "qty_stok": "qty_stok", "hari_tak_laku": "hari_tak_laku"}
+_DEADSTOCK_HARI_MAKS = 3650
+
+
+def _saring_deadstock(levels, jual, beli, hari_ini, hari, cari=""):
+    """Baris deadstock (belum terurut) dari data yang sudah ditarik.
+
+    levels: baris `inv.stok_akhir_per_tanggal` (per divisi x barang);
+    jual:   {_k(kd_barang): datetime penjualan terakhir};
+    beli:   {_k(kd_barang): (datetime pembelian pertama, datetime terakhir)}.
+    Fungsi murni supaya aturannya teruji tanpa server (test_deadstock.py)."""
+    from apps.inventory.services import _k
+
+    batas = hari_ini - dt.timedelta(days=hari)
+    agg = {}
+    for r in levels:
+        if r["harga_jual"] <= 0:
+            continue  # barang non-jual (kresek/packaging) — aturan FMI yang sama
+        a = agg.setdefault(_k(r["kd_barang"]), {
+            "kd_barang": r["kd_barang"], "barang": r["barang"],
+            "kategori": r["kategori"], "qty_stok": 0.0, "nilai_stok": 0.0,
+            "per_divisi": [],
+        })
+        a["qty_stok"] += r["stok_akhir"]
+        a["nilai_stok"] += r["nominal"]
+        if r["stok_akhir"]:
+            a["per_divisi"].append({"divisi": r["divisi"], "stok": r["stok_akhir"]})
+
+    q = (cari or "").lower()
+    rows = []
+    for kb, a in agg.items():
+        if a["qty_stok"] <= 0:
+            continue
+        jt = jual.get(kb)
+        awal, akhir = beli.get(kb, (None, None))
+        if jt is not None:
+            if jt.date() > batas:
+                continue  # masih laku dalam jendela
+        elif awal is not None and awal.date() > batas:
+            continue  # barang baru — belum sempat laku
+        if q and q not in a["barang"].lower() and q not in a["kd_barang"].lower():
+            continue
+        a["jual_terakhir"] = jt.date().isoformat() if jt else None
+        a["hari_tak_laku"] = (hari_ini - jt.date()).days if jt else None
+        a["beli_terakhir"] = akhir.date().isoformat() if akhir else None
+        a["qty_stok"] = round(a["qty_stok"], 3)
+        a["nilai_stok"] = round(a["nilai_stok"], 2)
+        rows.append(a)
+    return rows
+
+
+def _deadstock_rows(profile, f):
+    """Baris Deadstock terurut sesuai f — stok hari ini, riwayat jual/beli penuh."""
+    from apps.inventory.services import _k
+
+    hari_ini = dt.date.today()
+    # Filter divisi hanya membatasi STOK mana yang dihitung. "Laku" dinilai per
+    # barang se-server, sengaja tanpa `h.kd_divisi`: di testGudang seluruh
+    # 52.802 nota penjualan ada di DAA001, sedangkan Gudang Obral/Kanvas
+    # mengosongkan stoknya lewat mutasi ke sana. Menyaring riwayat per divisi
+    # membuat 664 dari 664 barang Gudang Obral tampil "belum pernah laku".
+    levels = inv.stok_akhir_per_tanggal(profile, tanggal=hari_ini, kd_divisi=f["kd_divisi"] or None)
+
+    with mssql.report_cursor(profile) as cur:
+        cur.execute(
+            "SELECT d.kd_barang, MAX(h.tanggal) AS terakhir FROM t_penjualan_detail d "
+            "INNER JOIN t_penjualan h ON d.no_transaksi = h.no_transaksi GROUP BY d.kd_barang")
+        jual = {_k(r["kd_barang"]): r["terakhir"] for r in reporting.dictify(cur) if r["terakhir"]}
+        cur.execute(
+            "SELECT d.kd_barang, MIN(h.tanggal) AS pertama, MAX(h.tanggal) AS terakhir "
+            "FROM t_pembelian_detail d "
+            "INNER JOIN t_pembelian h ON d.no_transaksi = h.no_transaksi GROUP BY d.kd_barang")
+        beli = {_k(r["kd_barang"]): (r["pertama"], r["terakhir"])
+                for r in reporting.dictify(cur) if r["pertama"]}
+
+    rows = _saring_deadstock(levels, jual, beli, hari_ini, f["hari"], f["search"])
+    key = f["sort"]
+    rows.sort(key=lambda r: (r.get(key) is None, r.get(key) or 0),
+              reverse=f["sort_dir"] == "desc")
+    return rows
+
+
+def _deadstock_params(request, **kw):
+    f = reporting.parse_report_params(request, SORTS_DEADSTOCK, "nilai_stok", **kw)
+    f["kd_divisi"] = (request.GET.get("kd_divisi") or "").strip()
+    try:
+        hari = int(request.GET.get("hari") or rpt._FMI_STOK_OVERSTOCK_HARI)
+    except ValueError:
+        hari = rpt._FMI_STOK_OVERSTOCK_HARI
+    f["hari"] = min(max(hari, 1), _DEADSTOCK_HARI_MAKS)
+    # Urut menurut nilai yang disembunyikan tetap membocorkan peringkatnya.
+    if f["sort"] == "nilai_stok" and _uang_bespoke(request, _DEADSTOCK_UANG):
+        f["sort"] = "qty_stok"
+    return f
+
+
+def deadstock(request):
+    f = _deadstock_params(request)
+
+    def load_report():
+        rows, total, summary, options, conn_error = [], 0, {}, {}, None
+        profile = _active()
+        if profile:
+            try:
+                all_rows = _deadstock_rows(profile, f)
+                total = len(all_rows)
+                summary = {
+                    "jml_barang": total,
+                    "total_qty": round(sum(r["qty_stok"] for r in all_rows), 3),
+                    "total_nilai": round(sum(r["nilai_stok"] for r in all_rows), 2),
+                    "belum_pernah_laku": sum(1 for r in all_rows if r["jual_terakhir"] is None),
+                }
+                start = (f["page"] - 1) * f["per_page"]
+                rows = all_rows[start:start + f["per_page"]]
+                options = {"divisi": _opt_divisi(profile)}
+            except pyodbc.Error as exc:
+                conn_error = mssql.friendly_error(exc, "Gagal membaca deadstock")
+        else:
+            conn_error = CONN_ERROR
+        buang = _uang_bespoke(request, _DEADSTOCK_UANG)
+        rows = _tanpa_uang(rows, buang)
+        summary = {k: v for k, v in summary.items() if k not in buang}
+        return {"rows": rows, "total": total, "summary": summary,
+                "options": options, "conn_error": conn_error}
+
+    return render(request, "Admin/Analytics/Deadstock", props={
+        "report": defer(load_report),
+        "filters": {
+            "search": f["search"], "sort": f["sort"], "sort_dir": f["sort_dir"],
+            "sort_keys": f["sort_keys"], "page": f["page"], "per_page": f["per_page"],
+            "recent": False, "kd_divisi": f["kd_divisi"], "hari": f["hari"],
+        },
+    })
+
+
+def deadstock_export(request):
+    f = _deadstock_params(request, max_range_days=None)
+    profile = _active()
+    if not profile:
+        request.session["flash_error"] = CONN_ERROR
+        return redirect("/admin-panel/analitik/deadstock")
+    try:
+        rows = _deadstock_rows(profile, f)
+    except pyodbc.Error as exc:
+        request.session["flash_error"] = mssql.friendly_error(exc, "Gagal export")
+        return redirect("/admin-panel/analitik/deadstock")
+    buang = _uang_bespoke(request, _DEADSTOCK_UANG)
+    kolom = [c for c in _DEADSTOCK_COLUMNS if c["key"] not in buang]
+    log_activity(request, "export", f"Export deadstock: {len(rows)} baris")
+    return reporting.xlsx_response("deadstock", kolom, rows)
+
+
+def deadstock_detail(request):
+    """JSON: gerakan terakhir satu barang (panel detail Deadstock).
+
+    Pola klasifikasi_pelanggan_detail — dimuat per klik, satu kd_barang saja.
+    Semua divisi, seperti kolom Jual Terakhir di tabelnya (lihat _deadstock_rows)
+    — kalau tidak, penjualan yang menjadi dasar angka itu tak tampil di sini."""
+    kd_barang = (request.GET.get("kd_barang") or "").strip()
+    if not kd_barang:
+        return JsonResponse({"error": "Barang tidak disebutkan."}, status=400)
+    profile = _active()
+    if not profile:
+        return JsonResponse({"error": CONN_ERROR}, status=503)
+    try:
+        rows = inv.barang_histori(profile, kd_barang=kd_barang)
+    except pyodbc.Error as exc:
+        return JsonResponse({"error": mssql.friendly_error(exc, "Gagal membaca detail")}, status=502)
+    gerakan = rows[-30:][::-1]
+    # Aturan barang_histori_index: `harga` = harga BELI di baris pembelian dan
+    # harga JUAL di baris penjualan, jadi ia butuh KEDUA izin.
+    user = request.user
+    if not (user.can_see("harga_jual") and user.can_see("harga_beli")):
+        gerakan = [{k: v for k, v in r.items() if k != "harga"} for r in gerakan]
+    return JsonResponse({"kd_barang": kd_barang, "jml_gerakan": len(rows), "gerakan": gerakan})
+
+
 # --- Klasifikasi Pelanggan (untuk follow-up) --------------------------------
 # Dua hal yang beda dari laporan lain, keduanya karena pertanyaannya soal
 # RIWAYAT pelanggan, bukan penjualan satu periode:

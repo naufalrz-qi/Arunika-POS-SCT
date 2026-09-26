@@ -157,7 +157,11 @@ class UangBespoke(TestCase):
     # cache legacy yang terlantar (22.592 dari 22.703 baris negatif).
     PRODUK = {"kd_barang": "A", "nama": "B", "harga_jual": 9_000.0, "satuan": "PCS"}
 
-    MENU = ["kas", "fmi_stok", "transaksi_barang", "products"]
+    DEAD_BARIS = {"kd_barang": "A", "barang": "B", "kategori": "C", "qty_stok": 5.0,
+                  "nilai_stok": 999.0, "per_divisi": [{"divisi": "D", "stok": 5.0}],
+                  "jual_terakhir": None, "hari_tak_laku": None, "beli_terakhir": None}
+
+    MENU = ["kas", "fmi_stok", "transaksi_barang", "products", "deadstock"]
 
     def _login(self, **kw):
         u = User.objects.create_user(
@@ -191,6 +195,13 @@ class UangBespoke(TestCase):
             "/admin-panel/analitik/fmi-stok", "Admin/Analytics/FmiStok", "report",
             [(v, "_active", lambda: object()),
              (v, "_fmi_stok_rows", lambda profile, f: [dict(self.FMI_BARIS)]),
+             (v, "_opt_divisi", lambda p: [])])
+
+    def _dead(self):
+        return self._props(
+            "/admin-panel/analitik/deadstock", "Admin/Analytics/Deadstock", "report",
+            [(v, "_active", lambda: object()),
+             (v, "_deadstock_rows", lambda profile, f: [dict(self.DEAD_BARIS)]),
              (v, "_opt_divisi", lambda p: [])])
 
     def _tx(self):
@@ -239,6 +250,21 @@ class UangBespoke(TestCase):
         self.assertNotIn("total_nilai", d["summary"])
         self.assertIn("total_qty", d["summary"])
 
+    def test_deadstock_nilai_tak_ikut(self):
+        self._login(hidden_data_keys=["nominal"])
+        d = self._dead()
+        self.assertNotIn("nilai_stok", d["rows"][0])
+        self.assertIn("qty_stok", d["rows"][0])
+        self.assertNotIn("total_nilai", d["summary"])
+        self.assertEqual(d["summary"]["belum_pernah_laku"], 1)
+
+    def test_deadstock_tak_diurut_menurut_nilai_yang_tersembunyi(self):
+        """Urutan menurut nilai yang disembunyikan tetap membocorkan peringkatnya."""
+        self._login(hidden_data_keys=["nominal"])
+        r = self.client.get("/admin-panel/analitik/deadstock?sort=nilai_stok",
+                            HTTP_X_INERTIA="true", HTTP_X_INERTIA_VERSION="1.0")
+        self.assertEqual(json.loads(r.content)["props"]["filters"]["sort"], "qty_stok")
+
     def test_transaksi_barang_hanya_harga_yang_hilang(self):
         """`masuk`/`keluar` di layar ini KUANTITAS — wajib bertahan, kalau tidak
         laporan pergerakan barang kosong tanpa satu pun rupiah terlindungi."""
@@ -264,6 +290,7 @@ class UangBespoke(TestCase):
         self.assertEqual(self._kas()["rows"][0], self.KAS_BARIS)
         self.assertEqual(self._kas()["summary"], self.KAS_RINGKAS)
         self.assertIn("nilai_stok", self._fmi()["rows"][0])
+        self.assertIn("nilai_stok", self._dead()["rows"][0])
         self.assertIn("harga", self._tx()["rows"][0])
         self.assertIn("harga_jual", self._produk()["rows"][0])
 
@@ -284,6 +311,10 @@ class UangBespoke(TestCase):
                     if c["key"] not in v._uang_bespoke(req, v._FMI_STOK_UANG)}
         self.assertNotIn("nilai_stok", sisa_fmi)
         self.assertIn("qty_stok", sisa_fmi)
+        sisa_dead = {c["key"] for c in v._DEADSTOCK_COLUMNS
+                     if c["key"] not in v._uang_bespoke(req, v._DEADSTOCK_UANG)}
+        self.assertNotIn("nilai_stok", sisa_dead)
+        self.assertIn("qty_stok", sisa_dead)
         sisa_tx = {c["key"] for c in v._TRANSAKSI_COLUMNS
                    if c["key"] not in v._uang_bespoke(req, v._TRANSAKSI_UANG)}
         self.assertNotIn("harga", sisa_tx)
